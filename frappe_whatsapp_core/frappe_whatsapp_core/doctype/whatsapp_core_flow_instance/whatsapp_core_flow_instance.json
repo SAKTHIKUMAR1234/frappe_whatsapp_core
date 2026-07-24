@@ -1,0 +1,47 @@
+{
+ "doctype": "DocType",
+ "name": "WhatsApp Core Flow Instance",
+ "module": "Frappe WhatsApp Core",
+ "autoname": "field:instance_key",
+ "naming_rule": "By fieldname",
+ "engine": "InnoDB",
+ "field_order": [
+  "instance_key",
+  "flow",
+  "flow_version",
+  "conversation",
+  "status",
+  "current_node_id",
+  "context",
+  "lock_version",
+  "last_event_key",
+  "started_at",
+  "last_activity_at",
+  "expires_at",
+  "completed_at",
+  "error"
+ ],
+ "fields": [
+  {"fieldname": "instance_key", "fieldtype": "Data", "label": "Instance Key", "reqd": 1, "unique": 1},
+  {"fieldname": "flow", "fieldtype": "Link", "label": "Flow", "options": "WhatsApp Core Flow", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "flow_version", "fieldtype": "Link", "label": "Flow Version", "options": "WhatsApp Core Flow Version", "reqd": 1},
+  {"fieldname": "conversation", "fieldtype": "Link", "label": "Conversation", "options": "WhatsApp Core Conversation", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Running\nWaiting\nCompleted\nCancelled\nFailed\nExpired", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "current_node_id", "fieldtype": "Data", "label": "Current Node", "reqd": 1},
+  {"fieldname": "context", "fieldtype": "JSON", "label": "Context", "reqd": 1},
+  {"fieldname": "lock_version", "fieldtype": "Int", "label": "Lock Version", "default": "0", "reqd": 1},
+  {"fieldname": "last_event_key", "fieldtype": "Data", "label": "Last Event Key"},
+  {"fieldname": "started_at", "fieldtype": "Datetime", "label": "Started At", "reqd": 1},
+  {"fieldname": "last_activity_at", "fieldtype": "Datetime", "label": "Last Activity At", "reqd": 1},
+  {"fieldname": "expires_at", "fieldtype": "Datetime", "label": "Expires At"},
+  {"fieldname": "completed_at", "fieldtype": "Datetime", "label": "Completed At"},
+  {"fieldname": "error", "fieldtype": "Long Text", "label": "Error"}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "export": 1},
+  {"role": "WhatsApp Core Admin", "read": 1, "export": 1},
+  {"role": "WhatsApp Core Manager", "read": 1, "export": 1},
+  {"role": "WhatsApp Core Agent", "read": 1},
+  {"role": "WhatsApp Core Analyst", "read": 1, "export": 1}
+ ]
+}

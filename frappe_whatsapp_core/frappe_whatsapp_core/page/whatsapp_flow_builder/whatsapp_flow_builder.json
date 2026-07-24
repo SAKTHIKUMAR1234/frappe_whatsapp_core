@@ -1,0 +1,15 @@
+{
+ "content": null,
+ "doctype": "Page",
+ "module": "Frappe WhatsApp Core",
+ "name": "whatsapp-flow-builder",
+ "page_name": "whatsapp-flow-builder",
+ "roles": [
+  {"role": "System Manager"}
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "WhatsApp Flow Builder"
+}

@@ -1,0 +1,35 @@
+{
+ "doctype": "DocType",
+ "name": "WhatsApp Core Flow Version",
+ "module": "Frappe WhatsApp Core",
+ "autoname": "field:version_key",
+ "naming_rule": "By fieldname",
+ "engine": "InnoDB",
+ "field_order": [
+  "version_key",
+  "flow",
+  "version_number",
+  "status",
+  "graph_sha256",
+  "graph",
+  "published_at",
+  "published_by"
+ ],
+ "fields": [
+  {"fieldname": "version_key", "fieldtype": "Data", "label": "Version Key", "reqd": 1, "unique": 1},
+  {"fieldname": "flow", "fieldtype": "Link", "label": "Flow", "options": "WhatsApp Core Flow", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "version_number", "fieldtype": "Int", "label": "Version", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Published\nSuperseded\nRetired", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "graph_sha256", "fieldtype": "Data", "label": "Graph SHA-256", "reqd": 1},
+  {"fieldname": "graph", "fieldtype": "JSON", "label": "Graph", "reqd": 1},
+  {"fieldname": "published_at", "fieldtype": "Datetime", "label": "Published At", "reqd": 1},
+  {"fieldname": "published_by", "fieldtype": "Link", "label": "Published By", "options": "User", "reqd": 1}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "export": 1},
+  {"role": "WhatsApp Core Admin", "read": 1, "export": 1},
+  {"role": "WhatsApp Core Manager", "read": 1, "export": 1},
+  {"role": "WhatsApp Core Agent", "read": 1},
+  {"role": "WhatsApp Core Analyst", "read": 1, "export": 1}
+ ]
+}

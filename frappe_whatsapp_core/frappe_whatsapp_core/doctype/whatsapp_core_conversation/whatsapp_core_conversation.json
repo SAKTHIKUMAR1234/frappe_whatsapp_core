@@ -1,0 +1,23 @@
+{
+ "doctype": "DocType",
+ "name": "WhatsApp Core Conversation",
+ "module": "Frappe WhatsApp Core",
+ "autoname": "field:conversation_key",
+ "naming_rule": "By fieldname",
+ "engine": "InnoDB",
+ "field_order": ["conversation_key", "channel", "remote_identity", "status", "workspace_key", "assigned_user", "last_inbound_at", "last_message_at", "route_trace"],
+ "fields": [
+  {"fieldname": "conversation_key", "fieldtype": "Data", "label": "Conversation Key", "reqd": 1, "unique": 1},
+  {"fieldname": "channel", "fieldtype": "Link", "label": "Channel", "options": "WhatsApp Core Channel", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "remote_identity", "fieldtype": "Link", "label": "Remote Identity", "options": "WhatsApp Core Identity", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Open\nPending\nResolved", "default": "Open", "reqd": 1},
+  {"fieldname": "workspace_key", "fieldtype": "Data", "label": "Workspace Key"},
+  {"fieldname": "assigned_user", "fieldtype": "Link", "label": "Assigned User", "options": "User"},
+  {"fieldname": "last_inbound_at", "fieldtype": "Datetime", "label": "Last Inbound At"},
+  {"fieldname": "last_message_at", "fieldtype": "Datetime", "label": "Last Message At", "reqd": 1},
+  {"fieldname": "route_trace", "fieldtype": "JSON", "label": "Route Trace"}
+ ],
+ "permissions": [{"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1}],
+ "sort_field": "last_message_at",
+ "sort_order": "DESC"
+}
