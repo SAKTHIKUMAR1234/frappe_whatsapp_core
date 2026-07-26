@@ -12,6 +12,10 @@ after_migrate = "frappe_whatsapp_core.setup.ensure_core_roles"
 # contains no hospital, manufacturing, sales or Essdee-specific decisions.
 whatsapp_core_event_handlers = []
 
+# Business applications may register one typed resolver per configured source.
+# Source documents never contain arbitrary Python paths.
+whatsapp_core_identity_resolvers = {}
+
 # Flow nodes can invoke only registered, typed actions. A builder graph cannot
 # execute arbitrary Python, SQL or shell commands.
 whatsapp_core_flow_actions = {

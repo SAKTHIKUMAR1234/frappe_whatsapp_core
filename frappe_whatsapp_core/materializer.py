@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 import frappe
 from frappe.utils import get_datetime, now_datetime
 
+from frappe_whatsapp_core.identity import get_or_create_identity as get_or_create_core_identity
+
 
 def materialize_event(event, payload):
 	"""Project a raw provider event into the reusable messaging kernel."""
@@ -44,24 +46,7 @@ def get_or_create_channel(phone_number_id, waba_id=None):
 
 
 def get_or_create_identity(value):
-	normalized = normalize_phone(value)
-	identity_key = hashlib.sha256(f"whatsapp:{normalized}".encode()).hexdigest()
-	if frappe.db.exists("WhatsApp Core Identity", identity_key):
-		return frappe.get_doc("WhatsApp Core Identity", identity_key)
-	doc = frappe.get_doc({
-		"doctype": "WhatsApp Core Identity",
-		"identity_key": identity_key,
-		"identity_type": "WhatsApp",
-		"normalized_value": normalized,
-		"display_value": value,
-		"provider": "meta",
-		"status": "Active",
-	})
-	try:
-		doc.insert(ignore_permissions=True)
-	except frappe.DuplicateEntryError:
-		return frappe.get_doc("WhatsApp Core Identity", identity_key)
-	return doc
+	return get_or_create_core_identity(value)
 
 
 def get_or_create_conversation(channel, identity):
@@ -142,10 +127,6 @@ def materialize_status(channel, provider_status):
 		status if status in allowed else "Sent",
 	)
 	return {"kind": "status", "status": "updated", "name": message_name}
-
-
-def normalize_phone(value):
-	return "".join(character for character in str(value or "") if character.isdigit())
 
 
 def parse_provider_timestamp(value):

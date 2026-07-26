@@ -55,3 +55,27 @@ Canvas actions are allowlisted through `whatsapp_core_flow_actions`. They
 cannot execute arbitrary Python, SQL or shell commands. An organization app
 registers actions such as `case.create`, `customer.fetch`, or
 `invoice.lookup`, while the Core engine remains business-neutral.
+
+## Configurable business identity
+
+```text
+WhatsApp number
+      │ normalize once
+      ▼
+Core Identity
+      │ configured Identity Sources
+      ▼
+Identity Link(s) ──► any business DocType
+      │
+      ├── parent reference
+      └── group reference
+```
+
+Core stores canonical identities and generic links. It does not know what a
+retailer, patient or supplier is. A business app may register a typed resolver
+for hierarchy rules; the resolver is selected by a fixed hook key, never an
+arbitrary Python path stored in a database record.
+
+Zero matches stay `Unresolved`, one match is `Resolved`, and multiple matches
+are `Ambiguous` for review. Disabled sources deactivate their links on the
+next resolution.
