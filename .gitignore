@@ -6,3 +6,12 @@ node_modules/
 dist/
 *.egg-info/
 
+# Generated frontend bundles (rebuild with `yarn build` in core_ui/)
+frappe_whatsapp_core/public/core_ui/
+
+# Browser and coverage artifacts
+.playwright-cli/
+playwright-report/
+test-results/
+coverage/
+.coverage
