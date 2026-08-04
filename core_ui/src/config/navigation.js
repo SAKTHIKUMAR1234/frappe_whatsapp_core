@@ -4,10 +4,12 @@ import {
 	GitBranch,
 	LayoutDashboard,
 	Megaphone,
+	MessagesSquare,
 	MessageSquareText,
 	PlugZap,
 	Settings,
 	ShieldCheck,
+	UsersRound,
 } from 'lucide-vue-next'
 
 export const navigation = [
@@ -18,6 +20,7 @@ export const navigation = [
 	{
 		label: 'Engage',
 		items: [
+			{ label: 'Conversations', route: 'conversations', icon: MessagesSquare },
 			{
 				label: 'Available Templates',
 				route: 'templates',
@@ -39,6 +42,7 @@ export const navigation = [
 	{
 		label: 'Administration',
 		items: [
+			{ label: 'Teams', route: 'teams', icon: UsersRound },
 			{ label: 'Audit & Health', route: 'health', icon: ShieldCheck },
 			{ label: 'Company Settings', route: 'settings', icon: Settings },
 		],

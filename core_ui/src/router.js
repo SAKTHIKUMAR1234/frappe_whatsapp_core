@@ -13,6 +13,11 @@ const routes = [
 		component: () => import('@/layouts/AppShell.vue'),
 		children: [
 			{
+				path: 'conversations',
+				name: 'conversations',
+				component: () => import('@/features/conversations/views/ConversationsView.vue'),
+			},
+			{
 				path: '',
 				name: 'dashboard',
 				component: () => import('@/features/dashboard/views/DashboardView.vue'),
@@ -51,6 +56,11 @@ const routes = [
 				path: 'connectors',
 				name: 'connectors',
 				component: () => import('@/features/workspaces/views/ConnectorsView.vue'),
+			},
+			{
+				path: 'teams',
+				name: 'teams',
+				component: () => import('@/features/teams/views/TeamsView.vue'),
 			},
 			{
 				path: 'health',
