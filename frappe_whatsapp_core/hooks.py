@@ -24,6 +24,8 @@ whatsapp_core_flow_actions = {
 whatsapp_core_campaign_preflight = []
 whatsapp_core_campaign_sender = []
 whatsapp_core_campaign_batch_sender = []
+whatsapp_core_outbound_text_sender = []
+whatsapp_core_outbound_template_sender = []
 
 scheduler_events = {
 	"cron": {

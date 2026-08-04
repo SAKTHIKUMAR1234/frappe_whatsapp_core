@@ -15,7 +15,13 @@
   {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Active\nBlocked\nSuperseded", "default": "Active", "reqd": 1},
   {"fieldname": "attributes", "fieldtype": "JSON", "label": "Attributes"}
  ],
- "permissions": [{"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1}],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1},
+  {"role": "WhatsApp Core Admin", "read": 1, "export": 1},
+  {"role": "WhatsApp Core Manager", "read": 1, "export": 1},
+  {"role": "WhatsApp Core Agent", "read": 1},
+  {"role": "WhatsApp Core Analyst", "read": 1, "export": 1}
+ ],
  "sort_field": "modified",
  "sort_order": "DESC"
 }
