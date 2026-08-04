@@ -55,3 +55,48 @@ Canvas actions are allowlisted through `whatsapp_core_flow_actions`. They
 cannot execute arbitrary Python, SQL or shell commands. An organization app
 registers actions such as `case.create`, `customer.fetch`, or
 `invoice.lookup`, while the Core engine remains business-neutral.
+
+## Templates and campaigns
+
+Template ownership stays in the Integration application. Core receives only a
+site-local, read-only projection after the Hub assigns a template.
+
+```text
+Integration Desk
+ create / edit / Meta approval / site assignment
+                    │ authenticated push
+                    ▼
+          Core Template Catalog
+                    │ select
+                    ▼
+Exact business audience ──► Prepared campaign
+                                   │
+                 Meta approved ────┤
+                 named SEND gate ──┤
+                                   ▼
+                        Business sender adapter
+                                   │
+                      one recipient at a time
+                                   ▼
+                         Durable relay queue
+```
+
+Audience resolution is a business-app responsibility. Core stores only exact
+Core identity references and a JSON source description. Preparing an audience
+does not queue anything. Meta approval and human SEND authorization are
+separate gates; editing the campaign definition revokes SEND authorization.
+
+## External AI boundary
+
+```text
+AI client ── authenticated MCP JSON-RPC ──► Core tools
+                                              ├── list unclassified messages
+                                              ├── upsert topic summary
+                                              ├── list conversation topics
+                                              └── create typed case
+```
+
+Core does not embed an AI model. The stateless endpoint is
+`/api/method/frappe_whatsapp_core.mcp_transport.handle`; Frappe API
+authentication, Core roles, origin validation, site isolation and an immutable
+invocation audit apply before a tool executes.

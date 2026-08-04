@@ -19,10 +19,19 @@ whatsapp_core_flow_actions = {
 	"context.set": "frappe_whatsapp_core.flow_actions.set_context_action",
 }
 
+# Business apps resolve a prepared Core identity into their own operational
+# context and queue one message at a time. Core never imports business modules.
+whatsapp_core_campaign_preflight = []
+whatsapp_core_campaign_sender = []
+
 scheduler_events = {
 	"cron": {
+		"* * * * *": [
+			"frappe_whatsapp_core.campaigns.run_due_campaigns",
+		],
 		"*/5 * * * *": [
 			"frappe_whatsapp_core.dispatcher.retry_failed_events",
+			"frappe_whatsapp_core.campaigns.refresh_active_campaigns",
 		],
 	},
 }

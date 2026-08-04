@@ -12,7 +12,6 @@ from frappe_whatsapp_core.flows import publish_flow, resume_flow
 from frappe_whatsapp_core.materializer import materialize_event
 from frappe_whatsapp_core.packs import install_pack
 
-
 MESSAGE_PAYLOAD = {
 	"object": "whatsapp_business_account",
 	"entry": [{
@@ -81,8 +80,27 @@ class TestKernelIntegration(FrappeTestCase):
 		message = frappe.get_doc("WhatsApp Core Message", created[0]["name"])
 		self.assertEqual(message.body, "Test message")
 		self.assertEqual(message.provider_timestamp, datetime(2024, 4, 5, 19, 34, 38))
-		self.assertEqual(frappe.db.count("WhatsApp Core Conversation"), 1)
-		self.assertEqual(frappe.db.count("WhatsApp Core Identity"), 1)
+		conversation = frappe.get_doc(
+			"WhatsApp Core Conversation",
+			message.conversation,
+		)
+		self.assertEqual(
+			frappe.db.count(
+				"WhatsApp Core Conversation",
+				{
+					"channel": message.channel,
+					"remote_identity": conversation.remote_identity,
+				},
+			),
+			1,
+		)
+		self.assertEqual(
+			frappe.db.count(
+				"WhatsApp Core Identity",
+				{"normalized_value": "919999999999"},
+			),
+			1,
+		)
 
 		status_payload = {
 			"entry": [{
