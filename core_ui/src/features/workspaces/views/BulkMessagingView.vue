@@ -5,6 +5,7 @@
 	import DataTable from 'primevue/datatable'
 	import Dialog from 'primevue/dialog'
 	import InputText from 'primevue/inputtext'
+	import MultiSelect from 'primevue/multiselect'
 	import Select from 'primevue/select'
 	import Skeleton from 'primevue/skeleton'
 	import Tag from 'primevue/tag'
@@ -30,11 +31,14 @@
 		campaigns: [],
 		templates: [],
 		channels: [],
+		identities: [],
 		metrics: {},
 	})
 	const createDialog = ref(false)
+	const prepareDialog = ref(false)
 	const authorizationDialog = ref(false)
 	const selectedCampaign = ref(null)
+	const selectedAudience = ref([])
 	const authorizationText = ref('')
 	const form = ref({
 		title: '',
@@ -108,6 +112,34 @@
 		authorizationDialog.value = true
 	}
 
+	function openPrepare(campaign) {
+		selectedCampaign.value = campaign
+		selectedAudience.value = []
+		prepareDialog.value = true
+	}
+
+	async function prepare() {
+		saving.value = true
+		try {
+			await call('frappe_whatsapp_core.frontend_api.prepare_campaign_audience', {
+				campaign_name: selectedCampaign.value.name,
+				recipients: selectedAudience.value,
+			})
+			prepareDialog.value = false
+			await load()
+			toast.add({
+				severity: 'success',
+				summary: 'Exact audience prepared',
+				detail: `${selectedAudience.value.length} active identities passed validation.`,
+				life: 3500,
+			})
+		} catch (error) {
+			showError(error)
+		} finally {
+			saving.value = false
+		}
+	}
+
 	async function authorize() {
 		saving.value = true
 		try {
@@ -140,7 +172,7 @@
 			toast.add({
 				severity: 'success',
 				summary: 'Campaign started',
-				detail: 'Recipients are being queued one at a time through the durable relay.',
+				detail: 'Recipients are being queued through durable 40-message relay batches.',
 				life: 4000,
 			})
 		} catch (error) {
@@ -302,7 +334,18 @@
 			<Column>
 				<template #body="{ data }">
 					<Button
-						v-if="data.status === 'Prepared' && !data.send_authorized"
+						v-if="
+							['Draft', 'Prepared'].includes(data.status) &&
+							!data.send_authorized &&
+							!data.recipient_count
+						"
+						label="Prepare audience"
+						size="small"
+						outlined
+						@click="openPrepare(data)"
+					/>
+					<Button
+						v-else-if="data.status === 'Prepared' && !data.send_authorized"
 						label="Authorize"
 						size="small"
 						outlined
@@ -379,6 +422,46 @@
 	</Dialog>
 
 	<Dialog
+		v-model:visible="prepareDialog"
+		modal
+		header="Prepare exact audience"
+		:style="{ width: '620px', maxWidth: '94vw' }"
+	>
+		<div class="dialog-note">
+			Select the exact active Core identities for this campaign. Preparing replaces the
+			current unauthorized audience and does not send anything.
+		</div>
+		<label>Recipients</label>
+		<MultiSelect
+			v-model="selectedAudience"
+			:options="workspace.identities"
+			option-value="name"
+			filter
+			display="chip"
+			placeholder="Search active identities"
+			:max-selected-labels="8"
+			fluid
+		>
+			<template #option="{ option }">
+				<div class="identity-option">
+					<strong>{{ option.display_value || option.normalized_value }}</strong>
+					<small>{{ option.normalized_value }} · {{ option.name }}</small>
+				</div>
+			</template>
+		</MultiSelect>
+		<small class="selection-count">{{ selectedAudience.length }} selected</small>
+		<template #footer>
+			<Button label="Cancel" text @click="prepareDialog = false" />
+			<Button
+				label="Prepare audience"
+				:disabled="!selectedAudience.length"
+				:loading="saving"
+				@click="prepare"
+			/>
+		</template>
+	</Dialog>
+
+	<Dialog
 		v-model:visible="authorizationDialog"
 		modal
 		header="Authorize SEND"
@@ -417,6 +500,19 @@
 		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 14px;
 		margin-bottom: 16px;
+	}
+	.identity-option strong,
+	.identity-option small {
+		display: block;
+	}
+	.identity-option strong {
+		font-size: 11px;
+	}
+	.identity-option small,
+	.selection-count {
+		margin-top: 3px;
+		color: #7b8881;
+		font-size: 9px;
 	}
 
 	.metric-card {
