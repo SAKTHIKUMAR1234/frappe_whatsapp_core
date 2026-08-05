@@ -51,6 +51,7 @@ def bootstrap():
 			"connectors",
 			"health",
 			"settings",
+			"teams",
 		],
 	}
 
@@ -60,44 +61,15 @@ def bootstrap():
 def dashboard():
 	return {
 		"metrics": {
-			"configured_flows": frappe.db.count("WhatsApp Core Flow"),
-			"active_flows": frappe.db.count(
-				"WhatsApp Core Flow",
-				{"status": "Published", "enabled": 1},
+			"open_conversations": frappe.db.count("WhatsApp Core Conversation", {"status": "Open"}),
+			"active_campaigns": frappe.db.count(
+				"WhatsApp Core Campaign", {"status": ["in", ["Prepared", "Scheduled", "Running"]]}
 			),
-			"running_instances": frappe.db.count(
-				"WhatsApp Core Flow Instance",
-				{"status": ["in", ["Running", "Waiting"]]},
+			"approved_templates": frappe.db.count(
+				"WhatsApp Core Template", {"approval_status": "APPROVED", "enabled": 1}
 			),
-			"failed_steps": frappe.db.count(
-				"WhatsApp Core Flow Step Run",
-				{"status": "Failed"},
-			),
+			"failed_messages": frappe.db.count("WhatsApp Core Message", {"delivery_status": "Failed"}),
 		},
-		"lifecycle": {
-			"draft": frappe.db.count(
-				"WhatsApp Core Flow",
-				{"status": "Draft"},
-			),
-			"published": frappe.db.count(
-				"WhatsApp Core Flow",
-				{"status": "Published"},
-			),
-			"waiting": frappe.db.count(
-				"WhatsApp Core Flow Instance",
-				{"status": "Waiting"},
-			),
-			"completed": frappe.db.count(
-				"WhatsApp Core Flow Instance",
-				{"status": "Completed"},
-			),
-		},
-		"recent_flows": frappe.get_list(
-			"WhatsApp Core Flow",
-			fields=["name", "title", "status", "active_version", "modified"],
-			order_by="modified desc",
-			limit_page_length=6,
-		),
 	}
 
 
@@ -542,6 +514,7 @@ def settings_workspace():
 			for row in settings.accounts
 		],
 		"request_timeout": settings.request_timeout or 30,
+		"default_country_calling_code": settings.default_country_calling_code or "91",
 		"inventory": {
 			"identities": frappe.db.count("WhatsApp Core Identity"),
 			"verified_bindings": frappe.db.count(
@@ -562,6 +535,7 @@ def save_core_settings(
 	hub_url: str = "",
 	accounts=None,
 	request_timeout: int = 30,
+	default_country_calling_code: str = "91",
 	api_key: str = "",
 	api_secret: str = "",
 ):
@@ -570,6 +544,7 @@ def save_core_settings(
 	settings.outbound_enabled = int(bool(cint(outbound_enabled)))
 	settings.hub_url = str(hub_url or "").strip()
 	settings.request_timeout = max(2, min(int(request_timeout or 30), 120))
+	settings.default_country_calling_code = str(default_country_calling_code or "91")
 	accounts = frappe.parse_json(accounts) if accounts is not None else []
 	if not isinstance(accounts, list):
 		frappe.throw("Hub accounts must be a list")

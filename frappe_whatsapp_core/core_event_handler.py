@@ -44,10 +44,11 @@ def handle_core_event(payload, event) -> dict:
 			},
 			after_commit=True,
 		)
-		flow_result = route_inbound(
-			message.conversation,
-			f"{event.name}:{message.name}",
-			_flow_event(message),
+		flow_event = _flow_event(message)
+		flow_result = (
+			route_inbound(message.conversation, f"{event.name}:{message.name}", flow_event)
+			if _legacy_automation_enabled() and not flow_event.get("meta_flow_response")
+			else {"status": "skipped", "reason": "Meta-native Flow response" if flow_event.get("meta_flow_response") else "Legacy local automation disabled"}
 		)
 		results.append({
 			"message": message.name,
@@ -89,7 +90,25 @@ def _flow_event(message) -> dict:
 			"interactive_id": reply.get("id"),
 			"interactive_value": reply.get("title") or reply.get("id"),
 		})
+		flow_reply = interactive.get("nfm_reply") or {}
+		if flow_reply:
+			response = flow_reply.get("response_json")
+			try:
+				response = json.loads(response) if isinstance(response, str) else response
+			except (TypeError, ValueError):
+				pass
+			inbound.update({
+				"meta_flow_response": True,
+				"flow_token": flow_reply.get("flow_token"),
+				"flow_name": flow_reply.get("name"),
+				"flow_response": response,
+			})
 	return inbound
+
+
+def _legacy_automation_enabled() -> bool:
+	"""Local prompt-by-prompt flows are compatibility-only and opt-in."""
+	return bool(frappe.conf.get("whatsapp_core_enable_legacy_automation", False))
 
 
 def _dispatch_commands(

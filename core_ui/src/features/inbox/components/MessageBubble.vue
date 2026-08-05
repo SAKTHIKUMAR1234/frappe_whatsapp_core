@@ -1,9 +1,10 @@
 <script setup>
-	import { Check, CheckCheck, Clock3, CircleAlert } from 'lucide-vue-next'
+	import { Check, CheckCheck, Clock3, CircleAlert, Reply, Star } from 'lucide-vue-next'
 
 	defineProps({
 		message: { type: Object, required: true },
 	})
+	defineEmits(['reply', 'bookmark'])
 
 	function statusIcon(status) {
 		if (status === 'Failed') return CircleAlert
@@ -15,9 +16,32 @@
 
 <template>
 	<article :class="['message-bubble', message.direction?.toLowerCase()]">
+		<small v-if="message.message_type !== 'text'" class="message-kind">
+			{{ message.message_type?.replaceAll('_', ' ') }}
+		</small>
 		<p>{{ message.body || 'Media or interactive message' }}</p>
 		<footer>
 			<time>{{ message.provider_timestamp }}</time>
+			<button
+				:class="['reply-button', { bookmarked: message.bookmarked }]"
+				type="button"
+				:aria-label="message.bookmarked ? 'Remove bookmark' : 'Bookmark message'"
+				@click="$emit('bookmark', message)"
+			>
+				<Star :size="13" :fill="message.bookmarked ? 'currentColor' : 'none'" />
+			</button>
+			<button
+				v-if="
+					message.provider_message_id &&
+					!message.provider_message_id.startsWith('local:')
+				"
+				class="reply-button"
+				type="button"
+				aria-label="Reply to message"
+				@click="$emit('reply', message)"
+			>
+				<Reply :size="13" />
+			</button>
 			<span
 				v-if="message.direction === 'Outbound'"
 				:class="message.delivery_status?.toLowerCase()"
@@ -51,6 +75,14 @@
 		font-size: 13px;
 		line-height: 1.5;
 	}
+	.message-kind {
+		display: block;
+		margin-bottom: 3px;
+		color: #147d58;
+		font-size: 9px;
+		font-weight: 700;
+		text-transform: uppercase;
+	}
 	footer {
 		display: flex;
 		align-items: center;
@@ -67,5 +99,16 @@
 	}
 	footer .failed {
 		color: #c2413b;
+	}
+	.reply-button {
+		display: inline-flex;
+		padding: 1px;
+		border: 0;
+		background: transparent;
+		color: inherit;
+		cursor: pointer;
+	}
+	.reply-button.bookmarked {
+		color: #d18a00;
 	}
 </style>

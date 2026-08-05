@@ -7,6 +7,13 @@ from frappe.model.document import Document
 class WhatsAppCoreSettings(Document):
 	def validate(self):
 		self.hub_url = (self.hub_url or "").strip().rstrip("/")
+		self.default_country_calling_code = "".join(
+			character
+			for character in str(self.default_country_calling_code or "91")
+			if character.isdigit()
+		)
+		if not 1 <= len(self.default_country_calling_code) <= 3:
+			frappe.throw("Default country calling code must contain 1 to 3 digits")
 		if self.enabled and not self.hub_url:
 			frappe.throw("Hub URL is required when WhatsApp Core is enabled")
 		if self.outbound_enabled and not self.enabled:

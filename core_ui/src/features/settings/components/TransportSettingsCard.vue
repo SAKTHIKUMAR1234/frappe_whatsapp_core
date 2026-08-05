@@ -22,6 +22,7 @@
 		outbound_enabled: false,
 		hub_url: '',
 		request_timeout: 30,
+		default_country_calling_code: '91',
 		api_key: '',
 		api_secret: '',
 		accounts: [],
@@ -35,6 +36,7 @@
 			form.outbound_enabled = Boolean(workspace.transport?.outbound_enabled)
 			form.hub_url = workspace.transport?.hub_url || ''
 			form.request_timeout = workspace.request_timeout || 30
+			form.default_country_calling_code = workspace.default_country_calling_code || '91'
 			form.api_key = ''
 			form.api_secret = ''
 			form.accounts = (workspace.hub_accounts || []).map((row) => ({ ...row }))
@@ -58,6 +60,7 @@
 				outbound_enabled: Number(form.outbound_enabled),
 				hub_url: form.hub_url,
 				request_timeout: form.request_timeout,
+				default_country_calling_code: form.default_country_calling_code,
 				api_key: form.api_key,
 				api_secret: form.api_secret,
 				accounts: form.accounts,
@@ -130,6 +133,18 @@
 					:max="120"
 					suffix=" sec"
 				/>
+			</label>
+			<label>
+				<span>Default country calling code</span>
+				<InputText
+					v-model="form.default_country_calling_code"
+					:disabled="!canManage"
+					placeholder="91"
+				/>
+				<small
+					>Only used for local numbers; + or 00 international numbers are
+					preserved.</small
+				>
 			</label>
 			<label>
 				<span>Hub API key</span>

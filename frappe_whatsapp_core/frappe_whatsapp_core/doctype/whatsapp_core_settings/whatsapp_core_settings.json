@@ -13,6 +13,7 @@
   "api_key",
   "api_secret",
   "request_timeout",
+	"default_country_calling_code",
   "section_accounts",
   "accounts"
  ],
@@ -59,6 +60,13 @@
    "fieldname": "request_timeout",
    "fieldtype": "Int",
    "label": "Request Timeout (seconds)"
+  },
+  {
+   "default": "91",
+   "description": "Used only when an operator or custom resolver supplies a local number without + or 00. International numbers keep their own calling code.",
+   "fieldname": "default_country_calling_code",
+   "fieldtype": "Data",
+   "label": "Default Country Calling Code"
   },
   {
    "fieldname": "section_accounts",

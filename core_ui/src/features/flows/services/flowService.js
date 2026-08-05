@@ -1,22 +1,29 @@
 import { call } from '@/services/frappe'
 
-const FLOW_API = 'frappe_whatsapp_core.flow_api'
+const API = 'frappe_whatsapp_core.meta_flows'
 
-export function getFlow(flowName) {
-	return call(`${FLOW_API}.get_builder`, {
-		flow_name: flowName,
-	})
-}
+export const flowWorkspace = (accountName = '') =>
+	call(`${API}.flow_workspace`, { account_name: accountName })
 
-export function saveFlowDraft(flowName, graph) {
-	return call(`${FLOW_API}.save_draft`, {
-		flow_name: flowName,
-		graph,
-	})
-}
+export const getFlow = (accountName, flowId) =>
+	call(`${API}.get_flow`, { account_name: accountName, flow_id: flowId })
 
-export function publishFlow(flowName) {
-	return call(`${FLOW_API}.publish`, {
-		flow_name: flowName,
+export const createFlow = (values) => call(`${API}.create_flow`, values)
+
+export const updateFlow = (values) => call(`${API}.update_flow`, values)
+
+export const uploadFlowJson = (accountName, flowId, flowJson) =>
+	call(`${API}.upload_flow_json`, {
+		account_name: accountName,
+		flow_id: flowId,
+		flow_json: flowJson,
 	})
-}
+
+export const publishFlow = (accountName, flowId) =>
+	call(`${API}.publish_flow`, { account_name: accountName, flow_id: flowId })
+
+export const deprecateFlow = (accountName, flowId) =>
+	call(`${API}.deprecate_flow`, { account_name: accountName, flow_id: flowId })
+
+export const deleteFlow = (accountName, flowId) =>
+	call(`${API}.delete_flow`, { account_name: accountName, flow_id: flowId })

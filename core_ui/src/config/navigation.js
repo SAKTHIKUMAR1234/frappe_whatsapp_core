@@ -31,13 +31,13 @@ export const navigation = [
 			},
 			{ label: 'Bulk Messaging', route: 'campaigns', icon: Megaphone },
 			{ label: 'AI Queue', route: 'ai-queue', icon: Bot },
-			{ label: 'Polls & Forms', route: 'polls', icon: Activity },
+			{ label: 'Forms & Surveys', route: 'polls', icon: Activity },
 		],
 	},
 	{
 		label: 'Automate',
 		items: [
-			{ label: 'Flow Builder', route: 'flows', icon: GitBranch },
+			{ label: 'Meta Flow Builder', route: 'flows', icon: GitBranch },
 			{ label: 'Connectors', route: 'connectors', icon: PlugZap },
 		],
 	},

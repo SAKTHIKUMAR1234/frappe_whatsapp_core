@@ -91,7 +91,7 @@ def materialize_inbound_message(event, channel, provider_message):
 	conversation = get_or_create_conversation(channel, identity)
 	message_type = provider_message.get("type") or "unknown"
 	content = provider_message.get(message_type) or {}
-	body = content.get("body") if isinstance(content, dict) else ""
+	body = inbound_message_body(message_type, content)
 	timestamp = provider_message.get("timestamp")
 	provider_timestamp = parse_provider_timestamp(timestamp)
 	doc = frappe.get_doc({
@@ -116,6 +116,40 @@ def materialize_inbound_message(event, channel, provider_message):
 	conversation.last_message_at = provider_timestamp
 	conversation.save(ignore_permissions=True)
 	return {"kind": "message", "status": "created", "name": doc.name}
+
+
+def inbound_message_body(message_type: str, content) -> str:
+	"""Create a searchable/operator-friendly summary without losing raw Meta data."""
+	if message_type == "contacts" and isinstance(content, list):
+		names = [((item.get("name") or {}).get("formatted_name")) for item in content if isinstance(item, dict)]
+		return "Contacts: " + ", ".join(name for name in names if name)
+	if not isinstance(content, dict):
+		return ""
+	if message_type == "text":
+		return str(content.get("body") or "")
+	if message_type in {"image", "video", "document", "audio"}:
+		return str(content.get("caption") or f"[{message_type.title()}]")
+	if message_type == "sticker":
+		return "[Sticker]"
+	if message_type == "reaction":
+		return str(content.get("emoji") or "[Reaction removed]")
+	if message_type == "button":
+		return str(content.get("text") or content.get("payload") or "[Button reply]")
+	if message_type == "interactive":
+		reply = content.get("button_reply") or content.get("list_reply") or {}
+		if reply:
+			return str(reply.get("title") or reply.get("id") or "[Interactive reply]")
+		flow_reply = content.get("nfm_reply") or {}
+		if flow_reply:
+			response = flow_reply.get("response_json")
+			try:
+				response = json.loads(response) if isinstance(response, str) else response
+			except (TypeError, ValueError):
+				pass
+			return f"Flow response: {json.dumps(response, ensure_ascii=False) if isinstance(response, (dict, list)) else response or 'received'}"
+	if message_type == "location":
+		return str(content.get("name") or content.get("address") or f"Location: {content.get('latitude')}, {content.get('longitude')}")
+	return str(content.get("body") or f"[{message_type.replace('_', ' ').title()}]")
 
 
 def materialize_status(channel, provider_status):
@@ -146,8 +180,14 @@ def materialize_status(channel, provider_status):
 	return {"kind": "status", "status": "updated", "name": message_name}
 
 
-def normalize_phone(value):
-	return "".join(character for character in str(value or "") if character.isdigit())
+def normalize_phone(value, *, assume_local: bool = False, country_code: str = "91"):
+	from frappe_whatsapp_core.identity import normalize_phone as normalize_identity_phone
+
+	return normalize_identity_phone(
+		value,
+		assume_local=assume_local,
+		country_code=country_code,
+	)
 
 
 def parse_provider_timestamp(value):

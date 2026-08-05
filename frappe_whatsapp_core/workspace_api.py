@@ -140,6 +140,7 @@ def list_messages(
 	filters = ["conversation = %(conversation)s"]
 	values = {"conversation": conversation, "limit": limit + 1}
 	if before:
+		values["before"] = before
 		if before_creation:
 			filters.append(
 				"""(
@@ -153,7 +154,6 @@ def list_messages(
 			values["before_creation"] = before_creation
 		else:
 			filters.append("provider_timestamp < %(before)s")
-		values["before"] = before
 	if search:
 		filters.append("body LIKE %(search)s")
 		values["search"] = f"%{search.strip()}%"
@@ -161,13 +161,18 @@ def list_messages(
 		f"""
 		SELECT
 			name, message_key, provider_message_id, direction, message_type,
-			body, content, provider_timestamp, delivery_status, failure, creation
+			body, content, provider_timestamp, delivery_status, failure, creation,
+			EXISTS(
+				SELECT 1 FROM `tabWhatsApp Core Message Bookmark` bookmark
+				WHERE bookmark.message = `tabWhatsApp Core Message`.name
+				AND bookmark.user = %(user)s
+			) AS bookmarked
 		FROM `tabWhatsApp Core Message`
 		WHERE {" AND ".join(filters)}
 		ORDER BY provider_timestamp DESC, creation DESC
 		LIMIT %(limit)s
 		""",
-		values,
+		{**values, "user": frappe.session.user},
 		as_dict=True,
 	)
 	has_more = len(rows) > limit
@@ -175,6 +180,7 @@ def list_messages(
 	for row in rows:
 		row.content = _json_dict(row.content)
 		row.failure = _json_dict(row.failure)
+		row.bookmarked = bool(row.bookmarked)
 	return {
 		"rows": rows,
 		"has_more": has_more,

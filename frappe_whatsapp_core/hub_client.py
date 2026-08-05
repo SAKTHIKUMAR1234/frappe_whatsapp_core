@@ -9,6 +9,60 @@ import frappe
 _session = requests.Session()
 
 
+def call_management(method: str, args: dict | None = None) -> dict:
+	"""Call an authenticated Integration Hub management API.
+
+	Core never receives Meta credentials. The Hub resolves and audits the Meta
+	operation, while this site keeps only its configured Hub account mapping.
+	"""
+	method = str(method or "").strip()
+	allowed_prefix = "frappe_whatsapp_integration.frappe_whatsapp_hub.api."
+	if not method.startswith(allowed_prefix):
+		frappe.throw("Invalid WhatsApp Hub management method", frappe.ValidationError)
+	settings = get_settings()
+	url = f"{settings.hub_url}/api/method/{method}"
+	try:
+		response = _session.post(
+			url,
+			headers=settings.get_hub_auth_headers(),
+			json=args or {},
+			timeout=_request_timeout(settings),
+		)
+	except requests.RequestException as exception:
+		frappe.throw(f"WhatsApp Hub is unavailable: {exception}", frappe.ValidationError)
+	try:
+		body = response.json()
+	except ValueError:
+		body = {"raw": response.text[:2000]}
+	result = body.get("message", body) if isinstance(body, dict) else body
+	if not response.ok:
+		frappe.throw(_error_message(result), frappe.ValidationError)
+	if not isinstance(result, dict):
+		frappe.throw("WhatsApp Hub returned an invalid response", frappe.ValidationError)
+	return result
+
+
+def mark_message_read(
+	channel: str,
+	message_id: str,
+	*,
+	typing_indicator: bool = False,
+) -> dict:
+	"""Forward provider read/typing state through the mapped Hub account."""
+	settings = get_settings(outbound=True)
+	message_id = str(message_id or "").strip()
+	if not message_id or message_id.startswith("local:"):
+		frappe.throw("A provider inbound message id is required", frappe.ValidationError)
+	return call_management(
+		"frappe_whatsapp_integration.frappe_whatsapp_hub.api.send.mark_message_read",
+		{
+			"account_name": settings.get_account_name(channel),
+			"message_id": message_id,
+			"typing_indicator": 1 if typing_indicator else 0,
+		},
+	)
+
+
 def send_raw(
 	channel: str,
 	payload: dict,

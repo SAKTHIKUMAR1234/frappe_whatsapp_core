@@ -1,0 +1,149 @@
+"""Core proxy for Meta-hosted WhatsApp Flows managed by the Integration Hub."""
+
+from __future__ import annotations
+
+import frappe
+
+from frappe_whatsapp_core.hub_client import call_management, get_settings
+from frappe_whatsapp_core.permissions import require_core_access
+
+INTEGRATION_API = "frappe_whatsapp_integration.frappe_whatsapp_hub.api"
+
+
+def _call(module: str, method: str, args: dict) -> dict:
+	return call_management(f"{INTEGRATION_API}.{module}.{method}", args)
+
+
+def _accounts() -> list[dict]:
+	settings = get_settings()
+	rows = []
+	for row in settings.accounts:
+		channel = frappe.db.get_value(
+			"WhatsApp Core Channel", row.channel, ["display_name", "phone_number_id"], as_dict=True
+		) or {}
+		rows.append({
+			"account_name": row.account_name,
+			"channel": row.channel,
+			"display_name": channel.get("display_name") or row.account_name,
+			"phone_number_id": channel.get("phone_number_id") or "",
+			"is_default": bool(row.is_default),
+		})
+	return rows
+
+
+def _resolve_account_name(account_name: str | None = None) -> str:
+	accounts = _accounts()
+	requested = str(account_name or "").strip()
+	if requested:
+		if requested not in {row["account_name"] for row in accounts}:
+			frappe.throw("Hub account is not mapped to this Core site", frappe.PermissionError)
+		return requested
+	for row in accounts:
+		if row["is_default"]:
+			return row["account_name"]
+	if len(accounts) == 1:
+		return accounts[0]["account_name"]
+	frappe.throw("Select a configured WhatsApp account", frappe.ValidationError)
+
+
+def _context(account_name: str | None = None) -> dict:
+	account_name = _resolve_account_name(account_name)
+	return _call("onboarding", "get_account_meta_context", {"account_name": account_name})
+
+
+@frappe.whitelist()
+@require_core_access()
+def flow_workspace(account_name: str | None = None) -> dict:
+	accounts = _accounts()
+	selected = _resolve_account_name(account_name)
+	context = _context(selected)
+	result = _call("meta_flows", "list_flows", {"waba_name": context["waba_name"]})
+	return {"accounts": accounts, "selected_account": selected, "context": context, "flows": result.get("data") or []}
+
+
+@frappe.whitelist()
+@require_core_access()
+def get_flow(account_name: str, flow_id: str) -> dict:
+	context = _context(account_name)
+	result = _call("meta_flows", "get_flow", {"waba_name": context["waba_name"], "flow_id": flow_id})
+	asset = _call("meta_flows", "get_flow_json", {"waba_name": context["waba_name"], "flow_id": flow_id})
+	return {
+		"account_name": account_name, "context": context, "flow": result.get("data") or {},
+		"flow_json": asset.get("data"), "asset": asset.get("asset"),
+	}
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def create_flow(
+	account_name: str,
+	flow_name: str,
+	categories,
+	endpoint_uri: str | None = None,
+	flow_json=None,
+	clone_flow_id: str | None = None,
+):
+	context = _context(account_name)
+	return _call("meta_flows", "create_flow", {
+		"waba_name": context["waba_name"], "flow_name": flow_name, "categories": categories,
+		"endpoint_uri": endpoint_uri, "flow_json": flow_json, "publish": 0,
+		"clone_flow_id": clone_flow_id,
+	})
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def update_flow(
+	account_name: str,
+	flow_id: str,
+	flow_name: str | None = None,
+	categories=None,
+	endpoint_uri: str | None = None,
+):
+	context = _context(account_name)
+	return _call("meta_flows", "update_flow_metadata", {
+		"waba_name": context["waba_name"], "flow_id": flow_id, "flow_name": flow_name,
+		"categories": categories, "endpoint_uri": endpoint_uri,
+	})
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def upload_flow_json(account_name: str, flow_id: str, flow_json):
+	context = _context(account_name)
+	return _call("meta_flows", "upload_flow_json", {
+		"waba_name": context["waba_name"], "flow_id": flow_id, "flow_json": flow_json,
+	})
+
+
+def _lifecycle(account_name: str, flow_id: str, method: str):
+	context = _context(account_name)
+	return _call("meta_flows", method, {"waba_name": context["waba_name"], "flow_id": flow_id})
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def publish_flow(account_name: str, flow_id: str):
+	return _lifecycle(account_name, flow_id, "publish_flow")
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def deprecate_flow(account_name: str, flow_id: str):
+	return _lifecycle(account_name, flow_id, "deprecate_flow")
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def delete_flow(account_name: str, flow_id: str):
+	return _lifecycle(account_name, flow_id, "delete_flow")
+
+
+@frappe.whitelist()
+@require_core_access()
+def list_flow_assets(account_name: str, flow_id: str):
+	context = _context(account_name)
+	result = _call("meta_flows", "list_flow_assets", {
+		"waba_name": context["waba_name"], "flow_id": flow_id,
+	})
+	return result.get("data") or []

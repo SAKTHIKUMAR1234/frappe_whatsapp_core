@@ -7,7 +7,13 @@ import json
 import frappe
 
 from frappe_whatsapp_core.cases import create_case
-from frappe_whatsapp_core.flow_api import get_builder
+from frappe_whatsapp_core.meta_flows import (
+	create_flow as create_meta_flow,
+	flow_workspace as meta_flow_workspace,
+	get_flow as get_meta_flow,
+	publish_flow as publish_meta_flow,
+	upload_flow_json as upload_meta_flow_json,
+)
 from frappe_whatsapp_core.party_bindings import upsert_party_binding
 from frappe_whatsapp_core.permissions import require_core_access
 from frappe_whatsapp_core.topics import (
@@ -309,16 +315,50 @@ TOOL_DEFINITIONS = [
 	},
 	{
 		"name": "whatsapp.list_flows",
-		"description": "List configured automation flows.",
-		"inputSchema": {"type": "object", "properties": {}},
+		"description": "List native WhatsApp Flows from Meta for a configured Hub account.",
+		"inputSchema": {"type": "object", "properties": {"account_name": {"type": "string"}}},
 	},
 	{
 		"name": "whatsapp.get_flow",
-		"description": "Read one flow-builder graph.",
+		"description": "Read one Meta Flow and its current flow.json asset.",
 		"inputSchema": {
 			"type": "object",
-			"required": ["flow_name"],
-			"properties": {"flow_name": {"type": "string"}},
+			"required": ["account_name", "flow_id"],
+			"properties": {"account_name": {"type": "string"}, "flow_id": {"type": "string"}},
+		},
+	},
+	{
+		"name": "whatsapp.create_flow",
+		"description": "Create a draft native WhatsApp Flow directly in Meta.",
+		"inputSchema": {
+			"type": "object", "required": ["account_name", "flow_name", "categories"],
+			"properties": {
+				"account_name": {"type": "string"}, "flow_name": {"type": "string"},
+				"categories": {"type": "array", "items": {"type": "string"}},
+				"endpoint_uri": {"type": "string"}, "clone_flow_id": {"type": "string"},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.upload_flow_json",
+		"description": "Upload a flow.json asset to Meta and return Meta validation errors.",
+		"inputSchema": {
+			"type": "object", "required": ["account_name", "flow_id", "flow_json"],
+			"properties": {
+				"account_name": {"type": "string"}, "flow_id": {"type": "string"},
+				"flow_json": {"type": "object"},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.publish_flow",
+		"description": "Irreversibly publish a validated Meta Flow. Requires confirmation=PUBLISH.",
+		"inputSchema": {
+			"type": "object", "required": ["account_name", "flow_id", "confirmation"],
+			"properties": {
+				"account_name": {"type": "string"}, "flow_id": {"type": "string"},
+				"confirmation": {"type": "string", "enum": ["PUBLISH"]},
+			},
 		},
 	},
 ]
@@ -408,8 +448,11 @@ def call_tool(name: str, arguments: dict | str | None = None) -> dict | list:
 			"launch_campaign_send",
 			{"campaign_name": arguments["campaign_name"]},
 		),
-		"whatsapp.list_flows": lambda: _frontend_call("list_flows"),
-		"whatsapp.get_flow": lambda: get_builder(arguments["flow_name"]),
+		"whatsapp.list_flows": lambda: meta_flow_workspace(arguments.get("account_name")),
+		"whatsapp.get_flow": lambda: get_meta_flow(arguments["account_name"], arguments["flow_id"]),
+		"whatsapp.create_flow": lambda: create_meta_flow(**arguments),
+		"whatsapp.upload_flow_json": lambda: upload_meta_flow_json(**arguments),
+		"whatsapp.publish_flow": lambda: _publish_meta_flow(arguments),
 	}
 	handler = handlers.get(name)
 	if not handler:
@@ -518,6 +561,12 @@ def _outbound_status(conversation: str | None) -> dict:
 def _frontend_call(method: str, arguments: dict | None = None):
 	handler = frappe.get_attr(f"frappe_whatsapp_core.frontend_api.{method}")
 	return handler(**(arguments or {}))
+
+
+def _publish_meta_flow(arguments: dict):
+	if arguments.get("confirmation") != "PUBLISH":
+		frappe.throw("Publishing a Meta Flow requires confirmation=PUBLISH", frappe.ValidationError)
+	return publish_meta_flow(arguments["account_name"], arguments["flow_id"])
 
 
 def _arguments(arguments) -> dict:

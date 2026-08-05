@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import frappe
 
 from frappe_whatsapp_core.conversation_reads import mark_conversation_read
@@ -131,6 +133,13 @@ def conversation(name: str, message_limit: int = 500) -> dict:
 	messages = messages[:message_limit]
 	oldest_loaded = messages[-1] if messages else None
 	messages.reverse()
+	bookmarks = set(frappe.get_all(
+		"WhatsApp Core Message Bookmark",
+		filters={"user": frappe.session.user, "message": ["in", [row.name for row in messages]]},
+		pluck="message",
+	)) if messages else set()
+	for row in messages:
+		row.bookmarked = row.name in bookmarks
 	return {
 		"conversation": doc.as_dict(),
 		"identity": identity.as_dict(),
@@ -183,6 +192,27 @@ def conversation(name: str, message_limit: int = 500) -> dict:
 @require_core_access()
 def read_conversation(name: str, message: str | None = None) -> dict:
 	return mark_conversation_read(name, message)
+
+
+@frappe.whitelist()
+@require_core_access()
+def toggle_message_bookmark(message: str) -> dict:
+	conversation_name = frappe.db.get_value("WhatsApp Core Message", message, "conversation")
+	if not conversation_name:
+		frappe.throw("Message not found", frappe.DoesNotExistError)
+	frappe.has_permission("WhatsApp Core Conversation", "read", conversation_name, throw=True)
+	key = hashlib.sha256(f"{message}:{frappe.session.user}".encode()).hexdigest()
+	if frappe.db.exists("WhatsApp Core Message Bookmark", key):
+		frappe.delete_doc("WhatsApp Core Message Bookmark", key, ignore_permissions=True)
+		return {"message": message, "bookmarked": False}
+	frappe.get_doc({
+		"doctype": "WhatsApp Core Message Bookmark",
+		"bookmark_key": key,
+		"message": message,
+		"conversation": conversation_name,
+		"user": frappe.session.user,
+	}).insert(ignore_permissions=True)
+	return {"message": message, "bookmarked": True}
 
 
 @frappe.whitelist()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from copy import deepcopy
 
 import frappe
 from frappe.utils import add_to_date, now_datetime
@@ -57,7 +58,16 @@ def resolve_recipient_phone(identity, context: dict | None = None) -> str:
 		if resolved:
 			value = resolved
 
-	phone = normalize_phone(value)
+	default_country_code = str(
+		(context or {}).get("default_country_calling_code")
+		or frappe.conf.get("whatsapp_default_country_calling_code")
+		or "91"
+	)
+	phone = normalize_phone(
+		value,
+		assume_local=True,
+		country_code=default_country_code,
+	)
 	if not 7 <= len(phone) <= 15:
 		frappe.throw(
 			"The resolved WhatsApp recipient phone number is invalid",
@@ -115,7 +125,18 @@ def start_conversation(
 	channel_doc = frappe.get_doc("WhatsApp Core Channel", channel)
 	if not channel_doc.enabled:
 		frappe.throw("The selected WhatsApp channel is disabled")
-	normalized = normalize_phone(phone_number)
+	default_country_code = (
+		frappe.db.get_single_value(
+			"WhatsApp Core Settings",
+			"default_country_calling_code",
+		)
+		or "91"
+	)
+	normalized = normalize_phone(
+		phone_number,
+		assume_local=True,
+		country_code=default_country_code,
+	)
 	if not 7 <= len(normalized) <= 15:
 		frappe.throw("Enter a valid international phone number")
 	identity = get_or_create_identity(normalized)
@@ -136,14 +157,22 @@ def queue_text(
 	conversation_name: str,
 	body: str,
 	source: str = "Core UI",
+	context_message_id: str | None = None,
 ) -> dict:
-	return queue_text_internal(conversation_name, body, source)
+	return queue_text_internal(
+		conversation_name,
+		body,
+		source,
+		context_message_id=context_message_id,
+	)
 
 
 def queue_text_internal(
 	conversation_name: str,
 	body: str,
 	source: str = "Core",
+	*,
+	context_message_id: str | None = None,
 ) -> dict:
 	body = str(body or "").strip()
 	if not body:
@@ -154,7 +183,41 @@ def queue_text_internal(
 		conversation_name,
 		"text",
 		body,
-		{"body": body, "source": source},
+		{
+			"body": body,
+			"source": source,
+			"context_message_id": _provider_context_id(context_message_id),
+		},
+	)
+
+
+@frappe.whitelist()
+@require_core_access()
+def queue_rich(
+	conversation_name: str,
+	message_type: str,
+	payload: dict | str,
+	body: str = "",
+	source: str = "Core UI",
+) -> dict:
+	"""Queue a supported native Cloud API message without exposing its recipient.
+
+	The caller supplies only the type-specific object (for example ``image`` or
+	``location``). Core resolves the mapped account and destination at delivery
+	time and rejects transport-level fields such as ``to``.
+	"""
+	message_type = str(message_type or "").strip().lower()
+	if isinstance(payload, str):
+		payload = frappe.parse_json(payload)
+	if not isinstance(payload, dict):
+		frappe.throw("Rich message payload must be an object", frappe.ValidationError)
+	normalized = _validate_rich_payload(message_type, payload)
+	preview = str(body or _rich_message_body(message_type, normalized)).strip()[:4096]
+	return _queue_message(
+		conversation_name,
+		message_type,
+		preview,
+		{"payload": normalized, "source": source},
 	)
 
 
@@ -574,6 +637,8 @@ def _message_payload(message, recipient: str) -> dict:
 	}
 	if message.message_type == "text":
 		payload["text"] = {"body": message.body}
+		if content.get("context_message_id"):
+			payload["context"] = {"message_id": content["context_message_id"]}
 	elif message.message_type == "template":
 		payload["template"] = {
 			"name": content["template"],
@@ -582,14 +647,131 @@ def _message_payload(message, recipient: str) -> dict:
 		if content.get("components"):
 			payload["template"]["components"] = content["components"]
 	elif message.message_type == "interactive":
-		payload["interactive"] = _interactive_payload(
-			content.get("body") or message.body,
-			_normalize_choice_options(content.get("options")),
-			content.get("button_label") or "Choose",
+		if content.get("payload"):
+			rich_payload = deepcopy(content["payload"])
+			context_message_id = rich_payload.pop("context_message_id", None)
+			payload["interactive"] = rich_payload
+			if context_message_id:
+				payload["context"] = {"message_id": context_message_id}
+		else:
+			payload["interactive"] = _interactive_payload(
+				content.get("body") or message.body,
+				_normalize_choice_options(content.get("options")),
+				content.get("button_label") or "Choose",
+			)
+	elif message.message_type in _RICH_MESSAGE_TYPES:
+		rich_payload = deepcopy(content.get("payload") or {})
+		context_message_id = rich_payload.pop("context_message_id", None)
+		payload[message.message_type] = (
+			rich_payload.get("contacts")
+			if message.message_type == "contacts"
+			else rich_payload
 		)
+		if context_message_id:
+			payload["context"] = {"message_id": context_message_id}
 	else:
 		frappe.throw(f"Unsupported outbound message type: {message.message_type}")
 	return payload
+
+
+_RICH_MESSAGE_TYPES = {
+	"audio",
+	"contacts",
+	"document",
+	"image",
+	"location",
+	"reaction",
+	"sticker",
+	"video",
+}
+
+
+def _validate_rich_payload(message_type: str, payload: dict) -> dict:
+	if message_type not in _RICH_MESSAGE_TYPES | {"interactive"}:
+		frappe.throw(f"Unsupported rich message type: {message_type}", frappe.ValidationError)
+	for forbidden in {"to", "messaging_product", "recipient_type"}:
+		if forbidden in payload:
+			frappe.throw(f"Rich message payload cannot set {forbidden}", frappe.ValidationError)
+	if message_type != "interactive" and "type" in payload:
+		frappe.throw("Rich message payload cannot set type", frappe.ValidationError)
+	result = deepcopy(payload)
+	context = _provider_context_id(result.get("context_message_id"))
+	if context:
+		result["context_message_id"] = context
+	else:
+		result.pop("context_message_id", None)
+
+	if message_type in {"image", "video", "audio", "document", "sticker"}:
+		media_sources = [key for key in ("id", "link") if str(result.get(key) or "").strip()]
+		if len(media_sources) != 1:
+			frappe.throw(
+				f"{message_type.title()} requires exactly one media id or link",
+				frappe.ValidationError,
+			)
+		result[media_sources[0]] = str(result[media_sources[0]]).strip()
+		if message_type == "sticker" and any(key in result for key in ("caption", "filename")):
+			frappe.throw("Stickers do not support captions or filenames", frappe.ValidationError)
+		if len(str(result.get("caption") or "")) > 1024:
+			frappe.throw("Media caption cannot exceed 1024 characters", frappe.ValidationError)
+	elif message_type == "reaction":
+		result["message_id"] = _provider_context_id(result.get("message_id"), required=True)
+		if len(str(result.get("emoji") or "")) > 16:
+			frappe.throw("Reaction emoji is invalid", frappe.ValidationError)
+	elif message_type == "location":
+		try:
+			latitude = float(result.get("latitude"))
+			longitude = float(result.get("longitude"))
+		except (TypeError, ValueError):
+			frappe.throw("Location requires numeric latitude and longitude", frappe.ValidationError)
+		if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
+			frappe.throw("Location coordinates are out of range", frappe.ValidationError)
+		result["latitude"], result["longitude"] = latitude, longitude
+	elif message_type == "contacts":
+		contacts = result.get("contacts")
+		if not isinstance(contacts, list) or not 1 <= len(contacts) <= 10:
+			frappe.throw("Contacts requires between 1 and 10 contact objects", frappe.ValidationError)
+		result = {"contacts": contacts, **({"context_message_id": context} if context else {})}
+	elif message_type == "interactive":
+		interactive_type = str(result.get("type") or "").strip()
+		if interactive_type not in {
+			"button", "list", "product", "product_list", "catalog_message",
+			"flow", "location_request_message", "address_message", "order_details",
+			"order_status",
+		}:
+			frappe.throw("Unsupported interactive message type", frappe.ValidationError)
+		if not isinstance(result.get("action"), dict):
+			frappe.throw("Interactive message requires an action object", frappe.ValidationError)
+	return result
+
+
+def _provider_context_id(value, *, required: bool = False) -> str:
+	value = str(value or "").strip()
+	if not value:
+		if required:
+			frappe.throw("Provider message id is required", frappe.ValidationError)
+		return ""
+	if value.startswith("local:"):
+		frappe.throw("A queued local message cannot be used as reply context", frappe.ValidationError)
+	if len(value) > 512:
+		frappe.throw("Provider message id is invalid", frappe.ValidationError)
+	return value
+
+
+def _rich_message_body(message_type: str, payload: dict) -> str:
+	if message_type in {"image", "video", "audio", "document"}:
+		return str(payload.get("caption") or f"[{message_type.title()}]")
+	if message_type == "sticker":
+		return "[Sticker]"
+	if message_type == "reaction":
+		return str(payload.get("emoji") or "[Reaction removed]")
+	if message_type == "location":
+		return str(payload.get("name") or payload.get("address") or "[Location]")
+	if message_type == "contacts":
+		return "[Contact]" if len(payload.get("contacts") or []) == 1 else "[Contacts]"
+	if message_type == "interactive":
+		body = payload.get("body") or {}
+		return str(body.get("text") or f"[{payload.get('type', 'Interactive').title()}]")
+	return f"[{message_type.title()}]"
 
 
 def _mark_sent(message, provider_message_id: str | None) -> None:

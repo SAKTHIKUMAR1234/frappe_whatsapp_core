@@ -132,12 +132,22 @@ def _deactivate_disabled_source_links(identity):
 	)
 
 
-def normalize_phone(value):
-	return "".join(
+def normalize_phone(value, *, assume_local: bool = False, country_code: str = "91"):
+	raw = str(value or "").strip()
+	normalized = "".join(
 		character
-		for character in str(value or "")
+		for character in raw
 		if character.isdigit()
 	)
+	if raw.startswith("00") and normalized.startswith("00"):
+		normalized = normalized[2:]
+	if assume_local and not raw.startswith(("+", "00")):
+		country_code = "".join(character for character in str(country_code or "91") if character.isdigit())
+		if normalized.startswith("0") and len(normalized) == 11:
+			normalized = normalized[1:]
+		if len(normalized) == 10 and country_code:
+			normalized = f"{country_code}{normalized}"
+	return normalized
 
 
 def phone_candidates(value):

@@ -23,4 +23,20 @@ export async function logout() {
 	await client.get('/api/method/logout')
 }
 
+export function errorMessage(error, fallback = 'Unexpected server error') {
+	const payload = error?.response?.data || {}
+	if (payload._server_messages) {
+		try {
+			const messages = JSON.parse(payload._server_messages)
+			const first = messages.length ? JSON.parse(messages[0]) : null
+			if (first?.message) return first.message
+		} catch {
+			// Fall through to the standard Frappe/HTTP error fields.
+		}
+	}
+	const exception = payload.exception
+	if (exception) return String(exception).split(':').at(-1).trim()
+	return payload.message || error?.message || fallback
+}
+
 export default client

@@ -7,12 +7,22 @@
 	import Select from 'primevue/select'
 	import Textarea from 'primevue/textarea'
 	import { useToast } from 'primevue/usetoast'
-	import { MessageSquarePlus, RefreshCw, Search, Send, ShieldAlert } from 'lucide-vue-next'
+	import {
+		MessageSquarePlus,
+		Paperclip,
+		ChevronLeft,
+		RefreshCw,
+		Search,
+		Send,
+		ShieldAlert,
+		Smile,
+		X,
+	} from 'lucide-vue-next'
 
 	import ConversationContext from '@/features/inbox/components/ConversationContext.vue'
 	import ConversationList from '@/features/inbox/components/ConversationList.vue'
 	import MessageBubble from '@/features/inbox/components/MessageBubble.vue'
-	import { call } from '@/services/frappe'
+	import { call, errorMessage } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
 
@@ -29,6 +39,36 @@
 	const detail = ref(null)
 	const messagePage = ref({ has_more: false })
 	const draft = ref('')
+	const replyTo = ref(null)
+	const richDialog = ref(false)
+	const richForm = ref({
+		type: 'image',
+		media: '',
+		caption: '',
+		emoji: '👍',
+		latitude: '',
+		longitude: '',
+		name: '',
+		address: '',
+		contacts: '[{"name":{"formatted_name":""},"phones":[{"phone":""}]}]',
+		flow_id: '',
+		flow_token: '',
+		flow_cta: 'Open',
+		flow_screen: '',
+		flow_body: '',
+	})
+	const richTypes = [
+		{ label: 'Image', value: 'image' },
+		{ label: 'Video', value: 'video' },
+		{ label: 'Audio', value: 'audio' },
+		{ label: 'Document', value: 'document' },
+		{ label: 'Sticker', value: 'sticker' },
+		{ label: 'Reaction', value: 'reaction' },
+		{ label: 'Location', value: 'location' },
+		{ label: 'Contact', value: 'contacts' },
+		{ label: 'Meta Flow', value: 'interactive' },
+	]
+	let typingSentAt = 0
 	const stream = ref(null)
 	const newDialog = ref(false)
 	const starting = ref(false)
@@ -140,6 +180,10 @@
 		router.replace({ name: 'inbox', params: { conversation: name } })
 	}
 
+	function closeMobileConversation() {
+		router.replace({ name: 'inbox' })
+	}
+
 	async function sendText() {
 		const body = draft.value.trim()
 		if (!body || !textReady.value) return
@@ -149,14 +193,122 @@
 			const message = await call('frappe_whatsapp_core.outbound.queue_text', {
 				conversation_name: selectedName.value,
 				body,
+				context_message_id: replyTo.value?.provider_message_id || '',
 			})
+			replyTo.value = null
 			appendMessage({ conversation: selectedName.value, message })
 		} catch (error) {
 			draft.value = body
 			toast.add({
 				severity: 'error',
 				summary: 'Message not queued',
-				detail: apiError(error),
+				detail: errorMessage(error),
+				life: 5000,
+			})
+		} finally {
+			sending.value = false
+		}
+	}
+
+	function selectReply(message) {
+		replyTo.value = message
+	}
+
+	async function toggleBookmark(message) {
+		const result = await call('frappe_whatsapp_core.inbox.toggle_message_bookmark', {
+			message: message.name,
+		})
+		message.bookmarked = result.bookmarked
+	}
+
+	async function showTyping() {
+		const current = Date.now()
+		if (!selectedName.value || current - typingSentAt < 25000) return
+		typingSentAt = current
+		try {
+			await call('frappe_whatsapp_core.conversation_reads.show_typing', {
+				conversation: selectedName.value,
+			})
+		} catch {
+			// Typing state is transient and must never interrupt composing.
+		}
+	}
+
+	function addEmoji() {
+		draft.value += '😊'
+		showTyping()
+	}
+
+	function richPayload() {
+		const type = richForm.value.type
+		const context_message_id = replyTo.value?.provider_message_id || ''
+		if (['image', 'video', 'audio', 'document', 'sticker'].includes(type)) {
+			const media = richForm.value.media.trim()
+			const payload = {
+				[media.startsWith('http://') || media.startsWith('https://') ? 'link' : 'id']:
+					media,
+				context_message_id,
+			}
+			if (type !== 'sticker' && richForm.value.caption.trim()) {
+				payload.caption = richForm.value.caption.trim()
+			}
+			return payload
+		}
+		if (type === 'reaction') {
+			return {
+				message_id: replyTo.value?.provider_message_id || '',
+				emoji: richForm.value.emoji,
+			}
+		}
+		if (type === 'location') {
+			return {
+				latitude: richForm.value.latitude,
+				longitude: richForm.value.longitude,
+				name: richForm.value.name,
+				address: richForm.value.address,
+				context_message_id,
+			}
+		}
+		if (type === 'contacts') {
+			return { contacts: JSON.parse(richForm.value.contacts), context_message_id }
+		}
+		return {
+			type: 'flow',
+			body: { text: richForm.value.flow_body || 'Please complete this form.' },
+			action: {
+				name: 'flow',
+				parameters: {
+					flow_message_version: '3',
+					flow_id: richForm.value.flow_id,
+					flow_token: richForm.value.flow_token,
+					flow_cta: richForm.value.flow_cta || 'Open',
+					flow_action: 'navigate',
+					flow_action_payload: {
+						screen: richForm.value.flow_screen,
+						data: {},
+					},
+				},
+			},
+			context_message_id,
+		}
+	}
+
+	async function sendRich() {
+		sending.value = true
+		try {
+			const message = await call('frappe_whatsapp_core.outbound.queue_rich', {
+				conversation_name: selectedName.value,
+				message_type: richForm.value.type,
+				payload: richPayload(),
+			})
+			appendMessage({ conversation: selectedName.value, message })
+			richDialog.value = false
+			replyTo.value = null
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Message not queued',
+				detail: errorMessage(error),
 				life: 5000,
 			})
 		} finally {
@@ -198,7 +350,7 @@
 			toast.add({
 				severity: 'error',
 				summary: 'Conversation not started',
-				detail: apiError(error),
+				detail: errorMessage(error),
 				life: 5000,
 			})
 		} finally {
@@ -269,11 +421,11 @@
 		if (stream.value) stream.value.scrollTop = stream.value.scrollHeight
 	}
 
-	function apiError(error) {
-		return error?.response?.data?.exception || error?.message || 'Unexpected server error'
-	}
-
 	watch(selectedName, loadDetail)
+	watch(selectedName, () => {
+		replyTo.value = null
+		typingSentAt = 0
+	})
 	onMounted(async () => {
 		await loadRows()
 		if (selectedName.value) await loadDetail(selectedName.value)
@@ -304,7 +456,7 @@
 			</div>
 		</header>
 
-		<section class="inbox-workbench surface-card">
+		<section :class="['inbox-workbench', 'surface-card', { 'mobile-chat-open': detail }]">
 			<aside class="list-panel">
 				<label class="conversation-search">
 					<Search :size="16" />
@@ -330,6 +482,14 @@
 				</div>
 				<template v-else>
 					<header class="chat-heading">
+						<button
+							class="mobile-back"
+							type="button"
+							aria-label="Back to conversations"
+							@click="closeMobileConversation"
+						>
+							<ChevronLeft :size="18" />
+						</button>
 						<div>
 							<strong>{{ detail.display_name }}</strong>
 							<span>{{ detail.identity.normalized_value }}</span>
@@ -364,6 +524,8 @@
 									v-for="message in topic.messageRows"
 									:key="message.name"
 									:message="message"
+									@reply="selectReply"
+									@bookmark="toggleBookmark"
 								/>
 							</div>
 						</details>
@@ -375,16 +537,43 @@
 								v-for="message in ungrouped"
 								:key="message.name"
 								:message="message"
+								@reply="selectReply"
+								@bookmark="toggleBookmark"
 							/>
 						</div>
 					</div>
 					<footer v-if="textReady" class="composer">
+						<div v-if="replyTo" class="reply-preview">
+							<span
+								><strong>Replying to</strong>
+								{{ replyTo.body || replyTo.message_type }}</span
+							>
+							<button
+								type="button"
+								aria-label="Cancel reply"
+								@click="replyTo = null"
+							>
+								<X :size="14" />
+							</button>
+						</div>
+						<Button text rounded aria-label="Add emoji" @click="addEmoji"
+							><Smile :size="18"
+						/></Button>
+						<Button
+							text
+							rounded
+							aria-label="Send media or rich message"
+							@click="richDialog = true"
+							><Paperclip :size="18"
+						/></Button>
 						<Textarea
 							v-model="draft"
 							auto-resize
 							rows="1"
 							placeholder="Write a message"
 							@keydown.enter.exact.prevent="sendText"
+							@focus="showTyping"
+							@input="showTyping"
 						/>
 						<Button
 							:disabled="!draft.trim()"
@@ -461,6 +650,60 @@
 					:disabled="!newChat.channel || !newChat.phone_number || !newChat.template"
 					@click="startConversation"
 				/>
+			</template>
+		</Dialog>
+
+		<Dialog
+			v-model:visible="richDialog"
+			modal
+			header="Send a WhatsApp message"
+			class="rich-dialog"
+		>
+			<div class="dialog-form">
+				<label
+					>Type<Select
+						v-model="richForm.type"
+						:options="richTypes"
+						option-label="label"
+						option-value="value"
+				/></label>
+				<template
+					v-if="
+						['image', 'video', 'audio', 'document', 'sticker'].includes(richForm.type)
+					"
+				>
+					<label>Meta media ID or HTTPS URL<InputText v-model="richForm.media" /></label>
+					<label v-if="richForm.type !== 'sticker'"
+						>Caption<InputText v-model="richForm.caption"
+					/></label>
+				</template>
+				<template v-else-if="richForm.type === 'reaction'">
+					<label>Emoji<InputText v-model="richForm.emoji" /></label>
+					<small
+						>Select Reply on the target message first. Empty emoji removes the
+						reaction.</small
+					>
+				</template>
+				<template v-else-if="richForm.type === 'location'">
+					<label>Latitude<InputText v-model="richForm.latitude" /></label>
+					<label>Longitude<InputText v-model="richForm.longitude" /></label>
+					<label>Name<InputText v-model="richForm.name" /></label>
+					<label>Address<InputText v-model="richForm.address" /></label>
+				</template>
+				<label v-else-if="richForm.type === 'contacts'"
+					>Meta contacts JSON<Textarea v-model="richForm.contacts" rows="7"
+				/></label>
+				<template v-else>
+					<label>Published Meta Flow ID<InputText v-model="richForm.flow_id" /></label>
+					<label>Flow token<InputText v-model="richForm.flow_token" /></label>
+					<label>Starting screen<InputText v-model="richForm.flow_screen" /></label>
+					<label>Button label<InputText v-model="richForm.flow_cta" /></label>
+					<label>Message<InputText v-model="richForm.flow_body" /></label>
+				</template>
+			</div>
+			<template #footer>
+				<Button label="Cancel" text @click="richDialog = false" />
+				<Button label="Queue message" :loading="sending" @click="sendRich" />
 			</template>
 		</Dialog>
 	</div>
@@ -552,6 +795,14 @@
 		justify-content: space-between;
 		border-bottom: 1px solid #e2e9e5;
 		background: #fbfcfb;
+	}
+	.mobile-back {
+		display: none;
+		padding: 5px;
+		border: 0;
+		background: transparent;
+		color: #45564e;
+		cursor: pointer;
 	}
 	.chat-heading strong,
 	.chat-heading span {
@@ -647,6 +898,31 @@
 		border-top: 1px solid #dfe7e2;
 		background: #fff;
 	}
+	.composer {
+		flex-wrap: wrap;
+	}
+	.reply-preview {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		flex: 1 0 100%;
+		padding: 6px 9px;
+		border-left: 3px solid #168a62;
+		border-radius: 6px;
+		background: #edf8f3;
+		font-size: 11px;
+	}
+	.reply-preview span {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.reply-preview button {
+		display: inline-flex;
+		border: 0;
+		background: transparent;
+		cursor: pointer;
+	}
 	.composer :deep(textarea) {
 		flex: 1;
 		max-height: 110px;
@@ -706,8 +982,24 @@
 		.inbox-workbench {
 			grid-template-columns: 1fr;
 		}
-		.list-panel {
+		.chat-panel {
 			display: none;
+		}
+		.mobile-chat-open .list-panel {
+			display: none;
+		}
+		.mobile-chat-open .chat-panel {
+			display: flex;
+		}
+		.mobile-back {
+			display: inline-flex;
+		}
+		.inbox-heading p,
+		.inbox-heading .eyebrow {
+			display: none;
+		}
+		.inbox-heading h1 {
+			font-size: 20px;
 		}
 	}
 </style>
