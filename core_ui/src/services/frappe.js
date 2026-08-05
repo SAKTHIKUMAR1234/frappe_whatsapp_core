@@ -12,6 +12,16 @@ export async function call(method, args = {}) {
 	return data.message
 }
 
+export async function uploadFile(file, isPrivate = true) {
+	const form = new FormData()
+	form.append('file', file)
+	form.append('is_private', isPrivate ? '1' : '0')
+	const { data } = await client.post('/api/method/upload_file', form, {
+		headers: { 'Content-Type': 'multipart/form-data' },
+	})
+	return data.message
+}
+
 export async function login(usr, pwd) {
 	const { data } = await client.post('/api/method/login', new URLSearchParams({ usr, pwd }), {
 		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

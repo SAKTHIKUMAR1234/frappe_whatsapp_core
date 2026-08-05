@@ -6,7 +6,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from frappe_whatsapp_core.hub_client import mark_message_read
-from frappe_whatsapp_core.outbound import _message_payload, _validate_rich_payload
+from frappe_whatsapp_core.outbound import _message_payload, _validate_rich_payload, upload_media
 
 
 class TestRichMessages(FrappeTestCase):
@@ -61,6 +61,48 @@ class TestRichMessages(FrappeTestCase):
 				"image",
 				{"id": "MEDIA", "to": "attacker-controlled"},
 			)
+
+	def test_group_payload_preserves_group_recipient_type(self):
+		message = SimpleNamespace(
+			message_type="text",
+			body="Hello group",
+			content=json.dumps({"body": "Hello group"}),
+		)
+		payload = _message_payload(message, "GROUP-ID", recipient_type="group")
+		self.assertEqual(payload["recipient_type"], "group")
+		self.assertEqual(payload["to"], "GROUP-ID")
+
+	@patch("frappe_whatsapp_core.outbound.call_management")
+	@patch("frappe_whatsapp_core.outbound.get_settings")
+	@patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["WhatsApp User"])
+	@patch("frappe_whatsapp_core.outbound.frappe.has_permission")
+	@patch("frappe_whatsapp_core.outbound.frappe.db.get_value", return_value="FILE-1")
+	@patch("frappe_whatsapp_core.outbound.frappe.get_doc")
+	def test_core_media_upload_uses_filename_mime_type(
+		self,
+		get_doc,
+		_get_value,
+		_has_permission,
+		_get_roles,
+		get_settings,
+		call_management,
+	):
+		get_doc.side_effect = [
+			SimpleNamespace(channel="CHANNEL-1"),
+			SimpleNamespace(
+				file_name="photo.webp",
+				get_content=lambda: b"image-bytes",
+			),
+		]
+		settings = MagicMock()
+		settings.get_account_name.return_value = "Hub Account"
+		get_settings.return_value = settings
+		call_management.return_value = {"success": True, "media_id": "MEDIA-1"}
+
+		result = upload_media("CONVERSATION-1", "/private/files/photo.webp")
+
+		self.assertEqual(result["media_id"], "MEDIA-1")
+		self.assertEqual(call_management.call_args.args[1]["content_type"], "image/webp")
 
 
 class TestProviderPresence(FrappeTestCase):

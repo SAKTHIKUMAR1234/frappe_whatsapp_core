@@ -1,22 +1,41 @@
 <script setup>
+	import { nextTick, ref, watch } from 'vue'
 	import Tag from 'primevue/tag'
 	import { MessageCircleMore } from 'lucide-vue-next'
 
-	defineProps({
+	const props = defineProps({
 		rows: { type: Array, default: () => [] },
 		selected: { type: String, default: '' },
+		restoreScroll: { type: Number, default: 0 },
 	})
 
-	defineEmits(['select'])
+	const emit = defineEmits(['select', 'scroll-position'])
+	const list = ref(null)
+	let restored = false
+
+	watch(
+		() => props.rows.length,
+		async (length) => {
+			if (restored || !length) return
+			await nextTick()
+			if (list.value) list.value.scrollTop = props.restoreScroll
+			restored = true
+		},
+		{ immediate: true },
+	)
+
+	function rememberScroll() {
+		emit('scroll-position', list.value?.scrollTop || 0)
+	}
 </script>
 
 <template>
-	<div class="conversation-list">
+	<div ref="list" class="conversation-list" @scroll.passive="rememberScroll">
 		<button
 			v-for="row in rows"
 			:key="row.name"
 			:class="['conversation-row', { selected: row.name === selected }]"
-			@click="$emit('select', row.name)"
+			@click="emit('select', row.name)"
 		>
 			<span class="avatar">{{ (row.display_name || 'WA').slice(0, 2).toUpperCase() }}</span>
 			<span class="conversation-copy">

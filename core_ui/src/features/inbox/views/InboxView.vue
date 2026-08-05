@@ -22,7 +22,7 @@
 	import ConversationContext from '@/features/inbox/components/ConversationContext.vue'
 	import ConversationList from '@/features/inbox/components/ConversationList.vue'
 	import MessageBubble from '@/features/inbox/components/MessageBubble.vue'
-	import { call, errorMessage } from '@/services/frappe'
+	import { call, errorMessage, uploadFile } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
 
@@ -34,14 +34,20 @@
 	const loading = ref(true)
 	const detailLoading = ref(false)
 	const loadingOlder = ref(false)
-	const sending = ref(false)
+	const richSending = ref(false)
 	const search = ref('')
 	const rows = ref([])
+	const listScrollTop = ref(Number(sessionStorage.getItem('whatsapp:inbox-scroll') || 0))
 	const detail = ref(null)
 	const messagePage = ref({ has_more: false })
+	const messageSearchOpen = ref(false)
+	const messageSearch = ref('')
+	const messageSearchRows = ref([])
+	const messageSearching = ref(false)
 	const draft = ref('')
 	const replyTo = ref(null)
 	const richDialog = ref(false)
+	const uploadingMedia = ref(false)
 	const richForm = ref({
 		type: 'image',
 		media: '',
@@ -70,6 +76,7 @@
 		{ label: 'Meta Flow', value: 'interactive' },
 	]
 	let typingSentAt = 0
+	let messageSearchTimer = null
 	const stream = ref(null)
 	const newDialog = ref(false)
 	const starting = ref(false)
@@ -178,37 +185,125 @@
 	}
 
 	function selectConversation(name) {
-		router.replace({ name: 'inbox', params: { conversation: name } })
+		if (name === selectedName.value) return
+		router.push({
+			name: 'inbox',
+			params: { conversation: name },
+			state: { fromInbox: true },
+		})
 	}
 
 	function closeMobileConversation() {
-		router.replace({ name: 'inbox' })
+		if (window.history.state?.fromInbox) router.back()
+		else router.replace({ name: 'inbox' })
 	}
 
-	async function sendText() {
-		const body = draft.value.trim()
-		if (!body || !textReady.value) return
-		sending.value = true
-		draft.value = ''
+	function rememberListScroll(value) {
+		listScrollTop.value = value
+		sessionStorage.setItem('whatsapp:inbox-scroll', String(value))
+	}
+
+	async function runMessageSearch() {
+		const query = messageSearch.value.trim()
+		if (!query || !selectedName.value) {
+			messageSearchRows.value = []
+			return
+		}
+		messageSearching.value = true
+		try {
+			const result = await call('frappe_whatsapp_core.workspace_api.list_messages', {
+				conversation: selectedName.value,
+				search: query,
+				limit: 100,
+			})
+			messageSearchRows.value = [...result.rows].reverse()
+		} finally {
+			messageSearching.value = false
+		}
+	}
+
+	function closeMessageSearch() {
+		messageSearchOpen.value = false
+		messageSearch.value = ''
+		messageSearchRows.value = []
+	}
+
+	function newClientMessageId() {
+		if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+		return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+			const value = Math.floor(Math.random() * 16)
+			const nibble = character === 'x' ? value : (value & 0x3) | 0x8
+			return nibble.toString(16)
+		})
+	}
+
+	function optimisticText(body, contextMessageId = '') {
+		const clientMessageId = newClientMessageId()
+		return {
+			name: `optimistic:${clientMessageId}`,
+			provider_message_id: `local:${clientMessageId}`,
+			direction: 'Outbound',
+			message_type: 'text',
+			body,
+			content: { context_message_id: contextMessageId },
+			provider_timestamp: new Date().toISOString(),
+			delivery_status: 'Queued',
+			client_message_id: clientMessageId,
+			optimistic: true,
+		}
+	}
+
+	function reconcileMessage(message) {
+		if (!detail.value || !message) return
+		const index = detail.value.messages.findIndex(
+			(item) =>
+				item.name === message.name ||
+				(item.provider_message_id &&
+					item.provider_message_id === message.provider_message_id),
+		)
+		if (index >= 0) detail.value.messages.splice(index, 1, message)
+		else detail.value.messages.push(message)
+	}
+
+	async function queueText(body, contextMessageId = '') {
+		const optimistic = optimisticText(body, contextMessageId)
+		reconcileMessage(optimistic)
+		scrollToBottom()
 		try {
 			const message = await call('frappe_whatsapp_core.outbound.queue_text', {
 				conversation_name: selectedName.value,
 				body,
-				context_message_id: replyTo.value?.provider_message_id || '',
+				context_message_id: contextMessageId,
+				client_message_id: optimistic.client_message_id,
 			})
-			replyTo.value = null
-			appendMessage({ conversation: selectedName.value, message })
+			reconcileMessage(message)
+			return message
 		} catch (error) {
-			draft.value = body
+			optimistic.delivery_status = 'Failed'
+			optimistic.failure = { error: errorMessage(error) }
+			optimistic.optimistic = false
 			toast.add({
 				severity: 'error',
 				summary: 'Message not queued',
 				detail: errorMessage(error),
 				life: 5000,
 			})
-		} finally {
-			sending.value = false
+			return null
 		}
+	}
+
+	async function sendText() {
+		const body = draft.value.trim()
+		if (!body || !textReady.value) return
+		const contextMessageId = replyTo.value?.provider_message_id || ''
+		draft.value = ''
+		replyTo.value = null
+		await queueText(body, contextMessageId)
+	}
+
+	async function retryMessage(message) {
+		if (message.message_type !== 'text') return
+		await queueText(message.body || '')
 	}
 
 	function selectReply(message) {
@@ -294,32 +389,83 @@
 		}
 	}
 
+	async function uploadMedia(event) {
+		const file = event.target.files?.[0]
+		if (!file) return
+		uploadingMedia.value = true
+		try {
+			const stored = await uploadFile(file, true)
+			const uploaded = await call('frappe_whatsapp_core.outbound.upload_media', {
+				conversation_name: selectedName.value,
+				file_url: stored.file_url,
+			})
+			richForm.value.media = uploaded.media_id
+			toast.add({
+				severity: 'success',
+				summary: 'Media ready',
+				detail: `${uploaded.filename} was uploaded to Meta.`,
+				life: 3000,
+			})
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Media upload failed',
+				detail: errorMessage(error),
+				life: 5000,
+			})
+		} finally {
+			uploadingMedia.value = false
+			event.target.value = ''
+		}
+	}
+
 	async function sendRich() {
-		sending.value = true
+		let payload
+		try {
+			payload = richPayload()
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Invalid message details',
+				detail: errorMessage(error),
+				life: 5000,
+			})
+			return
+		}
+		const type = richForm.value.type
+		const optimistic = optimisticText(
+			richForm.value.caption.trim() || richForm.value.flow_body.trim() || `[${type}]`,
+		)
+		optimistic.message_type = type
+		optimistic.content = { payload }
+		reconcileMessage(optimistic)
+		scrollToBottom()
+		richDialog.value = false
+		replyTo.value = null
 		try {
 			const message = await call('frappe_whatsapp_core.outbound.queue_rich', {
 				conversation_name: selectedName.value,
-				message_type: richForm.value.type,
-				payload: richPayload(),
+				message_type: type,
+				payload,
+				client_message_id: optimistic.client_message_id,
 			})
-			appendMessage({ conversation: selectedName.value, message })
-			richDialog.value = false
-			replyTo.value = null
+			reconcileMessage(message)
 		} catch (error) {
+			optimistic.delivery_status = 'Failed'
+			optimistic.failure = { error: errorMessage(error) }
+			optimistic.optimistic = false
 			toast.add({
 				severity: 'error',
 				summary: 'Message not queued',
 				detail: errorMessage(error),
 				life: 5000,
 			})
-		} finally {
-			sending.value = false
 		}
 	}
 
 	async function sendTemplate(templateName) {
 		if (!templateName) return
-		sending.value = true
+		richSending.value = true
 		try {
 			const message = await call('frappe_whatsapp_core.outbound.queue_template', {
 				conversation_name: selectedName.value,
@@ -327,7 +473,7 @@
 			})
 			appendMessage({ conversation: selectedName.value, message })
 		} finally {
-			sending.value = false
+			richSending.value = false
 		}
 	}
 
@@ -379,10 +525,8 @@
 	function appendMessage(event) {
 		if (!event?.conversation || !event.message) return
 		if (event.conversation === selectedName.value && detail.value) {
-			if (!detail.value.messages.some((message) => message.name === event.message.name)) {
-				detail.value.messages.push(event.message)
-				scrollToBottom()
-			}
+			reconcileMessage(event.message)
+			scrollToBottom()
 		}
 		const row = rows.value.find((item) => item.name === event.conversation)
 		if (row) {
@@ -427,6 +571,11 @@
 	watch(selectedName, () => {
 		replyTo.value = null
 		typingSentAt = 0
+		closeMessageSearch()
+	})
+	watch(messageSearch, () => {
+		clearTimeout(messageSearchTimer)
+		messageSearchTimer = setTimeout(runMessageSearch, 300)
 	})
 	onMounted(async () => {
 		await loadRows()
@@ -437,7 +586,10 @@
 			subscribe(site, 'whatsapp_core_message_status', updateMessageStatus),
 		)
 	})
-	onBeforeUnmount(() => unsubscribers.forEach((unsubscribe) => unsubscribe()))
+	onBeforeUnmount(() => {
+		clearTimeout(messageSearchTimer)
+		unsubscribers.forEach((unsubscribe) => unsubscribe())
+	})
 </script>
 
 <template>
@@ -469,7 +621,9 @@
 					v-else
 					:rows="filteredRows"
 					:selected="selectedName"
+					:restore-scroll="listScrollTop"
 					@select="selectConversation"
+					@scroll-position="rememberListScroll"
 				/>
 			</aside>
 
@@ -496,53 +650,99 @@
 							<strong>{{ detail.display_name }}</strong>
 							<span>{{ detail.identity.normalized_value }}</span>
 						</div>
-						<span>{{ detail.conversation.status }}</span>
-					</header>
-					<div ref="stream" class="message-stream" @scroll.passive="handleStreamScroll">
-						<div v-if="loadingOlder" class="older-loading">
-							Loading older messages…
+						<div class="chat-heading-actions">
+							<span>{{ detail.conversation.status }}</span>
+							<Button
+								text
+								rounded
+								aria-label="Search this conversation"
+								@click="messageSearchOpen = !messageSearchOpen"
+							>
+								<Search :size="16" />
+							</Button>
 						</div>
-						<button
-							v-else-if="messagePage.has_more"
-							class="older-loading older-button"
-							type="button"
-							@click="loadOlderMessages"
+					</header>
+					<div v-if="messageSearchOpen" class="message-search-bar">
+						<Search :size="15" />
+						<InputText
+							v-model="messageSearch"
+							autofocus
+							placeholder="Search messages in this conversation"
+						/>
+						<Button
+							text
+							rounded
+							aria-label="Close message search"
+							@click="closeMessageSearch"
 						>
-							Load older messages
-						</button>
-						<details v-for="topic in topics" :key="topic.name" class="topic-group">
-							<summary>
-								<span>
-									<small>{{ topic.category || 'AI topic' }}</small>
-									<strong>{{ topic.title }}</strong>
-									<p>
-										{{ topic.summary || 'Open to review grouped messages.' }}
-									</p>
-								</span>
-								<em>{{ topic.message_count }} messages</em>
-							</summary>
-							<div class="topic-messages">
-								<MessageBubble
-									v-for="message in topic.messageRows"
-									:key="message.name"
-									:message="message"
-									@reply="selectReply"
-									@bookmark="toggleBookmark"
-								/>
-							</div>
-						</details>
-						<div v-if="ungrouped.length" class="ungrouped">
-							<div v-if="topics.length" class="section-label">
-								Recent ungrouped messages
+							<X :size="15" />
+						</Button>
+					</div>
+					<div ref="stream" class="message-stream" @scroll.passive="handleStreamScroll">
+						<div v-if="messageSearch.trim()" class="search-results">
+							<div v-if="messageSearching" class="older-loading">Searching…</div>
+							<div v-else-if="!messageSearchRows.length" class="search-empty">
+								No matching messages
 							</div>
 							<MessageBubble
-								v-for="message in ungrouped"
+								v-for="message in messageSearchRows"
 								:key="message.name"
 								:message="message"
 								@reply="selectReply"
 								@bookmark="toggleBookmark"
+								@retry="retryMessage"
 							/>
 						</div>
+						<template v-else>
+							<div v-if="loadingOlder" class="older-loading">
+								Loading older messages…
+							</div>
+							<button
+								v-else-if="messagePage.has_more"
+								class="older-loading older-button"
+								type="button"
+								@click="loadOlderMessages"
+							>
+								Load older messages
+							</button>
+							<details v-for="topic in topics" :key="topic.name" class="topic-group">
+								<summary>
+									<span>
+										<small>{{ topic.category || 'AI topic' }}</small>
+										<strong>{{ topic.title }}</strong>
+										<p>
+											{{
+												topic.summary || 'Open to review grouped messages.'
+											}}
+										</p>
+									</span>
+									<em>{{ topic.message_count }} messages</em>
+								</summary>
+								<div class="topic-messages">
+									<MessageBubble
+										v-for="message in topic.messageRows"
+										:key="message.name"
+										:message="message"
+										@reply="selectReply"
+										@bookmark="toggleBookmark"
+										@retry="retryMessage"
+									/>
+								</div>
+							</details>
+							<div v-if="ungrouped.length" class="ungrouped">
+								<div v-if="topics.length" class="section-label">
+									Recent ungrouped messages
+								</div>
+								<MessageBubble
+									v-for="message in ungrouped"
+									:key="message.name"
+									:message="message"
+									@reply="selectReply"
+									@bookmark="toggleBookmark"
+									@retry="retryMessage"
+								/>
+							</div>
+						</template>
 					</div>
 					<footer v-if="textReady" class="composer">
 						<div v-if="replyTo" class="reply-preview">
@@ -577,12 +777,7 @@
 							@focus="showTyping"
 							@input="showTyping"
 						/>
-						<Button
-							:disabled="!draft.trim()"
-							:loading="sending"
-							rounded
-							@click="sendText"
-						>
+						<Button :disabled="!draft.trim()" rounded @click="sendText">
 							<Send :size="18" />
 						</Button>
 					</footer>
@@ -606,7 +801,12 @@
 				</template>
 			</main>
 
-			<ConversationContext v-if="detail" :data="detail" :can-manage="canManage" @status="updateStatus" />
+			<ConversationContext
+				v-if="detail"
+				:data="detail"
+				:can-manage="canManage"
+				@status="updateStatus"
+			/>
 			<aside v-else class="context-placeholder"></aside>
 		</section>
 
@@ -674,6 +874,22 @@
 						['image', 'video', 'audio', 'document', 'sticker'].includes(richForm.type)
 					"
 				>
+					<label class="media-upload">
+						Upload from this device
+						<input
+							type="file"
+							:accept="
+								richForm.type === 'sticker'
+									? 'image/webp'
+									: richForm.type === 'document'
+										? undefined
+										: `${richForm.type}/*`
+							"
+							:disabled="uploadingMedia"
+							@change="uploadMedia"
+						/>
+						<small v-if="uploadingMedia">Uploading securely to Meta…</small>
+					</label>
 					<label>Meta media ID or HTTPS URL<InputText v-model="richForm.media" /></label>
 					<label v-if="richForm.type !== 'sticker'"
 						>Caption<InputText v-model="richForm.caption"
@@ -705,7 +921,7 @@
 			</div>
 			<template #footer>
 				<Button label="Cancel" text @click="richDialog = false" />
-				<Button label="Queue message" :loading="sending" @click="sendRich" />
+				<Button label="Queue message" :loading="richSending" @click="sendRich" />
 			</template>
 		</Dialog>
 	</div>
@@ -810,6 +1026,27 @@
 	.chat-heading span {
 		display: block;
 	}
+	.chat-heading-actions,
+	.message-search-bar {
+		display: flex;
+		align-items: center;
+	}
+	.chat-heading-actions {
+		gap: 6px;
+	}
+	.message-search-bar {
+		gap: 8px;
+		padding: 7px 11px;
+		border-bottom: 1px solid #e2e9e5;
+		color: #718078;
+		background: #fff;
+	}
+	.message-search-bar :deep(input) {
+		min-width: 0;
+		flex: 1;
+		border: 0;
+		box-shadow: none;
+	}
 	.chat-heading strong {
 		font-size: 12px;
 	}
@@ -828,9 +1065,16 @@
 		background-size: 14px 14px;
 	}
 	.ungrouped,
-	.topic-messages {
+	.topic-messages,
+	.search-results {
 		display: grid;
 		gap: 8px;
+	}
+	.search-empty {
+		margin: auto;
+		padding: 20px;
+		color: #6d7d75;
+		font-size: 11px;
 	}
 	.section-label {
 		margin: 8px 0;
@@ -963,6 +1207,12 @@
 		color: #53635b;
 		font-size: 10px;
 		font-weight: 700;
+	}
+	.media-upload input[type='file'] {
+		padding: 8px;
+		border: 1px dashed #bdd0c6;
+		border-radius: 8px;
+		background: #f7faf8;
 	}
 	.dialog-form :deep(.p-select),
 	.dialog-form :deep(input) {

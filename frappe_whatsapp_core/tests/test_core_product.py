@@ -65,7 +65,13 @@ class TestCoreProduct(FrappeTestCase):
 			patch("frappe_whatsapp_core.outbound.frappe.enqueue"),
 			patch("frappe_whatsapp_core.outbound.frappe.publish_realtime"),
 		):
-			text = queue_text_internal(self.thread.name, "Hello", "Core Test")
+			client_message_id = "f9cc5adc-1b9c-4be1-aee7-b23e4c390ac2"
+			text = queue_text_internal(
+				self.thread.name,
+				"Hello",
+				"Core Test",
+				client_message_id=client_message_id,
+			)
 			started = start_conversation(
 				self.channel.name,
 				f"92{self.phone_suffix}",
@@ -78,6 +84,7 @@ class TestCoreProduct(FrappeTestCase):
 			)
 
 		self.assertEqual(text.delivery_status, "Queued")
+		self.assertEqual(text.provider_message_id, f"local:{client_message_id}")
 		self.assertEqual(opening.message_type, "template")
 		rows = conversations(limit=100)
 		self.assertIn(self.thread.name, {row["name"] for row in rows})

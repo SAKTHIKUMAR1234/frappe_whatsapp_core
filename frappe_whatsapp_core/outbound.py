@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mimetypes
 import uuid
+from base64 import b64encode
 from copy import deepcopy
 
 import frappe
 from frappe.utils import add_to_date, now_datetime
 
 from frappe_whatsapp_core.hub_client import (
+	call_management,
 	connection_status,
+	get_settings,
 	send_batch as send_hub_batch,
 	send_raw,
 )
@@ -158,12 +162,14 @@ def queue_text(
 	body: str,
 	source: str = "Core UI",
 	context_message_id: str | None = None,
+	client_message_id: str | None = None,
 ) -> dict:
 	return queue_text_internal(
 		conversation_name,
 		body,
 		source,
 		context_message_id=context_message_id,
+		client_message_id=client_message_id,
 	)
 
 
@@ -173,6 +179,7 @@ def queue_text_internal(
 	source: str = "Core",
 	*,
 	context_message_id: str | None = None,
+	client_message_id: str | None = None,
 ) -> dict:
 	body = str(body or "").strip()
 	if not body:
@@ -188,6 +195,7 @@ def queue_text_internal(
 			"source": source,
 			"context_message_id": _provider_context_id(context_message_id),
 		},
+		client_message_id=client_message_id,
 	)
 
 
@@ -199,6 +207,7 @@ def queue_rich(
 	payload: dict | str,
 	body: str = "",
 	source: str = "Core UI",
+	client_message_id: str | None = None,
 ) -> dict:
 	"""Queue a supported native Cloud API message without exposing its recipient.
 
@@ -218,7 +227,51 @@ def queue_rich(
 		message_type,
 		preview,
 		{"payload": normalized, "source": source},
+		client_message_id=client_message_id,
 	)
+
+
+@frappe.whitelist()
+@require_core_access()
+def upload_media(conversation_name: str, file_url: str) -> dict:
+	"""Upload a private Core file to the mapped Meta account and return its ID."""
+	conversation = frappe.get_doc("WhatsApp Core Conversation", conversation_name)
+	frappe.has_permission(
+		"WhatsApp Core Conversation",
+		"read",
+		doc=conversation,
+		throw=True,
+	)
+	file_name = frappe.db.get_value("File", {"file_url": file_url}, "name")
+	if not file_name:
+		frappe.throw("Uploaded file not found", frappe.DoesNotExistError)
+	file_doc = frappe.get_doc("File", file_name)
+	frappe.has_permission("File", "read", doc=file_doc, throw=True)
+	content = file_doc.get_content()
+	if isinstance(content, str):
+		content = content.encode()
+	if len(content) > 16 * 1024 * 1024:
+		frappe.throw("WhatsApp media uploads are limited to 16 MB", frappe.ValidationError)
+	settings = get_settings(outbound=True)
+	result = call_management(
+		"frappe_whatsapp_integration.frappe_whatsapp_hub.api.media.upload_media",
+		{
+			"account_name": settings.get_account_name(conversation.channel),
+			"file_content_b64": b64encode(content).decode(),
+			"content_type": (
+				mimetypes.guess_type(file_doc.file_name or "")[0]
+				or "application/octet-stream"
+			),
+			"filename": file_doc.file_name or "file",
+		},
+	)
+	if not result.get("success") or not result.get("media_id"):
+		frappe.throw(result.get("error") or "Meta media upload failed")
+	return {
+		"media_id": result["media_id"],
+		"filename": file_doc.file_name,
+		"content_type": mimetypes.guess_type(file_doc.file_name or "")[0],
+	}
 
 
 @frappe.whitelist()
@@ -465,16 +518,19 @@ def deliver_queued_message(message_name: str) -> None:
 			"WhatsApp Core Identity",
 			conversation.remote_identity,
 		)
-		recipient_phone = resolve_recipient_phone(
-			identity,
-			{
-				"source": "message",
-				"message": message.name,
-				"conversation": conversation.name,
-				"channel": message.channel,
-			},
+		context = {
+			"source": "message",
+			"message": message.name,
+			"conversation": conversation.name,
+			"channel": message.channel,
+		}
+		group_id = _group_id(identity)
+		recipient = group_id or resolve_recipient_phone(identity, context)
+		payload = _message_payload(
+			message,
+			recipient,
+			recipient_type="group" if group_id else "individual",
 		)
-		payload = _message_payload(message, recipient_phone)
 		result = send_raw(
 			message.channel,
 			payload,
@@ -518,6 +574,7 @@ def _queue_message(
 	content: dict,
 	*,
 	enqueue_delivery: bool = True,
+	client_message_id: str | None = None,
 ) -> dict:
 	if not outbound_ready():
 		frappe.throw(
@@ -528,6 +585,11 @@ def _queue_message(
 		"WhatsApp Core Conversation",
 		conversation_name,
 	)
+	identity = frappe.get_cached_doc(
+		"WhatsApp Core Identity",
+		conversation.remote_identity,
+	)
+	group_id = _group_id(identity)
 	frappe.has_permission(
 		"WhatsApp Core Conversation",
 		"read",
@@ -535,11 +597,19 @@ def _queue_message(
 		throw=True,
 	)
 	if (
-		message_type != "template"
+		not group_id
+		and message_type != "template"
 		and not _within_service_window(conversation.name)
 	):
 		frappe.throw(
 			"An approved template is required outside the 24-hour customer service window",
+			frappe.ValidationError,
+		)
+	if group_id and message_type not in {
+		"text", "image", "video", "audio", "document", "template"
+	}:
+		frappe.throw(
+			f"{message_type.title()} messages are not supported by Meta Groups",
 			frappe.ValidationError,
 		)
 	_run_preflight_hooks(
@@ -547,7 +617,7 @@ def _queue_message(
 		message_type=message_type,
 		content=content,
 	)
-	local_id = f"local:{uuid.uuid4()}"
+	local_id = f"local:{_client_uuid(client_message_id)}"
 	message_key = hashlib.sha256(
 		f"{conversation.channel}:{local_id}".encode()
 	).hexdigest()
@@ -579,6 +649,20 @@ def _queue_message(
 		after_commit=True,
 	)
 	return message.as_dict()
+
+
+def _client_uuid(client_message_id: str | None = None) -> uuid.UUID:
+	"""Return a validated client UUID or create one for non-UI callers.
+
+	Accepting the UI-generated UUID lets the browser render immediately and
+	reconcile the optimistic row with both the API response and realtime event.
+	"""
+	if not client_message_id:
+		return uuid.uuid4()
+	try:
+		return uuid.UUID(str(client_message_id))
+	except (TypeError, ValueError, AttributeError):
+		frappe.throw("Invalid client message ID", frappe.ValidationError)
 
 
 def _enqueue_message_delivery(message_name: str) -> None:
@@ -627,11 +711,16 @@ def _approved_template(template: str):
 	return doc
 
 
-def _message_payload(message, recipient: str) -> dict:
+def _message_payload(
+	message,
+	recipient: str,
+	*,
+	recipient_type: str = "individual",
+) -> dict:
 	content = _json_dict(message.content)
 	payload = {
 		"messaging_product": "whatsapp",
-		"recipient_type": "individual",
+		"recipient_type": recipient_type,
 		"to": recipient,
 		"type": message.message_type,
 	}
@@ -672,6 +761,15 @@ def _message_payload(message, recipient: str) -> dict:
 	else:
 		frappe.throw(f"Unsupported outbound message type: {message.message_type}")
 	return payload
+
+
+def _group_id(identity) -> str:
+	attributes = _json_dict(identity.attributes)
+	group_id = str(attributes.get("group_id") or "").strip()
+	if group_id:
+		return group_id
+	normalized = str(identity.normalized_value or "")
+	return normalized.removeprefix("group:").strip() if normalized.startswith("group:") else ""
 
 
 _RICH_MESSAGE_TYPES = {

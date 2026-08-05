@@ -173,7 +173,7 @@
 					message_type: 'text',
 					content: { body: messageBody.value },
 				}),
-			'Message sent.',
+			'Message queued in the shared inbox.',
 		)
 		messageBody.value = ''
 	}

@@ -17,14 +17,28 @@ class TestGroupsAndCalling(FrappeTestCase):
 	@patch("frappe_whatsapp_core.groups._accounts")
 	@patch("frappe_whatsapp_core.groups._account", return_value="Hub Account")
 	@patch("frappe_whatsapp_core.groups._call")
-	def test_group_workspace_and_send_use_hub(self, call, account, accounts):
-		accounts.return_value = [{"account_name": "Hub Account", "display_name": "Primary"}]
-		call.side_effect = [{"data": [{"id": "GROUP-1"}]}, {"messages": [{"id": "wamid.1"}]}]
+	def test_group_workspace_and_send_use_durable_core_queue(self, call, account, accounts):
+		accounts.return_value = [{
+			"account_name": "Hub Account", "display_name": "Primary", "channel": "CHANNEL-1",
+		}]
+		call.return_value = {"data": [{"id": "GROUP-1"}]}
 		workspace = group_workspace()
-		sent = send_group_message("Hub Account", "GROUP-1", "text", {"body": "Hello"})
+		with (
+			patch("frappe_whatsapp_core.groups.get_or_create_group_identity") as identity,
+			patch("frappe_whatsapp_core.groups.get_or_create_conversation") as conversation,
+			patch("frappe_whatsapp_core.groups.frappe.get_cached_doc"),
+			patch("frappe_whatsapp_core.groups.queue_text_internal") as queue_text,
+		):
+			identity.return_value = frappe._dict(name="GROUP-IDENTITY")
+			conversation.return_value = frappe._dict(name="GROUP-CONVERSATION")
+			queue_text.return_value = frappe._dict(name="MSG-1", delivery_status="Queued")
+			sent = send_group_message("Hub Account", "GROUP-1", "text", {"body": "Hello"})
 		self.assertEqual(workspace["data"][0]["id"], "GROUP-1")
-		self.assertEqual(sent["messages"][0]["id"], "wamid.1")
-		self.assertEqual(call.call_args_list[1].args[0:2], ("groups", "send_group_message"))
+		self.assertEqual(sent["conversation"], "GROUP-CONVERSATION")
+		self.assertEqual(sent["message"].delivery_status, "Queued")
+		queue_text.assert_called_once_with(
+			"GROUP-CONVERSATION", "Hello", source="Core Group UI",
+		)
 
 	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
 	@patch("frappe_whatsapp_core.calling._call", return_value={"data": [{"permission": "granted"}]})
