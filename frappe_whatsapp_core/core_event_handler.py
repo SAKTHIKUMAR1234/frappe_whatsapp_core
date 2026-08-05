@@ -35,6 +35,15 @@ def handle_core_event(payload, event) -> dict:
 		limit_page_length=500,
 	)
 	results = []
+	calls = frappe.get_all(
+		"WhatsApp Core Call",
+		filters={"relay_event": event.name},
+		fields=["name", "call_id", "channel", "direction", "status", "remote_number", "started_at", "ended_at", "session", "last_event"],
+		order_by="modified asc",
+		limit_page_length=100,
+	)
+	for call in calls:
+		frappe.publish_realtime("whatsapp_core_call", call, after_commit=True)
 	for message in messages:
 		frappe.publish_realtime(
 			"whatsapp_core_message",
@@ -62,6 +71,7 @@ def handle_core_event(payload, event) -> dict:
 		"status": "success",
 		"kind": "core",
 		"messages": len(messages),
+		"calls": len(calls),
 		"results": results,
 	}
 

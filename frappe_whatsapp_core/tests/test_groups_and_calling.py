@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 
 import frappe
@@ -37,7 +38,15 @@ class TestGroupsAndCalling(FrappeTestCase):
 		self.assertEqual(one.name, two.name)
 		self.assertEqual(one.normalized_value, "group:GROUP-1")
 		channel = get_or_create_channel("CALL-PHONE", "CALL-WABA")
-		created = materialize_call(channel, {
+		event = frappe.get_doc({
+			"doctype": "WhatsApp Core Event",
+			"event_id": "CALL-EVENT-1",
+			"status": "Pending",
+			"event_type": "call:connect",
+			"direction": "Inbound",
+			"payload": json.dumps({"calls": [{"id": "CALL-1"}]}),
+		}).insert(ignore_permissions=True)
+		created = materialize_call(event, channel, {
 			"id": "CALL-1", "event": "connect", "from": "919876543210",
 			"timestamp": "1785900000", "session": {"sdp_type": "offer", "sdp": "v=0"},
 		})

@@ -27,7 +27,7 @@ def materialize_event(event, payload):
 			for status in value.get("statuses") or []:
 				results.append(materialize_status(channel, status))
 			for call in value.get("calls") or []:
-				results.append(materialize_call(channel, call))
+				results.append(materialize_call(event, channel, call))
 	return results
 
 
@@ -137,7 +137,7 @@ def get_or_create_group_identity(group_id):
 	return doc
 
 
-def materialize_call(channel, provider_call):
+def materialize_call(event, channel, provider_call):
 	call_id = str(provider_call.get("id") or provider_call.get("call_id") or "").strip()
 	if not call_id:
 		return {"kind": "call", "status": "ignored", "reason": "missing_call_id"}
@@ -146,7 +146,8 @@ def materialize_call(channel, provider_call):
 	if direction not in {"Inbound", "Outbound"}:
 		direction = "Inbound"
 	values = {
-		"doctype": "WhatsApp Core Call", "call_id": call_id, "channel": channel.name,
+		"doctype": "WhatsApp Core Call", "call_id": call_id, "relay_event": event.name,
+		"channel": channel.name,
 		"direction": direction, "status": status,
 		"remote_number": provider_call.get("from") or provider_call.get("to") or provider_call.get("recipient") or "",
 		"callback_data": provider_call.get("biz_opaque_callback_data") or "",

@@ -31,16 +31,26 @@ def update_call_settings(account_name, calling):
 @frappe.whitelist()
 @require_core_access()
 def get_call_permission(account_name, user_wa_id=None, recipient=None):
-	return _call("calling", "get_call_permission", locals())
+	return _call("calling", "get_call_permission", {
+		"account_name": _resolve_account_name(account_name), "user_wa_id": user_wa_id, "recipient": recipient,
+	})
 
 
 @frappe.whitelist()
 @require_core_access()
 def request_call_permission(account_name, body_text, to_number=None, recipient=None):
-	return _call("calling", "request_call_permission", locals())
+	return _call("calling", "request_call_permission", {
+		"account_name": _resolve_account_name(account_name), "body_text": body_text,
+		"to_number": to_number, "recipient": recipient,
+	})
 
 
 @frappe.whitelist()
 @require_core_access()
 def call_action(account_name, action, call_id=None, to_number=None, recipient=None, sdp_type=None, sdp=None, biz_opaque_callback_data=None):
-	return _call("calling", "call_action", locals())
+	return _call("calling", "call_action", {
+		"account_name": _resolve_account_name(account_name), "action": action,
+		"call_id": call_id, "to_number": to_number, "recipient": recipient,
+		"sdp_type": sdp_type, "sdp": sdp,
+		"biz_opaque_callback_data": biz_opaque_callback_data,
+	})
