@@ -18,10 +18,11 @@ WhatsApp Core Event (one bulk DB insert + dedupe)
    └── Future business adapter
 ```
 
-Outbound commands use a separate JetStream work queue and are sent to Meta
-one-by-one. A second durable callback queue returns the provider message ID and
-final send result to Core before later delivery/read webhooks arrive. Inbound
-logging is micro-batched; WhatsApp delivery is never bulk-sent. Core owns
+Outbound campaigns submit up to 40 independent commands to the relay in one
+HTTP request. The relay persists every command as its own JetStream work item,
+and workers send them to Meta independently. A second durable callback queue
+returns each provider message ID and final send result to Core before later
+delivery/read webhooks arrive. Inbound logging is micro-batched. Core owns
 identity, party binding, shared inbox, optimistic outbound, conversation,
 message, case, campaign, flow, AI queue and MCP contracts. A company app is
 optional. When installed, it adds business hierarchy, ERP links, policies,

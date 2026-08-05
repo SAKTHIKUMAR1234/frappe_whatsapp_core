@@ -9,7 +9,11 @@ import uuid
 import frappe
 from frappe.utils import add_to_date, now_datetime
 
-from frappe_whatsapp_core.hub_client import connection_status, send_raw
+from frappe_whatsapp_core.hub_client import (
+	connection_status,
+	send_batch as send_hub_batch,
+	send_raw,
+)
 from frappe_whatsapp_core.materializer import (
 	get_or_create_conversation,
 	get_or_create_identity,
@@ -144,6 +148,8 @@ def queue_template_internal(
 	language_code: str = "",
 	components: list | str | None = None,
 	source: str = "Core",
+	*,
+	enqueue_delivery: bool = True,
 ) -> dict:
 	template_doc = _approved_template(template)
 	if components is None:
@@ -168,6 +174,7 @@ def queue_template_internal(
 			"components": components,
 			"source": source,
 		},
+		enqueue_delivery=enqueue_delivery,
 	)
 
 
@@ -218,6 +225,100 @@ def queue_campaign_recipient(campaign, recipient) -> dict:
 		"message": message.name,
 		"conversation": conversation.name,
 	}
+
+
+def queue_campaign_batch(campaign, recipients) -> dict:
+	"""Create optimistic messages, then submit one batch of up to 40 to the Hub."""
+	if not recipients:
+		return {}
+	if len(recipients) > 40:
+		frappe.throw(
+			"A WhatsApp campaign transport batch cannot exceed 40 recipients",
+			frappe.ValidationError,
+		)
+	channel = frappe.get_cached_doc("WhatsApp Core Channel", campaign.channel)
+	template = frappe.get_cached_doc("WhatsApp Core Template", campaign.template)
+	results = {}
+	submissions = []
+	for recipient in recipients:
+		try:
+			identity = frappe.get_cached_doc(
+				"WhatsApp Core Identity",
+				recipient.identity,
+			)
+			conversation = get_or_create_conversation(channel, identity)
+			personalization = _json_dict(recipient.personalization)
+			message = queue_template_internal(
+				conversation.name,
+				template.name,
+				template.language_code,
+				personalization.get("components") or [],
+				source=f"Campaign:{campaign.name}",
+				enqueue_delivery=False,
+			)
+			submissions.append({
+				"recipient": recipient.name,
+				"message": message.name,
+				"channel": message.channel,
+				"payload": _message_payload(
+					message,
+					identity.normalized_value,
+				),
+				"idempotency_key": message.idempotency_key,
+			})
+		except Exception as exception:
+			results[recipient.name] = {
+				"success": False,
+				"error": str(exception),
+			}
+
+	if not submissions:
+		return results
+
+	hub_result = send_hub_batch([
+		{
+			"channel": item["channel"],
+			"payload": item["payload"],
+			"idempotency_key": item["idempotency_key"],
+		}
+		for item in submissions
+	])
+	items_by_key = {
+		item.get("idempotency_key"): item
+		for item in hub_result.get("items") or []
+		if isinstance(item, dict) and item.get("idempotency_key")
+	}
+	for submission in submissions:
+		message = frappe.get_doc(
+			"WhatsApp Core Message",
+			submission["message"],
+		)
+		item = items_by_key.get(submission["idempotency_key"]) or {}
+		relay_result = item.get("result") or {}
+		if (
+			hub_result.get("accepted")
+			and item.get("status") == "completed"
+			and relay_result.get("success")
+		):
+			_mark_sent(message, relay_result.get("meta_message_id"))
+		else:
+			_record_retryable_submission(
+				message,
+				{
+					"error": (
+						relay_result.get("error")
+						or hub_result.get("error")
+						or "Batch submission was not confirmed"
+					),
+				},
+			)
+			_enqueue_message_delivery(message.name)
+		results[submission["recipient"]] = {
+			"success": True,
+			"message": message.name,
+			"conversation": message.conversation,
+		}
+	return results
 
 
 def deliver_queued_message(message_name: str) -> None:
@@ -276,6 +377,8 @@ def _queue_message(
 	message_type: str,
 	body: str,
 	content: dict,
+	*,
+	enqueue_delivery: bool = True,
 ) -> dict:
 	if not outbound_ready():
 		frappe.throw(
@@ -329,18 +432,23 @@ def _queue_message(
 	}).insert(ignore_permissions=True)
 	conversation.last_message_at = message.provider_timestamp
 	conversation.save(ignore_permissions=True)
-	frappe.enqueue(
-		"frappe_whatsapp_core.outbound.deliver_queued_message",
-		queue="short",
-		enqueue_after_commit=True,
-		message_name=message.name,
-	)
+	if enqueue_delivery:
+		_enqueue_message_delivery(message.name)
 	frappe.publish_realtime(
 		"whatsapp_core_message",
 		{"conversation": conversation.name, "message": message.as_dict()},
 		after_commit=True,
 	)
 	return message.as_dict()
+
+
+def _enqueue_message_delivery(message_name: str) -> None:
+	frappe.enqueue(
+		"frappe_whatsapp_core.outbound.deliver_queued_message",
+		queue="short",
+		enqueue_after_commit=True,
+		message_name=message_name,
+	)
 
 
 def _run_preflight_hooks(**context) -> None:

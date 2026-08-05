@@ -504,7 +504,11 @@ def _campaign_batch_sender():
 			"At most one business campaign batch sender may be configured",
 			frappe.ValidationError,
 		)
-	return frappe.get_attr(paths[0]) if paths else None
+	if paths:
+		return frappe.get_attr(paths[0])
+	from frappe_whatsapp_core.outbound import queue_campaign_batch
+
+	return queue_campaign_batch
 
 
 def _queue_recipient_batch(campaign, recipients, sender) -> None:

@@ -71,6 +71,75 @@ def send_raw(
 	}
 
 
+def send_batch(messages: list[dict]) -> dict:
+	"""Submit at most 40 independent sends to the Hub in one request."""
+	if not isinstance(messages, list) or not 1 <= len(messages) <= 40:
+		frappe.throw(
+			"WhatsApp Hub batches require between 1 and 40 messages",
+			frappe.ValidationError,
+		)
+	settings = get_settings(outbound=True)
+	normalized = []
+	for message in messages:
+		channel = str(message.get("channel") or "").strip()
+		payload = message.get("payload")
+		idempotency_key = str(message.get("idempotency_key") or "").strip()
+		if not channel or not isinstance(payload, dict) or not idempotency_key:
+			frappe.throw(
+				"Every Hub batch item requires channel, payload, and idempotency_key",
+				frappe.ValidationError,
+			)
+		normalized.append({
+			"account_name": settings.get_account_name(channel),
+			"payload": payload,
+			"idempotency_key": idempotency_key,
+		})
+
+	url = (
+		f"{settings.hub_url}/api/method/"
+		"frappe_whatsapp_integration.frappe_whatsapp_hub.api.send.send_batch"
+	)
+	try:
+		response = _session.post(
+			url,
+			headers=settings.get_hub_auth_headers(),
+			json={"messages": normalized},
+			timeout=_request_timeout(settings),
+		)
+	except requests.RequestException as exception:
+		return {
+			"accepted": False,
+			"retryable": True,
+			"error": str(exception),
+		}
+
+	try:
+		body = response.json()
+	except ValueError:
+		body = {"raw": response.text[:2000]}
+	result = body.get("message", body) if isinstance(body, dict) else {}
+	if not response.ok:
+		return {
+			"accepted": False,
+			"retryable": response.status_code >= 500,
+			"status_code": response.status_code,
+			"error": _error_message(result),
+		}
+	if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+		return {
+			"accepted": False,
+			"retryable": True,
+			"error": "WhatsApp Hub returned an invalid batch response",
+		}
+	return {
+		"accepted": True,
+		"success": bool(result.get("success")),
+		"queued": int(result.get("queued") or 0),
+		"duplicates": int(result.get("duplicates") or 0),
+		"items": result["items"],
+	}
+
+
 def get_settings(*, outbound: bool = False):
 	settings = frappe.get_single("WhatsApp Core Settings")
 	if not settings.enabled:
