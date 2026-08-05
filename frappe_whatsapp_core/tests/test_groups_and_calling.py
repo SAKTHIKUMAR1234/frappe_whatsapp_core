@@ -7,6 +7,7 @@ from frappe.tests.utils import FrappeTestCase
 from frappe_whatsapp_core.calling import get_call_permission
 from frappe_whatsapp_core.groups import group_workspace, send_group_message
 from frappe_whatsapp_core.materializer import get_or_create_channel, get_or_create_group_identity, materialize_call
+from frappe_whatsapp_core.mcp_tools import call_tool
 
 
 class TestGroupsAndCalling(FrappeTestCase):
@@ -52,3 +53,31 @@ class TestGroupsAndCalling(FrappeTestCase):
 		})
 		self.assertEqual(created["status"], "created")
 		self.assertEqual(frappe.db.get_value("WhatsApp Core Call", "CALL-1", "status"), "connect")
+
+	@patch("frappe_whatsapp_core.mcp_tools.whatsapp_delete_group")
+	def test_mcp_destructive_group_action_requires_confirmation(self, delete_group):
+		with self.assertRaises(frappe.ValidationError):
+			call_tool("whatsapp.delete_group", {
+				"account_name": "Hub Account",
+				"group_id": "GROUP-1",
+				"confirmation": "NO",
+			})
+		call_tool("whatsapp.delete_group", {
+			"account_name": "Hub Account",
+			"group_id": "GROUP-1",
+			"confirmation": "DELETE",
+		})
+		delete_group.assert_called_once_with("Hub Account", "GROUP-1")
+
+	@patch("frappe_whatsapp_core.outbound.queue_rich")
+	def test_mcp_rich_reply_uses_core_queue(self, queue_rich):
+		queue_rich.return_value = {"name": "MSG-1", "delivery_status": "Queued"}
+		result = call_tool("whatsapp.send_rich_message", {
+			"conversation": "CONV-1",
+			"message_type": "sticker",
+			"payload": {"id": "MEDIA-1"},
+		})
+		self.assertEqual(result["delivery_status"], "Queued")
+		queue_rich.assert_called_once_with(
+			"CONV-1", "sticker", {"id": "MEDIA-1"}, "", source="External AI",
+		)

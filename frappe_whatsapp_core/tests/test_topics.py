@@ -11,7 +11,7 @@ from frappe_whatsapp_core.materializer import (
 	get_or_create_identity,
 )
 from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS, call_tool
-from frappe_whatsapp_core.mcp_transport import _dispatch
+from frappe_whatsapp_core.mcp_transport import _dispatch, _safe_audit_value
 from frappe_whatsapp_core.topics import (
 	list_topics,
 	unclassified_messages,
@@ -164,3 +164,16 @@ class TestConversationTopics(FrappeTestCase):
 				{"tool_name": "whatsapp.list_unclassified_messages"},
 			)
 		)
+
+	def test_mcp_audit_redacts_credentials_and_large_transport_payloads(self):
+		value = _safe_audit_value({
+			"access_token": "secret-token",
+			"nested": {"api_secret": "secret", "business_public_key": "public"},
+			"sdp": "v=0\nprivate-network-details",
+			"file_content_b64": "AAAA",
+		})
+		self.assertEqual(value["access_token"], "[redacted]")
+		self.assertEqual(value["nested"]["api_secret"], "[redacted]")
+		self.assertEqual(value["nested"]["business_public_key"], "public")
+		self.assertTrue(value["sdp"].startswith("[redacted "))
+		self.assertTrue(value["file_content_b64"].startswith("[redacted "))

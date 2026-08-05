@@ -9,19 +9,37 @@ import frappe
 from frappe_whatsapp_core.cases import create_case
 from frappe_whatsapp_core.calling import (
 	call_action as whatsapp_call_action,
+	calling_workspace as whatsapp_calling_workspace,
 	get_call_permission as whatsapp_get_call_permission,
 	request_call_permission as whatsapp_request_call_permission,
+	update_call_settings as whatsapp_update_call_settings,
 )
 from frappe_whatsapp_core.groups import (
+	change_join_requests as whatsapp_change_join_requests,
+	create_group as whatsapp_create_group,
+	delete_group as whatsapp_delete_group,
 	get_group as whatsapp_get_group,
+	get_invite_link as whatsapp_get_invite_link,
 	group_workspace as whatsapp_group_workspace,
+	list_join_requests as whatsapp_list_join_requests,
+	pin_group_message as whatsapp_pin_group_message,
+	remove_participants as whatsapp_remove_participants,
+	reset_invite_link as whatsapp_reset_invite_link,
 	send_group_message as whatsapp_send_group_message,
+	update_group as whatsapp_update_group,
+	update_group_picture as whatsapp_update_group_picture,
 )
 from frappe_whatsapp_core.meta_flows import (
 	create_flow as create_meta_flow,
+	delete_flow as delete_meta_flow,
+	deprecate_flow as deprecate_meta_flow,
 	flow_workspace as meta_flow_workspace,
+	get_business_public_key as get_meta_flow_public_key,
 	get_flow as get_meta_flow,
+	migrate_flows as migrate_meta_flows,
 	publish_flow as publish_meta_flow,
+	set_business_public_key as set_meta_flow_public_key,
+	update_flow as update_meta_flow,
 	upload_flow_json as upload_meta_flow_json,
 )
 from frappe_whatsapp_core.party_bindings import upsert_party_binding
@@ -257,6 +275,50 @@ TOOL_DEFINITIONS = [
 		},
 	},
 	{
+		"name": "whatsapp.send_rich_message",
+		"description": "Queue a native media, sticker, reaction, location, contacts, or interactive reply.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["conversation", "message_type", "payload"],
+			"properties": {
+				"conversation": {"type": "string"},
+				"message_type": {
+					"type": "string",
+					"enum": ["audio", "contacts", "document", "image", "interactive", "location", "reaction", "sticker", "video"],
+				},
+				"payload": {"type": "object"},
+				"body": {"type": "string"},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.mark_conversation_read",
+		"description": "Advance the operator read cursor and queue Meta's read receipt for the latest inbound message.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["conversation"],
+			"properties": {"conversation": {"type": "string"}, "message": {"type": "string"}},
+		},
+	},
+	{
+		"name": "whatsapp.show_typing",
+		"description": "Send Meta's typing indicator for the latest inbound message in a conversation.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["conversation"],
+			"properties": {"conversation": {"type": "string"}},
+		},
+	},
+	{
+		"name": "whatsapp.toggle_message_bookmark",
+		"description": "Bookmark or unbookmark a message for the authenticated operator.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["message"],
+			"properties": {"message": {"type": "string"}},
+		},
+	},
+	{
 		"name": "whatsapp.assign_conversation",
 		"description": "Assign a conversation to a team or user and optionally update status.",
 		"inputSchema": {
@@ -324,6 +386,34 @@ TOOL_DEFINITIONS = [
 		},
 	},
 	{
+		"name": "whatsapp.prepare_campaign",
+		"description": "Replace a draft campaign audience with exact Core identity references.",
+		"inputSchema": {
+			"type": "object", "required": ["campaign_name", "recipients"],
+			"properties": {"campaign_name": {"type": "string"}, "recipients": {"type": "array", "items": {"type": "object"}, "maxItems": 10000}},
+		},
+	},
+	{
+		"name": "whatsapp.authorize_campaign",
+		"description": "Record the explicit human send authorization. Confirmation must match AUTHORIZE <campaign key>.",
+		"inputSchema": {"type": "object", "required": ["campaign_name", "confirmation"], "properties": {"campaign_name": {"type": "string"}, "confirmation": {"type": "string"}}},
+	},
+	{
+		"name": "whatsapp.revoke_campaign_authorization",
+		"description": "Revoke authorization before a campaign starts.",
+		"inputSchema": {"type": "object", "required": ["campaign_name"], "properties": {"campaign_name": {"type": "string"}}},
+	},
+	{
+		"name": "whatsapp.schedule_campaign",
+		"description": "Schedule an authorized campaign for a future datetime.",
+		"inputSchema": {"type": "object", "required": ["campaign_name", "scheduled_for"], "properties": {"campaign_name": {"type": "string"}, "scheduled_for": {"type": "string"}}},
+	},
+	{
+		"name": "whatsapp.cancel_campaign",
+		"description": "Cancel a campaign and skip unsent recipients. Requires confirmation=CANCEL.",
+		"inputSchema": {"type": "object", "required": ["campaign_name", "confirmation"], "properties": {"campaign_name": {"type": "string"}, "confirmation": {"type": "string", "enum": ["CANCEL"]}}},
+	},
+	{
 		"name": "whatsapp.list_flows",
 		"description": "List native WhatsApp Flows from Meta for a configured Hub account.",
 		"inputSchema": {"type": "object", "properties": {"account_name": {"type": "string"}}},
@@ -372,6 +462,53 @@ TOOL_DEFINITIONS = [
 		},
 	},
 	{
+		"name": "whatsapp.update_flow",
+		"description": "Update draft Meta Flow metadata.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "flow_id"],
+			"properties": {
+				"account_name": {"type": "string"}, "flow_id": {"type": "string"},
+				"flow_name": {"type": "string"}, "categories": {"type": "array", "items": {"type": "string"}},
+				"endpoint_uri": {"type": "string"},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.deprecate_flow",
+		"description": "Deprecate a published Meta Flow. Requires confirmation=DEPRECATE.",
+		"inputSchema": {
+			"type": "object", "required": ["account_name", "flow_id", "confirmation"],
+			"properties": {"account_name": {"type": "string"}, "flow_id": {"type": "string"}, "confirmation": {"type": "string", "enum": ["DEPRECATE"]}},
+		},
+	},
+	{
+		"name": "whatsapp.delete_flow",
+		"description": "Delete an unpublished Meta Flow. Requires confirmation=DELETE.",
+		"inputSchema": {
+			"type": "object", "required": ["account_name", "flow_id", "confirmation"],
+			"properties": {"account_name": {"type": "string"}, "flow_id": {"type": "string"}, "confirmation": {"type": "string", "enum": ["DELETE"]}},
+		},
+	},
+	{
+		"name": "whatsapp.migrate_flows",
+		"description": "Migrate selected native Flows from a source WABA into the mapped destination WABA.",
+		"inputSchema": {
+			"type": "object", "required": ["account_name", "source_waba_id"],
+			"properties": {"account_name": {"type": "string"}, "source_waba_id": {"type": "string"}, "source_flow_names": {"type": "array", "items": {"type": "string"}}},
+		},
+	},
+	{
+		"name": "whatsapp.get_flow_public_key",
+		"description": "Read the business public key used for encrypted WhatsApp Flow data exchange.",
+		"inputSchema": {"type": "object", "required": ["account_name"], "properties": {"account_name": {"type": "string"}}},
+	},
+	{
+		"name": "whatsapp.set_flow_public_key",
+		"description": "Set the business public key used for encrypted WhatsApp Flow data exchange.",
+		"inputSchema": {"type": "object", "required": ["account_name", "business_public_key"], "properties": {"account_name": {"type": "string"}, "business_public_key": {"type": "string"}}},
+	},
+	{
 		"name": "whatsapp.list_groups",
 		"description": "List Meta-hosted WhatsApp groups for a mapped Hub account.",
 		"inputSchema": {"type": "object", "properties": {"account_name": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 1024}}},
@@ -382,9 +519,69 @@ TOOL_DEFINITIONS = [
 		"inputSchema": {"type": "object", "required": ["account_name", "group_id"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}}},
 	},
 	{
+		"name": "whatsapp.create_group",
+		"description": "Create a Meta-hosted WhatsApp group.",
+		"inputSchema": {"type": "object", "required": ["account_name", "subject"], "properties": {"account_name": {"type": "string"}, "subject": {"type": "string"}, "description": {"type": "string"}, "join_approval_mode": {"type": "string", "enum": ["auto_approve", "approval_required"]}}},
+	},
+	{
+		"name": "whatsapp.update_group",
+		"description": "Update group subject or description.",
+		"inputSchema": {"type": "object", "required": ["account_name", "group_id"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "subject": {"type": "string"}, "description": {"type": "string"}}},
+	},
+	{
+		"name": "whatsapp.update_group_picture",
+		"description": "Upload a base64-encoded group picture.",
+		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "file_content_b64"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "file_content_b64": {"type": "string"}, "filename": {"type": "string"}}},
+	},
+	{
+		"name": "whatsapp.delete_group",
+		"description": "Delete a WhatsApp group. Requires confirmation=DELETE.",
+		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "confirmation"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "confirmation": {"type": "string", "enum": ["DELETE"]}}},
+	},
+	{
+		"name": "whatsapp.get_group_invite_link",
+		"description": "Read the current group invite link.",
+		"inputSchema": {"type": "object", "required": ["account_name", "group_id"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}}},
+	},
+	{
+		"name": "whatsapp.reset_group_invite_link",
+		"description": "Invalidate and replace a group invite link. Requires confirmation=RESET.",
+		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "confirmation"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "confirmation": {"type": "string", "enum": ["RESET"]}}},
+	},
+	{
+		"name": "whatsapp.list_group_join_requests",
+		"description": "List pending join requests for a group.",
+		"inputSchema": {"type": "object", "required": ["account_name", "group_id"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}}},
+	},
+	{
+		"name": "whatsapp.decide_group_join_requests",
+		"description": "Approve or reject selected group join requests.",
+		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "join_requests", "approve"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "join_requests": {"type": "array", "items": {"type": "object"}}, "approve": {"type": "boolean"}}},
+	},
+	{
+		"name": "whatsapp.remove_group_participants",
+		"description": "Remove participants from a group. Requires confirmation=REMOVE.",
+		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "participants", "confirmation"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "participants": {"type": "array", "items": {"type": "string"}}, "confirmation": {"type": "string", "enum": ["REMOVE"]}}},
+	},
+	{
 		"name": "whatsapp.send_group_message",
 		"description": "Send a supported text, media or template message to a WhatsApp group.",
 		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "message_type", "content"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "message_type": {"type": "string", "enum": ["text", "image", "video", "audio", "document", "template"]}, "content": {"type": "object"}, "idempotency_key": {"type": "string"}}},
+	},
+	{
+		"name": "whatsapp.pin_group_message",
+		"description": "Pin or unpin a group message.",
+		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "message_id", "operation"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "message_id": {"type": "string"}, "operation": {"type": "string", "enum": ["pin", "unpin"]}, "expiration_days": {"type": "integer", "minimum": 1}}},
+	},
+	{
+		"name": "whatsapp.get_call_settings",
+		"description": "Read Calling API settings and recent durable call logs.",
+		"inputSchema": {"type": "object", "properties": {"account_name": {"type": "string"}}},
+	},
+	{
+		"name": "whatsapp.update_call_settings",
+		"description": "Update Meta Calling API settings.",
+		"inputSchema": {"type": "object", "required": ["account_name", "calling"], "properties": {"account_name": {"type": "string"}, "calling": {"type": "object"}}},
 	},
 	{
 		"name": "whatsapp.get_call_permission",
@@ -475,6 +672,10 @@ def call_tool(name: str, arguments: dict | str | None = None) -> dict | list:
 			arguments["conversation"],
 			arguments["body"],
 		),
+		"whatsapp.send_rich_message": lambda: _send_rich_message(arguments),
+		"whatsapp.mark_conversation_read": lambda: _mark_conversation_read(arguments),
+		"whatsapp.show_typing": lambda: _show_typing(arguments["conversation"]),
+		"whatsapp.toggle_message_bookmark": lambda: _toggle_message_bookmark(arguments["message"]),
 		"whatsapp.assign_conversation": lambda: assign_conversation(**arguments),
 		"whatsapp.list_teams": list_teams,
 		"whatsapp.upsert_team": lambda: upsert_team(**arguments),
@@ -488,14 +689,57 @@ def call_tool(name: str, arguments: dict | str | None = None) -> dict | list:
 			"launch_campaign_send",
 			{"campaign_name": arguments["campaign_name"]},
 		),
+		"whatsapp.prepare_campaign": lambda: _frontend_call(
+			"prepare_campaign_audience",
+			arguments,
+		),
+		"whatsapp.authorize_campaign": lambda: _frontend_call(
+			"authorize_campaign_send",
+			arguments,
+		),
+		"whatsapp.revoke_campaign_authorization": lambda: _frontend_call(
+			"revoke_campaign_send",
+			arguments,
+		),
+		"whatsapp.schedule_campaign": lambda: _frontend_call(
+			"schedule_campaign_send",
+			arguments,
+		),
+		"whatsapp.cancel_campaign": lambda: _cancel_campaign(arguments),
 		"whatsapp.list_flows": lambda: meta_flow_workspace(arguments.get("account_name")),
 		"whatsapp.get_flow": lambda: get_meta_flow(arguments["account_name"], arguments["flow_id"]),
 		"whatsapp.create_flow": lambda: create_meta_flow(**arguments),
 		"whatsapp.upload_flow_json": lambda: upload_meta_flow_json(**arguments),
 		"whatsapp.publish_flow": lambda: _publish_meta_flow(arguments),
+		"whatsapp.update_flow": lambda: update_meta_flow(**arguments),
+		"whatsapp.deprecate_flow": lambda: _confirmed_meta_flow(arguments, "DEPRECATE", deprecate_meta_flow),
+		"whatsapp.delete_flow": lambda: _confirmed_meta_flow(arguments, "DELETE", delete_meta_flow),
+		"whatsapp.migrate_flows": lambda: migrate_meta_flows(**arguments),
+		"whatsapp.get_flow_public_key": lambda: get_meta_flow_public_key(**arguments),
+		"whatsapp.set_flow_public_key": lambda: set_meta_flow_public_key(**arguments),
 		"whatsapp.list_groups": lambda: whatsapp_group_workspace(**arguments),
 		"whatsapp.get_group": lambda: whatsapp_get_group(**arguments),
+		"whatsapp.create_group": lambda: whatsapp_create_group(**arguments),
+		"whatsapp.update_group": lambda: whatsapp_update_group(**arguments),
+		"whatsapp.update_group_picture": lambda: whatsapp_update_group_picture(**arguments),
+		"whatsapp.delete_group": lambda: _confirmed_group_action(arguments, "DELETE", whatsapp_delete_group),
+		"whatsapp.get_group_invite_link": lambda: whatsapp_get_invite_link(**arguments),
+		"whatsapp.reset_group_invite_link": lambda: _confirmed_group_action(arguments, "RESET", whatsapp_reset_invite_link),
+		"whatsapp.list_group_join_requests": lambda: whatsapp_list_join_requests(**arguments),
+		"whatsapp.decide_group_join_requests": lambda: whatsapp_change_join_requests(
+			arguments["account_name"], arguments["group_id"], arguments["join_requests"],
+			1 if arguments["approve"] else 0,
+		),
+		"whatsapp.remove_group_participants": lambda: _confirmed_group_action(
+			arguments, "REMOVE", whatsapp_remove_participants, "participants",
+		),
 		"whatsapp.send_group_message": lambda: whatsapp_send_group_message(**arguments),
+		"whatsapp.pin_group_message": lambda: whatsapp_pin_group_message(**arguments),
+		"whatsapp.get_call_settings": lambda: whatsapp_calling_workspace(
+			account_name=arguments.get("account_name"),
+			include_sip_credentials=0,
+		),
+		"whatsapp.update_call_settings": lambda: whatsapp_update_call_settings(**arguments),
 		"whatsapp.get_call_permission": lambda: whatsapp_get_call_permission(**arguments),
 		"whatsapp.request_call_permission": lambda: whatsapp_request_call_permission(**arguments),
 		"whatsapp.call_action": lambda: whatsapp_call_action(**arguments),
@@ -613,6 +857,77 @@ def _publish_meta_flow(arguments: dict):
 	if arguments.get("confirmation") != "PUBLISH":
 		frappe.throw("Publishing a Meta Flow requires confirmation=PUBLISH", frappe.ValidationError)
 	return publish_meta_flow(arguments["account_name"], arguments["flow_id"])
+
+
+def _cancel_campaign(arguments: dict):
+	if arguments.get("confirmation") != "CANCEL":
+		frappe.throw(
+			"Cancelling a campaign requires confirmation=CANCEL",
+			frappe.ValidationError,
+		)
+	return _frontend_call(
+		"cancel_campaign_send",
+		{"campaign_name": arguments["campaign_name"]},
+	)
+
+
+def _confirmed_meta_flow(arguments: dict, confirmation: str, handler):
+	if arguments.pop("confirmation", None) != confirmation:
+		frappe.throw(
+			f"This Meta Flow action requires confirmation={confirmation}",
+			frappe.ValidationError,
+		)
+	return handler(arguments["account_name"], arguments["flow_id"])
+
+
+def _confirmed_group_action(
+	arguments: dict,
+	confirmation: str,
+	handler,
+	extra_argument: str | None = None,
+):
+	if arguments.pop("confirmation", None) != confirmation:
+		frappe.throw(
+			f"This group action requires confirmation={confirmation}",
+			frappe.ValidationError,
+		)
+	values = [arguments["account_name"], arguments["group_id"]]
+	if extra_argument:
+		values.append(arguments[extra_argument])
+	return handler(*values)
+
+
+def _send_rich_message(arguments: dict) -> dict:
+	from frappe_whatsapp_core.outbound import queue_rich
+
+	return queue_rich(
+		arguments["conversation"],
+		arguments["message_type"],
+		arguments["payload"],
+		arguments.get("body", ""),
+		source="External AI",
+	)
+
+
+def _mark_conversation_read(arguments: dict) -> dict:
+	from frappe_whatsapp_core.conversation_reads import mark_conversation_read
+
+	return mark_conversation_read(
+		arguments["conversation"],
+		arguments.get("message"),
+	)
+
+
+def _show_typing(conversation: str) -> dict:
+	from frappe_whatsapp_core.conversation_reads import show_typing
+
+	return show_typing(conversation)
+
+
+def _toggle_message_bookmark(message: str) -> dict:
+	from frappe_whatsapp_core.inbox import toggle_message_bookmark
+
+	return toggle_message_bookmark(message)
 
 
 def _arguments(arguments) -> dict:

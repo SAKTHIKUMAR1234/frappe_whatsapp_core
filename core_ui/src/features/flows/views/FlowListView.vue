@@ -10,9 +10,16 @@
 	import Select from 'primevue/select'
 	import Skeleton from 'primevue/skeleton'
 	import Tag from 'primevue/tag'
+	import Textarea from 'primevue/textarea'
 	import { Cloud, GitBranch, Plus, Search, WandSparkles } from 'lucide-vue-next'
 	import { useToast } from 'primevue/usetoast'
-	import { createFlow, flowWorkspace } from '@/features/flows/services/flowService'
+	import {
+		createFlow,
+		flowWorkspace,
+		getBusinessPublicKey,
+		migrateFlows,
+		setBusinessPublicKey,
+	} from '@/features/flows/services/flowService'
 	import { errorMessage } from '@/services/frappe'
 	import { useSessionStore } from '@/stores/session'
 
@@ -22,10 +29,15 @@
 	const loading = ref(true)
 	const creating = ref(false)
 	const dialog = ref(false)
+	const operating = ref(false)
+	const migrateDialog = ref(false)
+	const keyDialog = ref(false)
 	const workspace = ref({ accounts: [], flows: [], selected_account: '' })
 	const selectedAccount = ref('')
 	const filter = ref('')
 	const form = reactive({ flow_name: '', categories: ['OTHER'], endpoint_uri: '' })
+	const migration = reactive({ source_waba_id: '', source_flow_names: '' })
+	const businessPublicKey = ref('')
 	const categories = [
 		'SIGN_UP',
 		'SIGN_IN',
@@ -94,6 +106,66 @@
 		}
 	}
 
+	async function openKeyDialog() {
+		operating.value = true
+		try {
+			const result = await getBusinessPublicKey(selectedAccount.value)
+			businessPublicKey.value =
+				result.data?.business_public_key || result.business_public_key || ''
+			keyDialog.value = true
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Flow key unavailable',
+				detail: errorMessage(error),
+				life: 5000,
+			})
+		} finally {
+			operating.value = false
+		}
+	}
+
+	async function saveBusinessPublicKey() {
+		operating.value = true
+		try {
+			await setBusinessPublicKey(selectedAccount.value, businessPublicKey.value.trim())
+			keyDialog.value = false
+			toast.add({ severity: 'success', summary: 'Flow encryption key saved', life: 3500 })
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Flow key not saved',
+				detail: errorMessage(error),
+				life: 5000,
+			})
+		} finally {
+			operating.value = false
+		}
+	}
+
+	async function migrateNativeFlows() {
+		operating.value = true
+		try {
+			const names = migration.source_flow_names
+				.split(/[\n,]+/)
+				.map((value) => value.trim())
+				.filter(Boolean)
+			await migrateFlows(selectedAccount.value, migration.source_waba_id.trim(), names)
+			migrateDialog.value = false
+			toast.add({ severity: 'success', summary: 'Flow migration requested', life: 3500 })
+			await load()
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Flows not migrated',
+				detail: errorMessage(error),
+				life: 5000,
+			})
+		} finally {
+			operating.value = false
+		}
+	}
+
 	function openFlow(flow) {
 		router.push({
 			name: 'flow-builder',
@@ -119,14 +191,26 @@
 				runtime.
 			</p>
 		</div>
-		<Button
-			v-if="canManage"
-			label="Create Meta Flow"
-			:disabled="!selectedAccount"
-			@click="dialog = true"
-		>
-			<template #icon><Plus :size="16" /></template>
-		</Button>
+		<div v-if="canManage" class="heading-actions">
+			<Button
+				label="Encryption key"
+				severity="secondary"
+				outlined
+				:loading="operating"
+				:disabled="!selectedAccount"
+				@click="openKeyDialog"
+			/>
+			<Button
+				label="Migrate Flows"
+				severity="secondary"
+				outlined
+				:disabled="!selectedAccount"
+				@click="migrateDialog = true"
+			/>
+			<Button label="Create Meta Flow" :disabled="!selectedAccount" @click="dialog = true">
+				<template #icon><Plus :size="16" /></template>
+			</Button>
+		</div>
 	</div>
 
 	<section class="surface-card flow-list">
@@ -222,11 +306,70 @@
 				@click="createNativeFlow"
 		/></template>
 	</Dialog>
+	<Dialog
+		v-model:visible="migrateDialog"
+		modal
+		header="Migrate Meta Flows"
+		:style="{ width: '470px', maxWidth: '94vw' }"
+	>
+		<p class="dialog-help">
+			Copy selected Flows from another WABA into the currently selected destination account.
+		</p>
+		<label>Source WABA ID</label><InputText v-model="migration.source_waba_id" fluid />
+		<label>Source Flow names <small>optional; comma or line separated</small></label
+		><Textarea v-model="migration.source_flow_names" rows="6" fluid />
+		<template #footer
+			><Button label="Cancel" text @click="migrateDialog = false" /><Button
+				label="Migrate"
+				:loading="operating"
+				:disabled="!migration.source_waba_id.trim()"
+				@click="migrateNativeFlows"
+		/></template>
+	</Dialog>
+	<Dialog
+		v-model:visible="keyDialog"
+		modal
+		header="Flow encryption public key"
+		:style="{ width: '620px', maxWidth: '94vw' }"
+	>
+		<p class="dialog-help">
+			Meta uses this public key for encrypted Flow endpoint data. The private key must remain
+			in your endpoint service.
+		</p>
+		<Textarea
+			v-model="businessPublicKey"
+			rows="12"
+			fluid
+			class="key-editor"
+			placeholder="-----BEGIN PUBLIC KEY-----"
+		/>
+		<template #footer
+			><Button label="Cancel" text @click="keyDialog = false" /><Button
+				label="Save key"
+				:loading="operating"
+				:disabled="!businessPublicKey.trim()"
+				@click="saveBusinessPublicKey"
+		/></template>
+	</Dialog>
 </template>
 
 <style scoped>
 	.flow-list {
 		overflow: hidden;
+	}
+	.heading-actions {
+		display: flex;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.dialog-help {
+		margin: 0 0 16px;
+		color: var(--wa-muted);
+		font-size: 12px;
+		line-height: 1.55;
+	}
+	.key-editor {
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	}
 	.list-toolbar {
 		display: grid;

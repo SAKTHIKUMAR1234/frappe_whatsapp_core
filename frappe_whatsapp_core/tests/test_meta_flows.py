@@ -5,7 +5,15 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from frappe_whatsapp_core.hub_client import call_management
-from frappe_whatsapp_core.meta_flows import create_flow, flow_workspace, get_flow, upload_flow_json
+from frappe_whatsapp_core.meta_flows import (
+	create_flow,
+	flow_workspace,
+	get_business_public_key,
+	get_flow,
+	migrate_flows,
+	set_business_public_key,
+	upload_flow_json,
+)
 
 
 class TestHubManagementClient(FrappeTestCase):
@@ -71,3 +79,21 @@ class TestMetaFlowProxy(FrappeTestCase):
 		result = get_flow("Hub Account", "FLOW-1")
 		self.assertEqual(result["flow_json"]["version"], "7.1")
 		self.assertEqual(call.call_args_list[1].args[1], "get_flow_json")
+
+	@patch("frappe_whatsapp_core.meta_flows._context", return_value={"waba_name": "Destination WABA"})
+	@patch("frappe_whatsapp_core.meta_flows._call")
+	def test_migration_targets_mapped_destination_waba(self, call, context):
+		call.return_value = {"data": [{"id": "FLOW-2"}]}
+		result = migrate_flows("Hub Account", "SOURCE-WABA", ["Support"])
+		self.assertEqual(result["data"][0]["id"], "FLOW-2")
+		self.assertEqual(call.call_args.args[0:2], ("meta_flows", "migrate_flows"))
+		self.assertEqual(call.call_args.args[2]["destination_waba_name"], "Destination WABA")
+
+	@patch("frappe_whatsapp_core.meta_flows._resolve_account_name", return_value="Hub Account")
+	@patch("frappe_whatsapp_core.meta_flows._call")
+	def test_flow_public_key_stays_on_mapped_account(self, call, resolve):
+		call.side_effect = [{"data": {"business_public_key": "KEY"}}, {"success": True}]
+		self.assertEqual(get_business_public_key("Hub Account")["data"]["business_public_key"], "KEY")
+		set_business_public_key("Hub Account", "NEW KEY")
+		self.assertEqual(call.call_args_list[0].args[0:2], ("meta_flows", "get_business_public_key"))
+		self.assertEqual(call.call_args_list[1].args[2]["business_public_key"], "NEW KEY")

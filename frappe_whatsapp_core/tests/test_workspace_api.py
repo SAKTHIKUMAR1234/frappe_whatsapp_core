@@ -136,14 +136,42 @@ class TestWorkspaceAPI(FrappeTestCase):
 				_outbound_handler("whatsapp_core_outbound_text_sender")
 
 	def test_mcp_manifest_covers_operator_and_management_surfaces(self):
-		names = {tool["name"] for tool in TOOL_DEFINITIONS}
+		all_names = [tool["name"] for tool in TOOL_DEFINITIONS]
+		names = set(all_names)
+		self.assertEqual(len(all_names), len(names))
 		self.assertTrue({
 			"whatsapp.list_conversations",
 			"whatsapp.list_messages",
 			"whatsapp.send_text",
+			"whatsapp.send_rich_message",
 			"whatsapp.send_template",
+			"whatsapp.mark_conversation_read",
+			"whatsapp.show_typing",
+			"whatsapp.toggle_message_bookmark",
 			"whatsapp.list_teams",
 			"whatsapp.upsert_team",
 			"whatsapp.list_campaigns",
+			"whatsapp.prepare_campaign",
+			"whatsapp.authorize_campaign",
+			"whatsapp.revoke_campaign_authorization",
+			"whatsapp.schedule_campaign",
+			"whatsapp.cancel_campaign",
 			"whatsapp.list_flows",
+			"whatsapp.update_flow",
+			"whatsapp.deprecate_flow",
+			"whatsapp.delete_flow",
+			"whatsapp.migrate_flows",
+			"whatsapp.get_flow_public_key",
+			"whatsapp.set_flow_public_key",
+			"whatsapp.create_group",
+			"whatsapp.update_group",
+			"whatsapp.update_group_picture",
+			"whatsapp.delete_group",
+			"whatsapp.list_group_join_requests",
+			"whatsapp.decide_group_join_requests",
+			"whatsapp.remove_group_participants",
+			"whatsapp.pin_group_message",
+			"whatsapp.get_call_settings",
+			"whatsapp.update_call_settings",
+			"whatsapp.call_action",
 		}.issubset(names))

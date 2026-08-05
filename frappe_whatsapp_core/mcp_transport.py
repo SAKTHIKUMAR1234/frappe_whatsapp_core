@@ -150,17 +150,42 @@ def _log_invocation(
 		"status": status,
 		"duration_ms": duration_ms,
 		"arguments": json.dumps(
-			arguments,
+			_safe_audit_value(arguments),
 			default=str,
 			ensure_ascii=False,
 		)[:65535],
 		"result": json.dumps(
-			result,
+			_safe_audit_value(result),
 			default=str,
 			ensure_ascii=False,
 		)[:100000] if result is not None else "",
 		"error": (error or "")[:100000],
 	}).insert(ignore_permissions=True)
+
+
+def _safe_audit_value(value, key: str = ""):
+	"""Keep MCP audit useful without persisting credentials or large binaries."""
+	normalized_key = str(key or "").lower()
+	if normalized_key in {
+		"access_token",
+		"api_secret",
+		"app_secret",
+		"authorization",
+		"password",
+		"private_key",
+		"sip_credentials",
+	} or normalized_key.endswith(("_password", "_secret", "_token")):
+		return "[redacted]"
+	if normalized_key in {"file_content_b64", "sdp"} and value:
+		return f"[redacted {len(str(value))} characters]"
+	if isinstance(value, dict):
+		return {
+			str(child_key): _safe_audit_value(child_value, str(child_key))
+			for child_key, child_value in value.items()
+		}
+	if isinstance(value, (list, tuple)):
+		return [_safe_audit_value(item, key) for item in value]
+	return value
 
 
 def _origin_allowed() -> bool:

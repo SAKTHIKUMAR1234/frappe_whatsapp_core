@@ -27,3 +27,19 @@ export const deprecateFlow = (accountName, flowId) =>
 
 export const deleteFlow = (accountName, flowId) =>
 	call(`${API}.delete_flow`, { account_name: accountName, flow_id: flowId })
+
+export const migrateFlows = (accountName, sourceWabaId, sourceFlowNames = []) =>
+	call(`${API}.migrate_flows`, {
+		account_name: accountName,
+		source_waba_id: sourceWabaId,
+		source_flow_names: sourceFlowNames,
+	})
+
+export const getBusinessPublicKey = (accountName) =>
+	call(`${API}.get_business_public_key`, { account_name: accountName })
+
+export const setBusinessPublicKey = (accountName, businessPublicKey) =>
+	call(`${API}.set_business_public_key`, {
+		account_name: accountName,
+		business_public_key: businessPublicKey,
+	})

@@ -11,7 +11,7 @@ from frappe_whatsapp_core.identity import (
 
 class TestIdentityResolution(FrappeTestCase):
 	def test_generic_source_resolves_and_deactivates_cleanly(self):
-		suffix = str(uuid.uuid4().int)[-10:]
+		suffix = f"7{str(uuid.uuid4().int)[-9:]}"
 		user = frappe.get_doc(
 			{
 				"doctype": "User",
@@ -59,7 +59,7 @@ class TestIdentityResolution(FrappeTestCase):
 		self.assertEqual(link.status, "Inactive")
 
 	def test_multiple_business_matches_are_marked_ambiguous(self):
-		suffix = str(uuid.uuid4().int)[-10:]
+		suffix = f"7{str(uuid.uuid4().int)[-9:]}"
 		mobile_no = f"+91{suffix}"
 		for index in range(2):
 			frappe.get_doc(

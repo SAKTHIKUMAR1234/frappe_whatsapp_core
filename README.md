@@ -2,12 +2,25 @@
 
 Reusable, configurable WhatsApp business workflow foundation
 
+Supports Frappe **15 and 16** and Python 3.10 or newer.
+
+### MCP and AI agents
+
+The authenticated Streamable HTTP endpoint at
+`/api/method/frappe_whatsapp_core.mcp_transport.handle` exposes audited tools
+for inbox search and infinite history, rich replies, read/typing state,
+bookmarks, teams, party binding, campaigns, native Meta Flows, Groups and
+Calling. Destructive Flow, group and campaign actions require explicit
+confirmation values, and every invocation is recorded in
+`WhatsApp Core MCP Invocation`.
+
 ### Native WhatsApp Flows
 
 Open `/whatsapp`, then use **Meta Flows** to create, upload, preview, publish,
 clone, migrate, deprecate and inspect Meta-hosted WhatsApp Flows. Core records
 native Flow replies in the conversation log and does not render its own copy of
-the customer Flow.
+the customer Flow. Flow migration and encryption public-key management are
+also performed directly against Meta through the configured Integration Hub.
 
 ### Groups and Calling
 

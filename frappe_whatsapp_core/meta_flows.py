@@ -147,3 +147,36 @@ def list_flow_assets(account_name: str, flow_id: str):
 		"waba_name": context["waba_name"], "flow_id": flow_id,
 	})
 	return result.get("data") or []
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def migrate_flows(
+	account_name: str,
+	source_waba_id: str,
+	source_flow_names=None,
+):
+	"""Copy selected native Flows into this site's mapped destination WABA."""
+	context = _context(account_name)
+	return _call("meta_flows", "migrate_flows", {
+		"destination_waba_name": context["waba_name"],
+		"source_waba_id": source_waba_id,
+		"source_flow_names": source_flow_names,
+	})
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def get_business_public_key(account_name: str):
+	return _call("meta_flows", "get_business_public_key", {
+		"account_name": _resolve_account_name(account_name),
+	})
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def set_business_public_key(account_name: str, business_public_key: str):
+	return _call("meta_flows", "set_business_public_key", {
+		"account_name": _resolve_account_name(account_name),
+		"business_public_key": business_public_key,
+	})
