@@ -7,7 +7,7 @@ company site. It is not another copy of the Hub.
 Meta callback
    │ fast durable enqueue + immediate ACK
    ▼
-NATS JetStream (file-backed middleman)
+NATS JetStream (file-backed middleman, owned and started by Integration)
    │ 40 events or 250-millisecond window
    ▼
 WhatsApp Core Event (one bulk DB insert + dedupe)
