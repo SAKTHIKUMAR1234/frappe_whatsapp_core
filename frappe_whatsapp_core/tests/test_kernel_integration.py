@@ -136,7 +136,7 @@ class TestKernelIntegration(FrappeTestCase):
 		suffix = frappe.generate_hash(length=10)
 		channel = get_or_create_channel(f"callback-phone-{suffix}")
 		identity = get_or_create_identity(
-			f"9198{frappe.utils.now_datetime().strftime('%H%M%S%f')}"
+			f"9198{frappe.utils.now_datetime().strftime('%H%M%S%f')[-10:]}"
 		)
 		conversation = get_or_create_conversation(channel, identity)
 		message_key = f"callback-message-{suffix}"

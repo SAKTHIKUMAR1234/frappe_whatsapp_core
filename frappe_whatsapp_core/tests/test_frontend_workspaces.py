@@ -29,7 +29,7 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		channel = get_or_create_channel(f"UI-{self.suffix}", "WABA-UI")
 		conversation = get_or_create_conversation(
 			channel,
-			get_or_create_identity(f"9300{self.suffix}"),
+			get_or_create_identity(f"93{self.suffix[-10:]}"),
 		)
 		message = frappe.get_doc({
 			"doctype": "WhatsApp Core Message",

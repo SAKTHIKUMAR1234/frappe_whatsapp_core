@@ -11,7 +11,7 @@ from frappe_whatsapp_core.party_bindings import (
 class TestPartyBindings(FrappeTestCase):
 	def test_upsert_is_idempotent_and_primary_is_workspace_scoped(self):
 		identity = get_or_create_identity(
-			f"9197{frappe.utils.now_datetime().strftime('%H%M%S%f')}"
+			f"9197{frappe.utils.now_datetime().strftime('%H%M%S%f')[-10:]}"
 		)
 		first = upsert_party_binding(
 			identity.name,

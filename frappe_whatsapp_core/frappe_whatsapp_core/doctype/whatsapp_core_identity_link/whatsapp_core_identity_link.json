@@ -1,0 +1,171 @@
+{
+  "doctype": "DocType",
+  "name": "WhatsApp Core Identity Link",
+  "module": "Frappe WhatsApp Core",
+  "autoname": "field:link_key",
+  "naming_rule": "By fieldname",
+  "engine": "InnoDB",
+  "field_order": [
+    "link_key",
+    "identity",
+    "identity_source",
+    "reference_section",
+    "reference_doctype",
+    "reference_name",
+    "display_name",
+    "entity_type",
+    "hierarchy_section",
+    "parent_reference_doctype",
+    "parent_reference_name",
+    "group_reference_doctype",
+    "group_reference_name",
+    "status",
+    "is_primary",
+    "match_quality",
+    "attributes"
+  ],
+  "fields": [
+    {
+      "fieldname": "link_key",
+      "fieldtype": "Data",
+      "label": "Link Key",
+      "reqd": 1,
+      "unique": 1,
+      "hidden": 1
+    },
+    {
+      "fieldname": "identity",
+      "fieldtype": "Link",
+      "label": "Identity",
+      "options": "WhatsApp Core Identity",
+      "reqd": 1,
+      "search_index": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "identity_source",
+      "fieldtype": "Link",
+      "label": "Identity Source",
+      "options": "WhatsApp Core Identity Source",
+      "reqd": 1,
+      "search_index": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "reference_section",
+      "fieldtype": "Section Break",
+      "label": "Business Reference"
+    },
+    {
+      "fieldname": "reference_doctype",
+      "fieldtype": "Link",
+      "label": "Reference DocType",
+      "options": "DocType",
+      "reqd": 1
+    },
+    {
+      "fieldname": "reference_name",
+      "fieldtype": "Dynamic Link",
+      "label": "Reference Name",
+      "options": "reference_doctype",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "display_name",
+      "fieldtype": "Data",
+      "label": "Display Name",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "entity_type",
+      "fieldtype": "Data",
+      "label": "Entity Type",
+      "search_index": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "hierarchy_section",
+      "fieldtype": "Section Break",
+      "label": "Hierarchy"
+    },
+    {
+      "fieldname": "parent_reference_doctype",
+      "fieldtype": "Link",
+      "label": "Parent Reference DocType",
+      "options": "DocType"
+    },
+    {
+      "fieldname": "parent_reference_name",
+      "fieldtype": "Dynamic Link",
+      "label": "Parent Reference Name",
+      "options": "parent_reference_doctype"
+    },
+    {
+      "fieldname": "group_reference_doctype",
+      "fieldtype": "Link",
+      "label": "Group Reference DocType",
+      "options": "DocType"
+    },
+    {
+      "fieldname": "group_reference_name",
+      "fieldtype": "Dynamic Link",
+      "label": "Group Reference Name",
+      "options": "group_reference_doctype"
+    },
+    {
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "label": "Status",
+      "options": "Active\nInactive",
+      "default": "Active",
+      "reqd": 1
+    },
+    {
+      "fieldname": "is_primary",
+      "fieldtype": "Check",
+      "label": "Primary"
+    },
+    {
+      "fieldname": "match_quality",
+      "fieldtype": "Select",
+      "label": "Match Quality",
+      "options": "Exact\nDerived\nManual",
+      "default": "Exact"
+    },
+    {
+      "fieldname": "attributes",
+      "fieldtype": "JSON",
+      "label": "Attributes"
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1,
+      "export": 1
+    },
+    {
+      "role": "WhatsApp Core Admin",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1,
+      "export": 1
+    },
+    {
+      "role": "WhatsApp Core Manager",
+      "read": 1,
+      "write": 1
+    },
+    {
+      "role": "WhatsApp Core Agent",
+      "read": 1
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC"
+}

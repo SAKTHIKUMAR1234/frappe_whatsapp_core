@@ -15,6 +15,10 @@ whatsapp_core_event_handlers = []
 # Business apps map a neutral phone identity onto exact local business records.
 whatsapp_core_party_resolvers = []
 
+# Business applications may register one typed resolver per configured source.
+# Source documents never contain arbitrary Python paths.
+whatsapp_core_identity_resolvers = {}
+
 # External AI and operator tools use business-owned party search adapters;
 # Core never imports a sales, hospital or manufacturing module.
 whatsapp_core_party_searchers = []

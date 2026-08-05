@@ -1,0 +1,94 @@
+import json
+
+import frappe
+from frappe import _
+from frappe.model.document import Document
+
+
+class WhatsAppCoreIdentitySource(Document):
+	def validate(self):
+		self.source_key = (self.source_key or "").strip()
+		self.display_name = (self.display_name or "").strip()
+		self.phone_field = (self.phone_field or "").strip()
+		if not self.source_key:
+			frappe.throw(_("Source Key is required."))
+		if not self.source_doctype:
+			frappe.throw(_("Source DocType is required."))
+		if not self.phone_field:
+			frappe.throw(_("Phone Field is required."))
+		self._validate_mapping_fields()
+		if self.filters:
+			try:
+				filters = json.loads(self.filters)
+			except json.JSONDecodeError:
+				frappe.throw(_("Filters must contain valid JSON."))
+			if not isinstance(filters, dict):
+				frappe.throw(_("Filters must be a JSON object."))
+
+	def _validate_mapping_fields(self):
+		meta = frappe.get_meta(self.source_doctype)
+		phone_path = self.phone_field.split(".")
+		if len(phone_path) == 1:
+			self._require_data_field(
+				meta,
+				phone_path[0],
+				"Phone Field",
+			)
+		elif len(phone_path) == 2:
+			table_field = meta.get_field(phone_path[0])
+			if (
+				not table_field
+				or table_field.fieldtype != "Table"
+			):
+				frappe.throw(
+					_("{0} must be a child-table field.").format(
+						phone_path[0]
+					)
+				)
+			self._require_data_field(
+				frappe.get_meta(table_field.options),
+				phone_path[1],
+				"Phone Field",
+			)
+		else:
+			frappe.throw(
+				_(
+					"Phone Field supports one field or one child-table path."
+				)
+			)
+
+		for fieldname, label in (
+			(self.display_name_field, "Display Name Field"),
+			(self.entity_type_field, "Entity Type Field"),
+		):
+			if fieldname:
+				self._require_data_field(
+					meta,
+					fieldname,
+					label,
+				)
+
+	def _require_data_field(self, meta, fieldname, label):
+		field = meta.get_field(fieldname)
+		if not field:
+			frappe.throw(
+				_("{0} {1} does not exist on {2}.").format(
+					label,
+					fieldname,
+					meta.name,
+				)
+			)
+		if field.fieldtype in (
+			"Table",
+			"Table MultiSelect",
+			"Section Break",
+			"Column Break",
+			"Tab Break",
+		):
+			frappe.throw(
+				_("{0} {1} cannot use {2}.").format(
+					label,
+					fieldname,
+					field.fieldtype,
+				)
+			)

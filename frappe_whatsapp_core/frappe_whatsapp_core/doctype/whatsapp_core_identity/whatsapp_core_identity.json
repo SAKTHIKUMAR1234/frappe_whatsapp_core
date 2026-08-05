@@ -5,7 +5,7 @@
  "autoname": "field:identity_key",
  "naming_rule": "By fieldname",
  "engine": "InnoDB",
- "field_order": ["identity_key", "identity_type", "normalized_value", "display_value", "provider", "status", "attributes"],
+ "field_order": ["identity_key", "identity_type", "normalized_value", "display_value", "provider", "status", "resolution_status", "primary_link", "last_resolved_at", "attributes"],
  "fields": [
   {"fieldname": "identity_key", "fieldtype": "Data", "label": "Identity Key", "reqd": 1, "unique": 1},
   {"fieldname": "identity_type", "fieldtype": "Select", "label": "Identity Type", "options": "WhatsApp\nPhone\nEmail\nExternal", "reqd": 1},
@@ -13,6 +13,9 @@
   {"fieldname": "display_value", "fieldtype": "Data", "label": "Display Value"},
   {"fieldname": "provider", "fieldtype": "Data", "label": "Provider"},
   {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Active\nBlocked\nSuperseded", "default": "Active", "reqd": 1},
+  {"fieldname": "resolution_status", "fieldtype": "Select", "label": "Resolution Status", "options": "Unresolved\nResolved\nAmbiguous", "default": "Unresolved", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "primary_link", "fieldtype": "Link", "label": "Primary Business Link", "options": "WhatsApp Core Identity Link", "read_only": 1},
+  {"fieldname": "last_resolved_at", "fieldtype": "Datetime", "label": "Last Resolved At", "read_only": 1},
   {"fieldname": "attributes", "fieldtype": "JSON", "label": "Attributes"}
  ],
  "permissions": [

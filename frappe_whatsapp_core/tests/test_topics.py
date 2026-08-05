@@ -25,11 +25,11 @@ class TestConversationTopics(FrappeTestCase):
 		self.channel = get_or_create_channel(f"TOPIC-{suffix}", "WABA-TOPIC")
 		self.conversation = get_or_create_conversation(
 			self.channel,
-			get_or_create_identity(f"9100{suffix}"),
+			get_or_create_identity(f"91{suffix[-10:]}"),
 		)
 		self.other_conversation = get_or_create_conversation(
 			self.channel,
-			get_or_create_identity(f"9200{suffix}"),
+			get_or_create_identity(f"92{suffix[-10:]}"),
 		)
 		self.first_message = self._message(
 			self.conversation.name,
