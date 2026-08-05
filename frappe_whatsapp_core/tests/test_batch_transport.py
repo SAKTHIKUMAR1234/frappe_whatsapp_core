@@ -6,7 +6,10 @@ import frappe
 
 from frappe_whatsapp_core.campaigns import _campaign_batch_sender
 from frappe_whatsapp_core.hub_client import send_batch
-from frappe_whatsapp_core.outbound import queue_campaign_batch
+from frappe_whatsapp_core.outbound import (
+	queue_campaign_batch,
+	resolve_recipient_phone,
+)
 
 
 class TestBatchTransport(TestCase):
@@ -69,6 +72,38 @@ class TestBatchTransport(TestCase):
 	def test_core_campaign_sender_defaults_to_batch_transport(self):
 		with patch("frappe_whatsapp_core.campaigns.frappe.get_hooks", return_value=[]):
 			self.assertIs(_campaign_batch_sender(), queue_campaign_batch)
+
+	def test_recipient_phone_defaults_to_core_identity(self):
+		identity = SimpleNamespace(normalized_value="+91 98765 43210")
+		with patch(
+			"frappe_whatsapp_core.outbound.frappe.get_hooks",
+			return_value=[],
+		):
+			self.assertEqual(resolve_recipient_phone(identity), "919876543210")
+
+	def test_company_resolver_can_override_recipient_phone(self):
+		identity = SimpleNamespace(
+			name="identity-1",
+			normalized_value="911111111111",
+		)
+		resolver = MagicMock(return_value={"phone_number": "+91 99999 88888"})
+		with (
+			patch(
+				"frappe_whatsapp_core.outbound.frappe.get_hooks",
+				return_value=["company.resolve_phone"],
+			),
+			patch(
+				"frappe_whatsapp_core.outbound.frappe.get_attr",
+				return_value=resolver,
+			),
+		):
+			phone = resolve_recipient_phone(identity, {"source": "message"})
+
+		self.assertEqual(phone, "919999988888")
+		resolver.assert_called_once_with(
+			identity=identity,
+			context={"source": "message"},
+		)
 
 	def test_campaign_batch_submits_all_messages_together(self):
 		campaign = SimpleNamespace(
@@ -145,6 +180,13 @@ class TestBatchTransport(TestCase):
 			patch(
 				"frappe_whatsapp_core.outbound.queue_template_internal",
 				side_effect=messages,
+			),
+			patch(
+				"frappe_whatsapp_core.outbound.resolve_recipient_phone",
+				side_effect=[
+					"919999999990",
+					"919999999991",
+				],
 			),
 			patch(
 				"frappe_whatsapp_core.outbound._message_payload",

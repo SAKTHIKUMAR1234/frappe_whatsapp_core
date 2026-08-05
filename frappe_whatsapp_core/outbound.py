@@ -32,6 +32,40 @@ def outbound_ready() -> bool:
 	)
 
 
+def resolve_recipient_phone(identity, context: dict | None = None) -> str:
+	"""Resolve the delivery number, falling back to the Core Identity value."""
+	if isinstance(identity, str):
+		identity = frappe.get_cached_doc("WhatsApp Core Identity", identity)
+	paths = frappe.get_hooks("whatsapp_core_recipient_phone_resolver") or []
+	if isinstance(paths, str):
+		paths = [paths]
+	paths = list(dict.fromkeys(paths))
+	if len(paths) > 1:
+		frappe.throw(
+			"At most one WhatsApp recipient phone resolver may be configured",
+			frappe.ValidationError,
+		)
+
+	value = identity.normalized_value
+	if paths:
+		resolved = frappe.get_attr(paths[0])(
+			identity=identity,
+			context=context or {},
+		)
+		if isinstance(resolved, dict):
+			resolved = resolved.get("phone_number")
+		if resolved:
+			value = resolved
+
+	phone = normalize_phone(value)
+	if not 7 <= len(phone) <= 15:
+		frappe.throw(
+			"The resolved WhatsApp recipient phone number is invalid",
+			frappe.ValidationError,
+		)
+	return phone
+
+
 def outbound_state(conversation: str | None = None) -> dict:
 	status = connection_status()
 	reasons = []
@@ -256,13 +290,22 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 				source=f"Campaign:{campaign.name}",
 				enqueue_delivery=False,
 			)
+			recipient_phone = resolve_recipient_phone(
+				identity,
+				{
+					"source": "campaign",
+					"campaign": campaign.name,
+					"recipient": recipient.name,
+					"conversation": conversation.name,
+				},
+			)
 			submissions.append({
 				"recipient": recipient.name,
 				"message": message.name,
 				"channel": message.channel,
 				"payload": _message_payload(
 					message,
-					identity.normalized_value,
+					recipient_phone,
 				),
 				"idempotency_key": message.idempotency_key,
 			})
@@ -359,7 +402,16 @@ def deliver_queued_message(message_name: str) -> None:
 			"WhatsApp Core Identity",
 			conversation.remote_identity,
 		)
-		payload = _message_payload(message, identity.normalized_value)
+		recipient_phone = resolve_recipient_phone(
+			identity,
+			{
+				"source": "message",
+				"message": message.name,
+				"conversation": conversation.name,
+				"channel": message.channel,
+			},
+		)
+		payload = _message_payload(message, recipient_phone)
 		result = send_raw(
 			message.channel,
 			payload,

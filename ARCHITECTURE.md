@@ -82,6 +82,11 @@ Zero matches stay `Unresolved`, one match is `Resolved`, and multiple matches
 are `Ambiguous` for review. Disabled sources deactivate their links on the
 next resolution.
 
+Outbound delivery uses the canonical Core Identity phone by default. A company
+app may register one `whatsapp_core_recipient_phone_resolver` to derive the
+current delivery number from its linked business record. Returning no value
+keeps the Core default; multiple registered resolvers are rejected.
+
 ## Templates and campaigns
 
 Template ownership stays in the Integration application. Core receives only a

@@ -27,6 +27,10 @@ whatsapp_core_party_searchers = []
 # not replace the Core transport or create a second outbound implementation.
 whatsapp_core_outbound_preflight = []
 
+# A company app may replace the Core Identity phone at delivery time. Exactly
+# one resolver is allowed; returning no value keeps Core's default number.
+whatsapp_core_recipient_phone_resolver = []
+
 # Flow nodes can invoke only registered, typed actions. A builder graph cannot
 # execute arbitrary Python, SQL or shell commands.
 whatsapp_core_flow_actions = {
