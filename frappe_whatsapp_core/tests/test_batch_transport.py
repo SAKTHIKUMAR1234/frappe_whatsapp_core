@@ -116,10 +116,15 @@ class TestBatchTransport(TestCase):
 			"items": [
 				{
 					"idempotency_key": f"key-{index}",
-					"status": "completed",
+					"status": "queued" if index == 0 else "completed",
 					"result": {
 						"success": True,
-						"meta_message_id": f"wamid.{index}",
+						"status": "queued" if index == 0 else "sent",
+						"meta_message_id": (
+							None
+							if index == 0
+							else f"wamid.{index}"
+						),
 					},
 				}
 				for index in range(2)
@@ -157,10 +162,14 @@ class TestBatchTransport(TestCase):
 				side_effect=messages,
 			),
 			patch("frappe_whatsapp_core.outbound._mark_sent") as mark_sent,
+			patch(
+				"frappe_whatsapp_core.outbound._enqueue_message_delivery",
+			) as enqueue_delivery,
 		):
 			result = queue_campaign_batch(campaign, recipients)
 
 		self.assertEqual(hub_batch.call_count, 1)
 		self.assertEqual(len(hub_batch.call_args.args[0]), 2)
-		self.assertEqual(mark_sent.call_count, 2)
+		self.assertEqual(mark_sent.call_count, 1)
+		enqueue_delivery.assert_not_called()
 		self.assertTrue(all(row["success"] for row in result.values()))

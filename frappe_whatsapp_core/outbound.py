@@ -295,12 +295,36 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 		)
 		item = items_by_key.get(submission["idempotency_key"]) or {}
 		relay_result = item.get("result") or {}
+		item_status = str(item.get("status") or "").lower()
+		relay_status = str(relay_result.get("status") or "").lower()
 		if (
 			hub_result.get("accepted")
-			and item.get("status") == "completed"
 			and relay_result.get("success")
+			and (
+				item_status in {"completed", "sent"}
+				or relay_status == "sent"
+			)
 		):
 			_mark_sent(message, relay_result.get("meta_message_id"))
+		elif (
+			hub_result.get("accepted")
+			and relay_result.get("success")
+			and (
+				item_status in {"queued", "duplicate"}
+				or relay_status == "queued"
+			)
+		):
+			# The relay accepted this independent JetStream work item.
+			# Its durable result callback will finalize the local message.
+			pass
+		elif (
+			hub_result.get("accepted")
+			and (
+				item_status == "failed"
+				or relay_status == "failed"
+			)
+		):
+			_mark_failed(message, relay_result)
 		else:
 			_record_retryable_submission(
 				message,
