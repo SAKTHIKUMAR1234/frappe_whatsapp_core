@@ -8,7 +8,7 @@ Meta callback
    │ fast durable enqueue + immediate ACK
    ▼
 NATS JetStream (file-backed middleman)
-   │ 250 events or 250-millisecond window
+   │ 40 events or 250-millisecond window
    ▼
 WhatsApp Core Event (one bulk DB insert + dedupe)
    │ one background batch job
@@ -28,38 +28,25 @@ message, case, campaign, flow, AI queue and MCP contracts. A company app is
 optional. When installed, it adds business hierarchy, ERP links, policies,
 typed actions and a purpose-built frontend through Core APIs.
 
-## Visual flow engine
+## WhatsApp Flows
 
-The flow engine is a Core feature. Business apps extend it with typed actions.
+Customer-facing WhatsApp Flows are native Meta assets. Core manages them
+through the Integration Hub and stores only operational events and responses;
+it does not render a second, incompatible flow runtime.
 
 ```text
-Command / Template Button / Event / API
-                    │
-                    ▼
-        Published Flow Trigger
-                    │
-                    ▼
- Question ──► Validate ──► Condition
-                               ├──► Typed Action / Connector
-                               └──► Human Handoff
-                                          │
-                                          ▼
-                                         End
+Core administrator ──► Integration Hub ──► Meta Flow API
+                                               │
+Customer completes published Flow ◄───────────┘
+                │
+                ▼
+Meta nfm_reply webhook ──► JetStream ──► Core conversation log
 ```
 
-Each Frappe site stores its own flow definitions, immutable published versions,
-running instances, context and step audit log. The relay never stores or
-executes business flow state.
-
-Publication is `Draft → Validate → Immutable Version`. Running conversations
-remain pinned to the version on which they started. Every inbound event and
-step run has an idempotency key, and a row lock serializes replies for one
-conversation.
-
-Canvas actions are allowlisted through `whatsapp_core_flow_actions`. They
-cannot execute arbitrary Python, SQL or shell commands. An organization app
-registers actions such as `case.create`, `customer.fetch`, or
-`invoice.lookup`, while the Core engine remains business-neutral.
+Creation, Flow JSON upload, preview, publish, clone, migrate, deprecate and
+delete use Meta's API. Native `nfm_reply` responses are materialized into the
+conversation log. The previous local automation engine remains disabled by
+default for backwards-compatible data access only.
 
 ## Configurable business identity
 

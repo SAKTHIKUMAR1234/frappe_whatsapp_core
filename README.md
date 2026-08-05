@@ -2,22 +2,12 @@
 
 Reusable, configurable WhatsApp business workflow foundation
 
-### Core Flow Builder
+### Native WhatsApp Flows
 
-Open **WhatsApp Core Flow**, create a draft, then click **Open Flow Builder**.
-The Desk page supports drag-and-drop nodes, visual connections, triggers,
-validation and immutable publication.
-
-Available node families:
-
-- template/message/question
-- condition and guarded loop
-- typed action or external connector
-- wait and human handoff
-- end
-
-Solution apps add business actions without changing the relay or the Core
-engine.
+Open `/whatsapp`, then use **Meta Flows** to create, upload, preview, publish,
+clone, migrate, deprecate and inspect Meta-hosted WhatsApp Flows. Core records
+native Flow replies in the conversation log and does not render its own copy of
+the customer Flow.
 
 ### Installation
 
