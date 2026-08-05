@@ -7,12 +7,19 @@ import json
 import frappe
 
 from frappe_whatsapp_core.cases import create_case
+from frappe_whatsapp_core.flow_api import get_builder
 from frappe_whatsapp_core.party_bindings import upsert_party_binding
 from frappe_whatsapp_core.permissions import require_core_access
 from frappe_whatsapp_core.topics import (
 	list_topics,
 	unclassified_messages,
 	upsert_topic,
+)
+from frappe_whatsapp_core.workspace_api import (
+	assign_conversation,
+	list_messages,
+	list_teams,
+	upsert_team,
 )
 
 TOOL_DEFINITIONS = [
@@ -207,6 +214,113 @@ TOOL_DEFINITIONS = [
 			"properties": {"conversation": {"type": "string"}},
 		},
 	},
+	{
+		"name": "whatsapp.list_messages",
+		"description": "Read a searchable page of messages for infinite-scroll history.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["conversation"],
+			"properties": {
+				"conversation": {"type": "string"},
+				"before": {"type": "string"},
+				"limit": {"type": "integer", "minimum": 1, "maximum": 100},
+				"search": {"type": "string"},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.send_text",
+		"description": "Queue a text reply in an accessible conversation.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["conversation", "body"],
+			"properties": {
+				"conversation": {"type": "string"},
+				"body": {"type": "string", "minLength": 1, "maxLength": 4096},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.assign_conversation",
+		"description": "Assign a conversation to a team or user and optionally update status.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["conversation"],
+			"properties": {
+				"conversation": {"type": "string"},
+				"team": {"type": "string"},
+				"user": {"type": "string"},
+				"status": {"type": "string", "enum": ["Open", "Pending", "Resolved"]},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.list_teams",
+		"description": "List enabled and disabled support teams with their members.",
+		"inputSchema": {"type": "object", "properties": {}},
+	},
+	{
+		"name": "whatsapp.upsert_team",
+		"description": "Create or update a support team and its members.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["team_name"],
+			"properties": {
+				"team_name": {"type": "string"},
+				"description": {"type": "string"},
+				"enabled": {"type": "boolean"},
+				"members": {"type": "array", "items": {"type": "object"}},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.list_templates",
+		"description": "List the site template catalog and approval state.",
+		"inputSchema": {"type": "object", "properties": {}},
+	},
+	{
+		"name": "whatsapp.list_campaigns",
+		"description": "List campaign workspace data and delivery metrics.",
+		"inputSchema": {"type": "object", "properties": {}},
+	},
+	{
+		"name": "whatsapp.create_campaign",
+		"description": "Create a campaign draft using an approved template.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["title", "campaign_key", "channel", "template"],
+			"properties": {
+				"title": {"type": "string"},
+				"campaign_key": {"type": "string"},
+				"channel": {"type": "string"},
+				"template": {"type": "string"},
+				"description": {"type": "string"},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.launch_campaign",
+		"description": "Launch a prepared and explicitly authorized campaign.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["campaign_name"],
+			"properties": {"campaign_name": {"type": "string"}},
+		},
+	},
+	{
+		"name": "whatsapp.list_flows",
+		"description": "List configured automation flows.",
+		"inputSchema": {"type": "object", "properties": {}},
+	},
+	{
+		"name": "whatsapp.get_flow",
+		"description": "Read one flow-builder graph.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["flow_name"],
+			"properties": {"flow_name": {"type": "string"}},
+		},
+	},
 ]
 
 
@@ -276,6 +390,26 @@ def call_tool(name: str, arguments: dict | str | None = None) -> dict | list:
 		"whatsapp.get_outbound_status": lambda: _outbound_status(
 			arguments.get("conversation"),
 		),
+		"whatsapp.list_messages": lambda: list_messages(**arguments),
+		"whatsapp.send_text": lambda: _send_reply(
+			arguments["conversation"],
+			arguments["body"],
+		),
+		"whatsapp.assign_conversation": lambda: assign_conversation(**arguments),
+		"whatsapp.list_teams": list_teams,
+		"whatsapp.upsert_team": lambda: upsert_team(**arguments),
+		"whatsapp.list_templates": lambda: _frontend_call("template_catalog"),
+		"whatsapp.list_campaigns": lambda: _frontend_call("campaign_workspace"),
+		"whatsapp.create_campaign": lambda: _frontend_call(
+			"create_campaign_draft",
+			arguments,
+		),
+		"whatsapp.launch_campaign": lambda: _frontend_call(
+			"launch_campaign_send",
+			{"campaign_name": arguments["campaign_name"]},
+		),
+		"whatsapp.list_flows": lambda: _frontend_call("list_flows"),
+		"whatsapp.get_flow": lambda: get_builder(arguments["flow_name"]),
 	}
 	handler = handlers.get(name)
 	if not handler:
@@ -379,6 +513,11 @@ def _outbound_status(conversation: str | None) -> dict:
 	from frappe_whatsapp_core.outbound import outbound_state
 
 	return outbound_state(conversation)
+
+
+def _frontend_call(method: str, arguments: dict | None = None):
+	handler = frappe.get_attr(f"frappe_whatsapp_core.frontend_api.{method}")
+	return handler(**(arguments or {}))
 
 
 def _arguments(arguments) -> dict:

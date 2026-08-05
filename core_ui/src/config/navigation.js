@@ -9,6 +9,7 @@ import {
 	PlugZap,
 	Settings,
 	ShieldCheck,
+	UsersRound,
 } from 'lucide-vue-next'
 
 export const navigation = [
@@ -43,6 +44,7 @@ export const navigation = [
 	{
 		label: 'Administration',
 		items: [
+			{ label: 'Teams', route: 'teams', icon: UsersRound },
 			{ label: 'Audit & Health', route: 'health', icon: ShieldCheck },
 			{ label: 'Company Settings', route: 'settings', icon: Settings },
 		],

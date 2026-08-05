@@ -34,6 +34,9 @@ whatsapp_core_flow_actions = {
 # context and queue one message at a time. Core never imports business modules.
 whatsapp_core_campaign_preflight = []
 whatsapp_core_campaign_sender = []
+whatsapp_core_campaign_batch_sender = []
+whatsapp_core_outbound_text_sender = []
+whatsapp_core_outbound_template_sender = []
 
 scheduler_events = {
 	"cron": {

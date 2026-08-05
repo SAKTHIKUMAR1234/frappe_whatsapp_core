@@ -58,6 +58,11 @@ const routes = [
 				component: () => import('@/features/workspaces/views/ConnectorsView.vue'),
 			},
 			{
+				path: 'teams',
+				name: 'teams',
+				component: () => import('@/features/teams/views/TeamsView.vue'),
+			},
+			{
 				path: 'health',
 				name: 'health',
 				component: () => import('@/features/workspaces/views/HealthView.vue'),

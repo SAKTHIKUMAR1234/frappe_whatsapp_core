@@ -10,7 +10,7 @@ import frappe
 from frappe.utils import get_datetime, now_datetime
 
 MAX_PREPARE_RECIPIENTS = 10_000
-DEFAULT_BATCH_SIZE = 100
+DEFAULT_BATCH_SIZE = 40
 
 
 def create_campaign(
@@ -251,7 +251,8 @@ def process_campaign_batch(
 	campaign = frappe.get_doc("WhatsApp Core Campaign", campaign_name)
 	if campaign.status != "Running":
 		return
-	sender = _campaign_sender()
+	batch_sender = _campaign_batch_sender()
+	sender = None if batch_sender else _campaign_sender()
 	recipients = frappe.get_all(
 		"WhatsApp Core Campaign Recipient",
 		filters={"campaign": campaign.name, "status": "Prepared"},
@@ -263,14 +264,17 @@ def process_campaign_batch(
 		_complete_campaign(campaign)
 		return
 
-	for row in recipients:
-		if frappe.db.get_value(
-			"WhatsApp Core Campaign",
-			campaign.name,
-			"status",
-		) != "Running":
-			return
-		_queue_recipient(campaign, row, sender)
+	if batch_sender:
+		_queue_recipient_batch(campaign, recipients, batch_sender)
+	else:
+		for row in recipients:
+			if frappe.db.get_value(
+				"WhatsApp Core Campaign",
+				campaign.name,
+				"status",
+			) != "Running":
+				return
+			_queue_recipient(campaign, row, sender)
 	frappe.db.commit()
 	refresh_campaign_counts(campaign.name)
 
@@ -465,7 +469,8 @@ def _validate_launch(campaign) -> None:
 			frappe.ValidationError,
 		)
 	_run_preflight_hooks(campaign)
-	_campaign_sender()
+	if not _campaign_batch_sender():
+		_campaign_sender()
 
 
 def _run_preflight_hooks(campaign) -> None:
@@ -492,6 +497,51 @@ def _campaign_sender():
 	return frappe.get_attr(paths[0])
 
 
+def _campaign_batch_sender():
+	paths = frappe.get_hooks("whatsapp_core_campaign_batch_sender")
+	if len(paths) > 1:
+		frappe.throw(
+			"At most one business campaign batch sender may be configured",
+			frappe.ValidationError,
+		)
+	return frappe.get_attr(paths[0]) if paths else None
+
+
+def _queue_recipient_batch(campaign, recipients, sender) -> None:
+	try:
+		results = sender(campaign, recipients)
+	except Exception as exception:
+		for recipient in recipients:
+			_mark_recipient_failed(recipient, exception)
+		return
+	if not isinstance(results, dict):
+		results = {}
+	for recipient in recipients:
+		result = results.get(recipient.name) or {}
+		message_name = result.get("message") if isinstance(result, dict) else None
+		if isinstance(result, dict) and result.get("success") and message_name:
+			frappe.db.set_value(
+				"WhatsApp Core Campaign Recipient",
+				recipient.name,
+				{
+					"status": "Queued",
+					"core_message": message_name,
+					"attempts": (recipient.attempts or 0) + 1,
+					"queued_at": now_datetime(),
+					"last_error": None,
+				},
+				update_modified=False,
+			)
+			continue
+		_mark_recipient_failed(
+			recipient,
+			result.get("error", "Campaign batch sender returned no result")
+			if isinstance(result, dict)
+			else "Campaign batch sender returned an invalid result",
+			message_name=message_name,
+		)
+
+
 def _queue_recipient(campaign, recipient, sender) -> None:
 	try:
 		result = sender(campaign, recipient)
@@ -511,21 +561,28 @@ def _queue_recipient(campaign, recipient, sender) -> None:
 			update_modified=False,
 		)
 	except Exception as exception:
-		frappe.db.set_value(
-			"WhatsApp Core Campaign Recipient",
-			recipient.name,
-			{
-				"status": "Failed",
-				"attempts": (recipient.attempts or 0) + 1,
-				"last_error": str(exception)[:500],
-				"completed_at": now_datetime(),
-			},
-			update_modified=False,
-		)
+		_mark_recipient_failed(recipient, exception)
 		frappe.log_error(
 			title=f"WhatsApp campaign recipient failed: {recipient.name}",
 			message=frappe.get_traceback(),
 		)
+
+
+def _mark_recipient_failed(recipient, exception, message_name=None) -> None:
+	values = {
+		"status": "Failed",
+		"attempts": (recipient.attempts or 0) + 1,
+		"last_error": str(exception)[:500],
+		"completed_at": now_datetime(),
+	}
+	if message_name:
+		values["core_message"] = message_name
+	frappe.db.set_value(
+		"WhatsApp Core Campaign Recipient",
+		recipient.name,
+		values,
+		update_modified=False,
+	)
 
 
 def _complete_campaign(campaign) -> None:

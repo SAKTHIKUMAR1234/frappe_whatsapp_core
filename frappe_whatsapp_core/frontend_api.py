@@ -166,6 +166,13 @@ def campaign_workspace():
 			order_by="display_name asc",
 			limit_page_length=100,
 		),
+		"identities": frappe.get_all(
+			"WhatsApp Core Identity",
+			filters={"status": "Active"},
+			fields=["name", "display_value", "normalized_value"],
+			order_by="display_value asc",
+			limit_page_length=1000,
+		),
 		"metrics": {
 			"drafts": sum(
 				campaign["status"] in {"Draft", "Prepared"}

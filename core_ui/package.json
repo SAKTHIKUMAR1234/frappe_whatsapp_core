@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "vite",
 		"build": "vite build --base=/assets/frappe_whatsapp_core/core_ui/ && yarn copy-html-entry",
-		"copy-html-entry": "cp ../frappe_whatsapp_core/public/core_ui/index.html ../frappe_whatsapp_core/www/whatsapp_core.html",
+		"copy-html-entry": "cp ../frappe_whatsapp_core/public/core_ui/index.html ../frappe_whatsapp_core/www/whatsapp_core.html && cp ../frappe_whatsapp_core/public/core_ui/index.html ../frappe_whatsapp_core/www/whatsapp.html",
 		"format": "prettier --write .",
 		"format:check": "prettier --check ."
 	},
