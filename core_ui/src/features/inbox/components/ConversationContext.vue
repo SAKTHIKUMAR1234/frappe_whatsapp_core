@@ -5,6 +5,7 @@
 
 	defineProps({
 		data: { type: Object, required: true },
+		canManage: { type: Boolean, default: false },
 	})
 
 	defineEmits(['status'])
@@ -24,11 +25,13 @@
 				</div>
 			</div>
 			<Select
+				v-if="canManage"
 				:model-value="data.conversation?.status"
 				:options="statusOptions"
 				class="status-select"
 				@update:model-value="$emit('status', $event)"
 			/>
+			<span v-else class="status-readonly">{{ data.conversation?.status }}</span>
 		</section>
 
 		<section>
@@ -127,6 +130,15 @@
 	}
 	.status-select {
 		width: 100%;
+	}
+	.status-readonly {
+		display: inline-flex;
+		padding: 5px 9px;
+		border-radius: 999px;
+		background: #eef4f1;
+		color: #52635b;
+		font-size: 10px;
+		font-weight: 700;
 	}
 	.binding-list {
 		display: grid;

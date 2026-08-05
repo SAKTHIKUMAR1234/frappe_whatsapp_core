@@ -52,7 +52,7 @@ def _context(account_name: str | None = None) -> dict:
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def flow_workspace(account_name: str | None = None) -> dict:
 	accounts = _accounts()
 	selected = _resolve_account_name(account_name)
@@ -62,7 +62,7 @@ def flow_workspace(account_name: str | None = None) -> dict:
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def get_flow(account_name: str, flow_id: str) -> dict:
 	context = _context(account_name)
 	result = _call("meta_flows", "get_flow", {"waba_name": context["waba_name"], "flow_id": flow_id})
@@ -140,7 +140,7 @@ def delete_flow(account_name: str, flow_id: str):
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def list_flow_assets(account_name: str, flow_id: str):
 	context = _context(account_name)
 	result = _call("meta_flows", "list_flow_assets", {

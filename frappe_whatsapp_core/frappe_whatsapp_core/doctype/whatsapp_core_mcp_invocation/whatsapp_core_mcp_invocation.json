@@ -1,94 +1,90 @@
 {
- "doctype": "DocType",
- "name": "WhatsApp Core MCP Invocation",
- "module": "Frappe WhatsApp Core",
- "autoname": "field:invocation_key",
- "naming_rule": "By fieldname",
- "engine": "InnoDB",
- "field_order": [
-  "invocation_key",
-  "user",
-  "method",
-  "tool_name",
-  "status",
-  "duration_ms",
-  "arguments",
-  "result",
-  "error"
- ],
- "fields": [
-  {
-   "fieldname": "invocation_key",
-   "fieldtype": "Data",
-   "label": "Invocation Key",
-   "reqd": 1,
-   "unique": 1
-  },
-  {
-   "fieldname": "user",
-   "fieldtype": "Link",
-   "label": "User",
-   "options": "User",
-   "reqd": 1,
-   "in_list_view": 1
-  },
-  {
-   "fieldname": "method",
-   "fieldtype": "Data",
-   "label": "Method",
-   "reqd": 1
-  },
-  {
-   "fieldname": "tool_name",
-   "fieldtype": "Data",
-   "label": "Tool Name",
-   "in_list_view": 1
-  },
-  {
-   "fieldname": "status",
-   "fieldtype": "Select",
-   "label": "Status",
-   "options": "Completed\nFailed",
-   "reqd": 1,
-   "in_list_view": 1
-  },
-  {
-   "fieldname": "duration_ms",
-   "fieldtype": "Int",
-   "label": "Duration (ms)"
-  },
-  {
-   "fieldname": "arguments",
-   "fieldtype": "JSON",
-   "label": "Arguments"
-  },
-  {
-   "fieldname": "result",
-   "fieldtype": "Long Text",
-   "label": "Result"
-  },
-  {
-   "fieldname": "error",
-   "fieldtype": "Long Text",
-   "label": "Error"
-  }
- ],
- "permissions": [
-  {
-   "role": "System Manager",
-   "read": 1,
-   "export": 1
-  },
-  {
-   "role": "WhatsApp Core Admin",
-   "read": 1,
-   "export": 1
-  },
-  {
-   "role": "WhatsApp Core Manager",
-   "read": 1
-  }
- ],
- "sort_field": "creation",
- "sort_order": "DESC"
+	"doctype": "DocType",
+	"name": "WhatsApp Core MCP Invocation",
+	"module": "Frappe WhatsApp Core",
+	"autoname": "field:invocation_key",
+	"naming_rule": "By fieldname",
+	"engine": "InnoDB",
+	"field_order": [
+		"invocation_key",
+		"user",
+		"method",
+		"tool_name",
+		"status",
+		"duration_ms",
+		"arguments",
+		"result",
+		"error"
+	],
+	"fields": [
+		{
+			"fieldname": "invocation_key",
+			"fieldtype": "Data",
+			"label": "Invocation Key",
+			"reqd": 1,
+			"unique": 1
+		},
+		{
+			"fieldname": "user",
+			"fieldtype": "Link",
+			"label": "User",
+			"options": "User",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "method",
+			"fieldtype": "Data",
+			"label": "Method",
+			"reqd": 1
+		},
+		{
+			"fieldname": "tool_name",
+			"fieldtype": "Data",
+			"label": "Tool Name",
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "status",
+			"fieldtype": "Select",
+			"label": "Status",
+			"options": "Completed\nFailed",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "duration_ms",
+			"fieldtype": "Int",
+			"label": "Duration (ms)"
+		},
+		{
+			"fieldname": "arguments",
+			"fieldtype": "JSON",
+			"label": "Arguments"
+		},
+		{
+			"fieldname": "result",
+			"fieldtype": "Long Text",
+			"label": "Result"
+		},
+		{
+			"fieldname": "error",
+			"fieldtype": "Long Text",
+			"label": "Error"
+		}
+	],
+	"permissions": [
+		{
+			"role": "System Manager",
+			"read": 1,
+			"export": 1
+		},
+		{
+			"role": "WhatsApp Manager",
+			"read": 1,
+			"export": 1
+		}
+	],
+	"sort_field": "creation",
+	"sort_order": "DESC"
 }

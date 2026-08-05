@@ -9,16 +9,13 @@ import frappe
 
 CORE_ACCESS_ROLES = {
 	"System Manager",
-	"WhatsApp Core Admin",
-	"WhatsApp Core Manager",
-	"WhatsApp Core Agent",
-	"WhatsApp Core Analyst",
+	"WhatsApp User",
+	"WhatsApp Manager",
 }
 
 CORE_MANAGEMENT_ROLES = {
 	"System Manager",
-	"WhatsApp Core Admin",
-	"WhatsApp Core Manager",
+	"WhatsApp Manager",
 }
 
 

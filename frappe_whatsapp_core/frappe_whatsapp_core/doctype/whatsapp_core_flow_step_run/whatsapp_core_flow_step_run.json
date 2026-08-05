@@ -1,43 +1,113 @@
 {
- "doctype": "DocType",
- "name": "WhatsApp Core Flow Step Run",
- "module": "Frappe WhatsApp Core",
- "autoname": "field:run_key",
- "naming_rule": "By fieldname",
- "engine": "InnoDB",
- "field_order": [
-  "run_key",
-  "flow_instance",
-  "node_id",
-  "node_type",
-  "event_key",
-  "status",
-  "attempts",
-  "input",
-  "output",
-  "started_at",
-  "completed_at",
-  "error"
- ],
- "fields": [
-  {"fieldname": "run_key", "fieldtype": "Data", "label": "Run Key", "reqd": 1, "unique": 1},
-  {"fieldname": "flow_instance", "fieldtype": "Link", "label": "Flow Instance", "options": "WhatsApp Core Flow Instance", "reqd": 1, "in_list_view": 1},
-  {"fieldname": "node_id", "fieldtype": "Data", "label": "Node ID", "reqd": 1, "in_list_view": 1},
-  {"fieldname": "node_type", "fieldtype": "Data", "label": "Node Type", "reqd": 1},
-  {"fieldname": "event_key", "fieldtype": "Data", "label": "Event Key", "reqd": 1},
-  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Processing\nCompleted\nFailed", "reqd": 1, "in_list_view": 1},
-  {"fieldname": "attempts", "fieldtype": "Int", "label": "Attempts", "default": "1", "reqd": 1},
-  {"fieldname": "input", "fieldtype": "JSON", "label": "Input"},
-  {"fieldname": "output", "fieldtype": "JSON", "label": "Output"},
-  {"fieldname": "started_at", "fieldtype": "Datetime", "label": "Started At", "reqd": 1},
-  {"fieldname": "completed_at", "fieldtype": "Datetime", "label": "Completed At"},
-  {"fieldname": "error", "fieldtype": "Long Text", "label": "Error"}
- ],
- "permissions": [
-  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "export": 1},
-  {"role": "WhatsApp Core Admin", "read": 1, "export": 1},
-  {"role": "WhatsApp Core Manager", "read": 1, "export": 1},
-  {"role": "WhatsApp Core Agent", "read": 1},
-  {"role": "WhatsApp Core Analyst", "read": 1, "export": 1}
- ]
+	"doctype": "DocType",
+	"name": "WhatsApp Core Flow Step Run",
+	"module": "Frappe WhatsApp Core",
+	"autoname": "field:run_key",
+	"naming_rule": "By fieldname",
+	"engine": "InnoDB",
+	"field_order": [
+		"run_key",
+		"flow_instance",
+		"node_id",
+		"node_type",
+		"event_key",
+		"status",
+		"attempts",
+		"input",
+		"output",
+		"started_at",
+		"completed_at",
+		"error"
+	],
+	"fields": [
+		{
+			"fieldname": "run_key",
+			"fieldtype": "Data",
+			"label": "Run Key",
+			"reqd": 1,
+			"unique": 1
+		},
+		{
+			"fieldname": "flow_instance",
+			"fieldtype": "Link",
+			"label": "Flow Instance",
+			"options": "WhatsApp Core Flow Instance",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "node_id",
+			"fieldtype": "Data",
+			"label": "Node ID",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "node_type",
+			"fieldtype": "Data",
+			"label": "Node Type",
+			"reqd": 1
+		},
+		{
+			"fieldname": "event_key",
+			"fieldtype": "Data",
+			"label": "Event Key",
+			"reqd": 1
+		},
+		{
+			"fieldname": "status",
+			"fieldtype": "Select",
+			"label": "Status",
+			"options": "Processing\nCompleted\nFailed",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "attempts",
+			"fieldtype": "Int",
+			"label": "Attempts",
+			"default": "1",
+			"reqd": 1
+		},
+		{
+			"fieldname": "input",
+			"fieldtype": "JSON",
+			"label": "Input"
+		},
+		{
+			"fieldname": "output",
+			"fieldtype": "JSON",
+			"label": "Output"
+		},
+		{
+			"fieldname": "started_at",
+			"fieldtype": "Datetime",
+			"label": "Started At",
+			"reqd": 1
+		},
+		{
+			"fieldname": "completed_at",
+			"fieldtype": "Datetime",
+			"label": "Completed At"
+		},
+		{
+			"fieldname": "error",
+			"fieldtype": "Long Text",
+			"label": "Error"
+		}
+	],
+	"permissions": [
+		{
+			"role": "System Manager",
+			"read": 1,
+			"write": 1,
+			"create": 1,
+			"export": 1
+		},
+		{
+			"role": "WhatsApp Manager",
+			"read": 1,
+			"export": 1
+		}
+	]
 }

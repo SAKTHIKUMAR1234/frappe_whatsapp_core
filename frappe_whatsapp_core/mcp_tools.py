@@ -602,7 +602,7 @@ TOOL_DEFINITIONS = [
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def manifest() -> dict:
 	return {
 		"name": "frappe-whatsapp-core",

@@ -16,6 +16,36 @@ from frappe_whatsapp_core.workspace_api import (
 )
 
 
+class TestCoreRoleBoundary(FrappeTestCase):
+	def test_user_bootstrap_exposes_inbox_only(self):
+		from frappe_whatsapp_core import frontend_api
+
+		with patch.object(frontend_api.frappe, "get_roles", return_value=["WhatsApp User"]):
+			boot = frontend_api.bootstrap()
+		self.assertFalse(boot["can_manage"])
+		self.assertEqual(boot["default_module"], "inbox")
+		self.assertEqual(boot["modules"], ["inbox"])
+
+	def test_manager_bootstrap_exposes_management_modules(self):
+		from frappe_whatsapp_core import frontend_api
+
+		with patch.object(frontend_api.frappe, "get_roles", return_value=["WhatsApp Manager"]):
+			boot = frontend_api.bootstrap()
+		self.assertTrue(boot["can_manage"])
+		self.assertEqual(boot["default_module"], "dashboard")
+		self.assertIn("campaigns", boot["modules"])
+		self.assertIn("flows", boot["modules"])
+		self.assertIn("ai-queue", boot["modules"])
+
+	def test_user_cannot_enter_management_api(self):
+		from frappe_whatsapp_core import permissions
+		from frappe_whatsapp_core.frontend_api import dashboard
+
+		with patch.object(permissions.frappe, "get_roles", return_value=["WhatsApp User"]):
+			with self.assertRaises(frappe.PermissionError):
+				dashboard()
+
+
 class TestWorkspaceAPI(FrappeTestCase):
 	def setUp(self):
 		super().setUp()

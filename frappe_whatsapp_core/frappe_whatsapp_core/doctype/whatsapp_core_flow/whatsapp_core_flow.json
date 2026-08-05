@@ -1,37 +1,99 @@
 {
- "doctype": "DocType",
- "name": "WhatsApp Core Flow",
- "module": "Frappe WhatsApp Core",
- "autoname": "field:flow_key",
- "naming_rule": "By fieldname",
- "engine": "InnoDB",
- "field_order": [
-  "flow_key",
-  "title",
-  "description",
-  "solution",
-  "status",
-  "enabled",
-  "active_version",
-  "draft_graph",
-  "validation_errors"
- ],
- "fields": [
-  {"fieldname": "flow_key", "fieldtype": "Data", "label": "Flow Key", "reqd": 1, "unique": 1, "in_list_view": 1},
-  {"fieldname": "title", "fieldtype": "Data", "label": "Title", "reqd": 1, "in_list_view": 1},
-  {"fieldname": "description", "fieldtype": "Small Text", "label": "Description"},
-  {"fieldname": "solution", "fieldtype": "Link", "label": "Solution", "options": "WhatsApp Core Solution"},
-  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Draft\nPublished\nRetired", "default": "Draft", "reqd": 1, "in_list_view": 1},
-  {"fieldname": "enabled", "fieldtype": "Check", "label": "Enabled", "default": "1"},
-  {"fieldname": "active_version", "fieldtype": "Link", "label": "Active Version", "options": "WhatsApp Core Flow Version", "read_only": 1},
-  {"fieldname": "draft_graph", "fieldtype": "JSON", "label": "Draft Graph", "reqd": 1},
-  {"fieldname": "validation_errors", "fieldtype": "Long Text", "label": "Validation Errors", "read_only": 1}
- ],
- "permissions": [
-  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1},
-  {"role": "WhatsApp Core Admin", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1},
-  {"role": "WhatsApp Core Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1},
-  {"role": "WhatsApp Core Agent", "read": 1},
-  {"role": "WhatsApp Core Analyst", "read": 1, "export": 1}
- ]
+	"doctype": "DocType",
+	"name": "WhatsApp Core Flow",
+	"module": "Frappe WhatsApp Core",
+	"autoname": "field:flow_key",
+	"naming_rule": "By fieldname",
+	"engine": "InnoDB",
+	"field_order": [
+		"flow_key",
+		"title",
+		"description",
+		"solution",
+		"status",
+		"enabled",
+		"active_version",
+		"draft_graph",
+		"validation_errors"
+	],
+	"fields": [
+		{
+			"fieldname": "flow_key",
+			"fieldtype": "Data",
+			"label": "Flow Key",
+			"reqd": 1,
+			"unique": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "title",
+			"fieldtype": "Data",
+			"label": "Title",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "description",
+			"fieldtype": "Small Text",
+			"label": "Description"
+		},
+		{
+			"fieldname": "solution",
+			"fieldtype": "Link",
+			"label": "Solution",
+			"options": "WhatsApp Core Solution"
+		},
+		{
+			"fieldname": "status",
+			"fieldtype": "Select",
+			"label": "Status",
+			"options": "Draft\nPublished\nRetired",
+			"default": "Draft",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "enabled",
+			"fieldtype": "Check",
+			"label": "Enabled",
+			"default": "1"
+		},
+		{
+			"fieldname": "active_version",
+			"fieldtype": "Link",
+			"label": "Active Version",
+			"options": "WhatsApp Core Flow Version",
+			"read_only": 1
+		},
+		{
+			"fieldname": "draft_graph",
+			"fieldtype": "JSON",
+			"label": "Draft Graph",
+			"reqd": 1
+		},
+		{
+			"fieldname": "validation_errors",
+			"fieldtype": "Long Text",
+			"label": "Validation Errors",
+			"read_only": 1
+		}
+	],
+	"permissions": [
+		{
+			"role": "System Manager",
+			"read": 1,
+			"write": 1,
+			"create": 1,
+			"delete": 1,
+			"export": 1
+		},
+		{
+			"role": "WhatsApp Manager",
+			"read": 1,
+			"write": 1,
+			"create": 1,
+			"delete": 1,
+			"export": 1
+		}
+	]
 }

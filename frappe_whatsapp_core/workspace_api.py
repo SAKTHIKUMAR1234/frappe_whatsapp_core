@@ -359,7 +359,7 @@ def _assert_conversation_access(conversation: str) -> None:
 	if not frappe.db.exists("WhatsApp Core Conversation", conversation):
 		frappe.throw("Conversation not found", frappe.DoesNotExistError)
 	roles = set(frappe.get_roles())
-	if roles & (CORE_MANAGEMENT_ROLES | {"WhatsApp Core Analyst"}):
+	if roles & CORE_MANAGEMENT_ROLES:
 		return
 	assigned_team, assigned_user = frappe.db.get_value(
 		"WhatsApp Core Conversation",
@@ -386,7 +386,7 @@ def _conversation_conditions(alias: str) -> tuple[list[str], dict]:
 	conditions = ["1 = 1"]
 	values = {}
 	roles = set(frappe.get_roles())
-	if roles & (CORE_MANAGEMENT_ROLES | {"WhatsApp Core Analyst"}):
+	if roles & CORE_MANAGEMENT_ROLES:
 		return conditions, values
 	teams = frappe.get_all(
 		"WhatsApp Core Team Member",

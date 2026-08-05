@@ -1,87 +1,73 @@
 {
- "doctype": "DocType",
- "name": "WhatsApp Core Topic Message",
- "module": "Frappe WhatsApp Core",
- "autoname": "field:assignment_key",
- "naming_rule": "By fieldname",
- "engine": "InnoDB",
- "field_order": [
-  "assignment_key",
-  "topic",
-  "message",
-  "assigned_by",
-  "confidence"
- ],
- "fields": [
-  {
-   "fieldname": "assignment_key",
-   "fieldtype": "Data",
-   "label": "Assignment Key",
-   "reqd": 1,
-   "unique": 1
-  },
-  {
-   "fieldname": "topic",
-   "fieldtype": "Link",
-   "label": "Topic",
-   "options": "WhatsApp Core Conversation Topic",
-   "reqd": 1,
-   "in_list_view": 1
-  },
-  {
-   "fieldname": "message",
-   "fieldtype": "Link",
-   "label": "Message",
-   "options": "WhatsApp Core Message",
-   "reqd": 1,
-   "in_list_view": 1,
-   "unique": 1
-  },
-  {
-   "fieldname": "assigned_by",
-   "fieldtype": "Select",
-   "label": "Assigned By",
-   "options": "Manual\nExternal AI\nFlow\nImport",
-   "default": "Manual",
-   "reqd": 1
-  },
-  {
-   "fieldname": "confidence",
-   "fieldtype": "Percent",
-   "label": "Confidence"
-  }
- ],
- "permissions": [
-  {
-   "role": "System Manager",
-   "read": 1,
-   "write": 1,
-   "create": 1,
-   "delete": 1,
-   "export": 1
-  },
-  {
-   "role": "WhatsApp Core Admin",
-   "read": 1,
-   "write": 1,
-   "create": 1,
-   "delete": 1
-  },
-  {
-   "role": "WhatsApp Core Manager",
-   "read": 1,
-   "write": 1,
-   "create": 1
-  },
-  {
-   "role": "WhatsApp Core Agent",
-   "read": 1
-  },
-  {
-   "role": "WhatsApp Core Analyst",
-   "read": 1
-  }
- ],
- "sort_field": "creation",
- "sort_order": "ASC"
+	"doctype": "DocType",
+	"name": "WhatsApp Core Topic Message",
+	"module": "Frappe WhatsApp Core",
+	"autoname": "field:assignment_key",
+	"naming_rule": "By fieldname",
+	"engine": "InnoDB",
+	"field_order": [
+		"assignment_key",
+		"topic",
+		"message",
+		"assigned_by",
+		"confidence"
+	],
+	"fields": [
+		{
+			"fieldname": "assignment_key",
+			"fieldtype": "Data",
+			"label": "Assignment Key",
+			"reqd": 1,
+			"unique": 1
+		},
+		{
+			"fieldname": "topic",
+			"fieldtype": "Link",
+			"label": "Topic",
+			"options": "WhatsApp Core Conversation Topic",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "message",
+			"fieldtype": "Link",
+			"label": "Message",
+			"options": "WhatsApp Core Message",
+			"reqd": 1,
+			"in_list_view": 1,
+			"unique": 1
+		},
+		{
+			"fieldname": "assigned_by",
+			"fieldtype": "Select",
+			"label": "Assigned By",
+			"options": "Manual\nExternal AI\nFlow\nImport",
+			"default": "Manual",
+			"reqd": 1
+		},
+		{
+			"fieldname": "confidence",
+			"fieldtype": "Percent",
+			"label": "Confidence"
+		}
+	],
+	"permissions": [
+		{
+			"role": "System Manager",
+			"read": 1,
+			"write": 1,
+			"create": 1,
+			"delete": 1,
+			"export": 1
+		},
+		{
+			"role": "WhatsApp Manager",
+			"read": 1,
+			"write": 1,
+			"create": 1,
+			"delete": 1
+		}
+	],
+	"sort_field": "creation",
+	"sort_order": "ASC"
 }

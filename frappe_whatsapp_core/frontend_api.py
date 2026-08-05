@@ -31,6 +31,7 @@ def bootstrap():
 	if user == "Guest":
 		return {"authenticated": False, "site": frappe.local.site}
 	roles = set(frappe.get_roles(user))
+	can_manage = bool(roles & {"System Manager", "WhatsApp Manager"})
 	return {
 		"authenticated": True,
 		"site": frappe.local.site,
@@ -39,8 +40,9 @@ def bootstrap():
 			"full_name": frappe.db.get_value("User", user, "full_name") or user,
 			"roles": sorted(roles & CORE_ACCESS_ROLES),
 		},
-		"can_manage": bool(roles & {"System Manager", "WhatsApp Core Admin", "WhatsApp Core Manager"}),
-		"modules": [
+		"can_manage": can_manage,
+		"default_module": "dashboard" if can_manage else "inbox",
+		"modules": ([
 			"inbox",
 			"dashboard",
 			"templates",
@@ -54,12 +56,12 @@ def bootstrap():
 			"health",
 			"settings",
 			"teams",
-		],
+		] if can_manage else ["inbox"]),
 	}
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def dashboard():
 	return {
 		"metrics": {
@@ -76,7 +78,7 @@ def dashboard():
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def list_flows():
 	return frappe.get_list(
 		"WhatsApp Core Flow",
@@ -108,7 +110,7 @@ def create_starter_flow(title, flow_key):
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def campaign_workspace():
 	campaigns = frappe.get_all(
 		"WhatsApp Core Campaign",
@@ -197,7 +199,7 @@ def template_catalog():
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def ai_queue_workspace(limit: int = 100):
 	limit = max(1, min(int(limit), 250))
 	messages = unclassified_messages(limit=limit)
@@ -260,7 +262,7 @@ def classify_messages(
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def connectors_workspace():
 	extension_points = [
 		_extension_point(
@@ -312,7 +314,7 @@ def connectors_workspace():
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def polls_workspace():
 	flows = frappe.get_all(
 		"WhatsApp Core Flow",
@@ -373,7 +375,7 @@ def polls_workspace():
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def health_workspace():
 	recent_failures = []
 	for doctype, source, fields in (
@@ -460,7 +462,7 @@ def health_workspace():
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def settings_workspace():
 	settings = frappe.get_single("WhatsApp Core Settings")
 	return {

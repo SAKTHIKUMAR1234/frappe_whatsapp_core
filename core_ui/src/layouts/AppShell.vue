@@ -14,8 +14,14 @@
 	const mobileOpen = ref(false)
 	const tenantLabel = computed(() => session.boot?.site || 'Current Frappe site')
 	const primaryRole = computed(
-		() => session.user?.roles?.find((role) => role.startsWith('WhatsApp Core')) || 'Site user',
+		() => session.user?.roles?.find((role) => role.startsWith('WhatsApp ')) || 'Site user',
 	)
+	const visibleNavigation = computed(() => {
+		const modules = new Set(session.boot?.modules || [])
+		return navigation
+			.map((group) => ({ ...group, items: group.items.filter((item) => modules.has(item.module)) }))
+			.filter((group) => group.items.length)
+	})
 
 	const initials = computed(() =>
 		(session.user?.full_name || 'U')
@@ -62,7 +68,7 @@
 			</div>
 
 			<nav>
-				<section v-for="group in navigation" :key="group.label" class="nav-group">
+				<section v-for="group in visibleNavigation" :key="group.label" class="nav-group">
 					<div class="nav-label">{{ group.label }}</div>
 					<RouterLink
 						v-for="item in group.items"

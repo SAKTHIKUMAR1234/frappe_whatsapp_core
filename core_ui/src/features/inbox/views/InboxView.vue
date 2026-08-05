@@ -30,6 +30,7 @@
 	const router = useRouter()
 	const toast = useToast()
 	const session = useSessionStore()
+	const canManage = computed(() => Boolean(session.boot?.can_manage))
 	const loading = ref(true)
 	const detailLoading = ref(false)
 	const loadingOlder = ref(false)
@@ -359,6 +360,7 @@
 	}
 
 	async function openNewChat() {
+		if (!canManage.value) return
 		const [templateData, settingsData] = await Promise.all([
 			call('frappe_whatsapp_core.frontend_api.template_catalog'),
 			call('frappe_whatsapp_core.frontend_api.settings_workspace'),
@@ -450,7 +452,7 @@
 				<Button outlined aria-label="Refresh" @click="loadRows"
 					><RefreshCw :size="16"
 				/></Button>
-				<Button label="New chat" @click="openNewChat">
+				<Button v-if="canManage" label="New chat" @click="openNewChat">
 					<template #icon><MessageSquarePlus :size="16" /></template>
 				</Button>
 			</div>
@@ -604,7 +606,7 @@
 				</template>
 			</main>
 
-			<ConversationContext v-if="detail" :data="detail" @status="updateStatus" />
+			<ConversationContext v-if="detail" :data="detail" :can-manage="canManage" @status="updateStatus" />
 			<aside v-else class="context-placeholder"></aside>
 		</section>
 

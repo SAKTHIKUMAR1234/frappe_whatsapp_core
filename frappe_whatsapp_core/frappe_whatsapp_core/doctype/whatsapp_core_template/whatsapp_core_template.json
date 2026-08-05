@@ -1,48 +1,121 @@
 {
- "doctype": "DocType",
- "name": "WhatsApp Core Template",
- "module": "Frappe WhatsApp Core",
- "autoname": "field:template_key",
- "naming_rule": "By fieldname",
- "engine": "InnoDB",
- "field_order": [
-  "template_key",
-  "template_name",
-  "language_code",
-  "category",
-  "approval_status",
-  "enabled",
-  "template_id",
-  "header_type",
-  "header_content",
-  "body_text",
-  "footer_text",
-  "components",
-  "last_synced_at"
- ],
- "fields": [
-  {"fieldname": "template_key", "fieldtype": "Data", "label": "Template Key", "reqd": 1, "unique": 1, "in_list_view": 1},
-  {"fieldname": "template_name", "fieldtype": "Data", "label": "Template Name", "reqd": 1, "in_list_view": 1},
-  {"fieldname": "language_code", "fieldtype": "Data", "label": "Language Code", "default": "en", "reqd": 1},
-  {"fieldname": "category", "fieldtype": "Data", "label": "Category"},
-  {"fieldname": "approval_status", "fieldtype": "Select", "label": "Meta Approval Status", "options": "UNKNOWN\nDRAFT\nIN_REVIEW\nAPPROVED\nREJECTED\nPAUSED\nDISABLED", "default": "UNKNOWN", "reqd": 1, "in_list_view": 1},
-  {"fieldname": "enabled", "fieldtype": "Check", "label": "Enabled For This Site", "default": "1", "in_list_view": 1},
-  {"fieldname": "template_id", "fieldtype": "Data", "label": "Meta Template ID"},
-  {"fieldname": "header_type", "fieldtype": "Data", "label": "Header Type"},
-  {"fieldname": "header_content", "fieldtype": "Small Text", "label": "Header Content"},
-  {"fieldname": "body_text", "fieldtype": "Text", "label": "Body Text"},
-  {"fieldname": "footer_text", "fieldtype": "Small Text", "label": "Footer Text"},
-  {"fieldname": "components", "fieldtype": "JSON", "label": "Components"},
-  {"fieldname": "last_synced_at", "fieldtype": "Datetime", "label": "Last Synced At", "read_only": 1}
- ],
- "permissions": [
-  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1},
-  {"role": "WhatsApp Core Admin", "read": 1},
-  {"role": "WhatsApp Core Manager", "read": 1},
-  {"role": "WhatsApp Core Agent", "read": 1},
-  {"role": "WhatsApp Core Analyst", "read": 1, "export": 1}
- ],
- "sort_field": "modified",
- "sort_order": "DESC",
- "track_changes": 1
+	"doctype": "DocType",
+	"name": "WhatsApp Core Template",
+	"module": "Frappe WhatsApp Core",
+	"autoname": "field:template_key",
+	"naming_rule": "By fieldname",
+	"engine": "InnoDB",
+	"field_order": [
+		"template_key",
+		"template_name",
+		"language_code",
+		"category",
+		"approval_status",
+		"enabled",
+		"template_id",
+		"header_type",
+		"header_content",
+		"body_text",
+		"footer_text",
+		"components",
+		"last_synced_at"
+	],
+	"fields": [
+		{
+			"fieldname": "template_key",
+			"fieldtype": "Data",
+			"label": "Template Key",
+			"reqd": 1,
+			"unique": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "template_name",
+			"fieldtype": "Data",
+			"label": "Template Name",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "language_code",
+			"fieldtype": "Data",
+			"label": "Language Code",
+			"default": "en",
+			"reqd": 1
+		},
+		{
+			"fieldname": "category",
+			"fieldtype": "Data",
+			"label": "Category"
+		},
+		{
+			"fieldname": "approval_status",
+			"fieldtype": "Select",
+			"label": "Meta Approval Status",
+			"options": "UNKNOWN\nDRAFT\nIN_REVIEW\nAPPROVED\nREJECTED\nPAUSED\nDISABLED",
+			"default": "UNKNOWN",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "enabled",
+			"fieldtype": "Check",
+			"label": "Enabled For This Site",
+			"default": "1",
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "template_id",
+			"fieldtype": "Data",
+			"label": "Meta Template ID"
+		},
+		{
+			"fieldname": "header_type",
+			"fieldtype": "Data",
+			"label": "Header Type"
+		},
+		{
+			"fieldname": "header_content",
+			"fieldtype": "Small Text",
+			"label": "Header Content"
+		},
+		{
+			"fieldname": "body_text",
+			"fieldtype": "Text",
+			"label": "Body Text"
+		},
+		{
+			"fieldname": "footer_text",
+			"fieldtype": "Small Text",
+			"label": "Footer Text"
+		},
+		{
+			"fieldname": "components",
+			"fieldtype": "JSON",
+			"label": "Components"
+		},
+		{
+			"fieldname": "last_synced_at",
+			"fieldtype": "Datetime",
+			"label": "Last Synced At",
+			"read_only": 1
+		}
+	],
+	"permissions": [
+		{
+			"role": "System Manager",
+			"read": 1,
+			"write": 1,
+			"create": 1,
+			"delete": 1,
+			"export": 1
+		},
+		{
+			"role": "WhatsApp Manager",
+			"read": 1
+		}
+	],
+	"sort_field": "modified",
+	"sort_order": "DESC",
+	"track_changes": 1
 }

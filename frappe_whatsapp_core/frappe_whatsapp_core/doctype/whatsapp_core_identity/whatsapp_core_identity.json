@@ -1,30 +1,106 @@
 {
- "doctype": "DocType",
- "name": "WhatsApp Core Identity",
- "module": "Frappe WhatsApp Core",
- "autoname": "field:identity_key",
- "naming_rule": "By fieldname",
- "engine": "InnoDB",
- "field_order": ["identity_key", "identity_type", "normalized_value", "display_value", "provider", "status", "resolution_status", "primary_link", "last_resolved_at", "attributes"],
- "fields": [
-  {"fieldname": "identity_key", "fieldtype": "Data", "label": "Identity Key", "reqd": 1, "unique": 1},
-  {"fieldname": "identity_type", "fieldtype": "Select", "label": "Identity Type", "options": "WhatsApp\nPhone\nEmail\nExternal", "reqd": 1},
-  {"fieldname": "normalized_value", "fieldtype": "Data", "label": "Normalized Value", "reqd": 1, "unique": 1, "in_list_view": 1},
-  {"fieldname": "display_value", "fieldtype": "Data", "label": "Display Value"},
-  {"fieldname": "provider", "fieldtype": "Data", "label": "Provider"},
-  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Active\nBlocked\nSuperseded", "default": "Active", "reqd": 1},
-  {"fieldname": "resolution_status", "fieldtype": "Select", "label": "Resolution Status", "options": "Unresolved\nResolved\nAmbiguous", "default": "Unresolved", "reqd": 1, "in_list_view": 1},
-  {"fieldname": "primary_link", "fieldtype": "Link", "label": "Primary Business Link", "options": "WhatsApp Core Identity Link", "read_only": 1},
-  {"fieldname": "last_resolved_at", "fieldtype": "Datetime", "label": "Last Resolved At", "read_only": 1},
-  {"fieldname": "attributes", "fieldtype": "JSON", "label": "Attributes"}
- ],
- "permissions": [
-  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1},
-  {"role": "WhatsApp Core Admin", "read": 1, "export": 1},
-  {"role": "WhatsApp Core Manager", "read": 1, "export": 1},
-  {"role": "WhatsApp Core Agent", "read": 1},
-  {"role": "WhatsApp Core Analyst", "read": 1, "export": 1}
- ],
- "sort_field": "modified",
- "sort_order": "DESC"
+	"doctype": "DocType",
+	"name": "WhatsApp Core Identity",
+	"module": "Frappe WhatsApp Core",
+	"autoname": "field:identity_key",
+	"naming_rule": "By fieldname",
+	"engine": "InnoDB",
+	"field_order": [
+		"identity_key",
+		"identity_type",
+		"normalized_value",
+		"display_value",
+		"provider",
+		"status",
+		"resolution_status",
+		"primary_link",
+		"last_resolved_at",
+		"attributes"
+	],
+	"fields": [
+		{
+			"fieldname": "identity_key",
+			"fieldtype": "Data",
+			"label": "Identity Key",
+			"reqd": 1,
+			"unique": 1
+		},
+		{
+			"fieldname": "identity_type",
+			"fieldtype": "Select",
+			"label": "Identity Type",
+			"options": "WhatsApp\nPhone\nEmail\nExternal",
+			"reqd": 1
+		},
+		{
+			"fieldname": "normalized_value",
+			"fieldtype": "Data",
+			"label": "Normalized Value",
+			"reqd": 1,
+			"unique": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "display_value",
+			"fieldtype": "Data",
+			"label": "Display Value"
+		},
+		{
+			"fieldname": "provider",
+			"fieldtype": "Data",
+			"label": "Provider"
+		},
+		{
+			"fieldname": "status",
+			"fieldtype": "Select",
+			"label": "Status",
+			"options": "Active\nBlocked\nSuperseded",
+			"default": "Active",
+			"reqd": 1
+		},
+		{
+			"fieldname": "resolution_status",
+			"fieldtype": "Select",
+			"label": "Resolution Status",
+			"options": "Unresolved\nResolved\nAmbiguous",
+			"default": "Unresolved",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "primary_link",
+			"fieldtype": "Link",
+			"label": "Primary Business Link",
+			"options": "WhatsApp Core Identity Link",
+			"read_only": 1
+		},
+		{
+			"fieldname": "last_resolved_at",
+			"fieldtype": "Datetime",
+			"label": "Last Resolved At",
+			"read_only": 1
+		},
+		{
+			"fieldname": "attributes",
+			"fieldtype": "JSON",
+			"label": "Attributes"
+		}
+	],
+	"permissions": [
+		{
+			"role": "System Manager",
+			"read": 1,
+			"write": 1,
+			"create": 1,
+			"delete": 1,
+			"export": 1
+		},
+		{
+			"role": "WhatsApp Manager",
+			"read": 1,
+			"export": 1
+		}
+	],
+	"sort_field": "modified",
+	"sort_order": "DESC"
 }

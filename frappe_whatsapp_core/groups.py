@@ -11,7 +11,7 @@ def _account(account_name=None):
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def group_workspace(account_name=None, limit=100, after=None, before=None):
 	selected = _account(account_name)
 	result = _call("groups", "list_groups", {
@@ -21,7 +21,7 @@ def group_workspace(account_name=None, limit=100, after=None, before=None):
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def get_group(account_name, group_id):
 	return _call("groups", "get_group", {"account_name": _account(account_name), "group_id": group_id})
 
@@ -60,7 +60,7 @@ def delete_group(account_name, group_id):
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def get_invite_link(account_name, group_id):
 	return _call("groups", "get_invite_link", {"account_name": _account(account_name), "group_id": group_id})
 
@@ -72,7 +72,7 @@ def reset_invite_link(account_name, group_id):
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def list_join_requests(account_name, group_id):
 	return _call("groups", "list_join_requests", {"account_name": _account(account_name), "group_id": group_id})
 
@@ -95,7 +95,7 @@ def remove_participants(account_name, group_id, participants):
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def send_group_message(account_name, group_id, message_type, content, idempotency_key=None):
 	return _call("groups", "send_group_message", {
 		"account_name": _account(account_name), "group_id": group_id,
@@ -104,7 +104,7 @@ def send_group_message(account_name, group_id, message_type, content, idempotenc
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def pin_group_message(account_name, group_id, message_id, operation="pin", expiration_days=None):
 	return _call("groups", "pin_group_message", {
 		"account_name": _account(account_name), "group_id": group_id,

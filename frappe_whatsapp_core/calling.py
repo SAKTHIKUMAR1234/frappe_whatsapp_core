@@ -7,7 +7,7 @@ from frappe_whatsapp_core.permissions import require_core_access
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def calling_workspace(account_name=None, include_sip_credentials=0):
 	selected = _resolve_account_name(account_name)
 	settings = _call("calling", "get_call_settings", {
@@ -29,7 +29,7 @@ def update_call_settings(account_name, calling):
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def get_call_permission(account_name, user_wa_id=None, recipient=None):
 	return _call("calling", "get_call_permission", {
 		"account_name": _resolve_account_name(account_name), "user_wa_id": user_wa_id, "recipient": recipient,
@@ -37,7 +37,7 @@ def get_call_permission(account_name, user_wa_id=None, recipient=None):
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def request_call_permission(account_name, body_text, to_number=None, recipient=None):
 	return _call("calling", "request_call_permission", {
 		"account_name": _resolve_account_name(account_name), "body_text": body_text,
@@ -46,7 +46,7 @@ def request_call_permission(account_name, body_text, to_number=None, recipient=N
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def call_action(account_name, action, call_id=None, to_number=None, recipient=None, sdp_type=None, sdp=None, biz_opaque_callback_data=None):
 	return _call("calling", "call_action", {
 		"account_name": _resolve_account_name(account_name), "action": action,

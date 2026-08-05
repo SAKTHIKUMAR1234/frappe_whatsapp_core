@@ -1,135 +1,121 @@
 {
- "doctype": "DocType",
- "name": "WhatsApp Core Conversation Topic",
- "module": "Frappe WhatsApp Core",
- "autoname": "field:topic_key",
- "naming_rule": "By fieldname",
- "engine": "InnoDB",
- "field_order": [
-  "topic_key",
-  "conversation",
-  "title",
-  "summary",
-  "category",
-  "status",
-  "confidence",
-  "source",
-  "first_message",
-  "last_message",
-  "message_count",
-  "attributes"
- ],
- "fields": [
-  {
-   "fieldname": "topic_key",
-   "fieldtype": "Data",
-   "label": "Topic Key",
-   "reqd": 1,
-   "unique": 1
-  },
-  {
-   "fieldname": "conversation",
-   "fieldtype": "Link",
-   "label": "Conversation",
-   "options": "WhatsApp Core Conversation",
-   "reqd": 1,
-   "in_list_view": 1
-  },
-  {
-   "fieldname": "title",
-   "fieldtype": "Data",
-   "label": "Title",
-   "reqd": 1,
-   "in_list_view": 1
-  },
-  {
-   "fieldname": "summary",
-   "fieldtype": "Text",
-   "label": "Summary"
-  },
-  {
-   "fieldname": "category",
-   "fieldtype": "Data",
-   "label": "Category",
-   "in_list_view": 1
-  },
-  {
-   "fieldname": "status",
-   "fieldtype": "Select",
-   "label": "Status",
-   "options": "Open\nWaiting\nResolved\nArchived",
-   "default": "Open",
-   "reqd": 1,
-   "in_list_view": 1
-  },
-  {
-   "fieldname": "confidence",
-   "fieldtype": "Percent",
-   "label": "Confidence"
-  },
-  {
-   "fieldname": "source",
-   "fieldtype": "Select",
-   "label": "Source",
-   "options": "Manual\nExternal AI\nFlow\nImport",
-   "default": "Manual",
-   "reqd": 1
-  },
-  {
-   "fieldname": "first_message",
-   "fieldtype": "Link",
-   "label": "First Message",
-   "options": "WhatsApp Core Message"
-  },
-  {
-   "fieldname": "last_message",
-   "fieldtype": "Link",
-   "label": "Last Message",
-   "options": "WhatsApp Core Message"
-  },
-  {
-   "fieldname": "message_count",
-   "fieldtype": "Int",
-   "label": "Message Count",
-   "read_only": 1
-  },
-  {
-   "fieldname": "attributes",
-   "fieldtype": "JSON",
-   "label": "Attributes"
-  }
- ],
- "permissions": [
-  {
-   "role": "System Manager",
-   "read": 1,
-   "write": 1,
-   "create": 1,
-   "delete": 1,
-   "export": 1
-  },
-  {
-   "role": "WhatsApp Core Admin",
-   "read": 1,
-   "write": 1,
-   "create": 1,
-   "delete": 1
-  },
-  {
-   "role": "WhatsApp Core Manager",
-   "read": 1,
-   "write": 1,
-   "create": 1
-  },
-  {
-   "role": "WhatsApp Core Agent",
-   "read": 1
-  },
-  {
-   "role": "WhatsApp Core Analyst",
-   "read": 1
-  }
- ],
- "sort_field": "modified",
- "sort_order": "DESC"
+	"doctype": "DocType",
+	"name": "WhatsApp Core Conversation Topic",
+	"module": "Frappe WhatsApp Core",
+	"autoname": "field:topic_key",
+	"naming_rule": "By fieldname",
+	"engine": "InnoDB",
+	"field_order": [
+		"topic_key",
+		"conversation",
+		"title",
+		"summary",
+		"category",
+		"status",
+		"confidence",
+		"source",
+		"first_message",
+		"last_message",
+		"message_count",
+		"attributes"
+	],
+	"fields": [
+		{
+			"fieldname": "topic_key",
+			"fieldtype": "Data",
+			"label": "Topic Key",
+			"reqd": 1,
+			"unique": 1
+		},
+		{
+			"fieldname": "conversation",
+			"fieldtype": "Link",
+			"label": "Conversation",
+			"options": "WhatsApp Core Conversation",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "title",
+			"fieldtype": "Data",
+			"label": "Title",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "summary",
+			"fieldtype": "Text",
+			"label": "Summary"
+		},
+		{
+			"fieldname": "category",
+			"fieldtype": "Data",
+			"label": "Category",
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "status",
+			"fieldtype": "Select",
+			"label": "Status",
+			"options": "Open\nWaiting\nResolved\nArchived",
+			"default": "Open",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "confidence",
+			"fieldtype": "Percent",
+			"label": "Confidence"
+		},
+		{
+			"fieldname": "source",
+			"fieldtype": "Select",
+			"label": "Source",
+			"options": "Manual\nExternal AI\nFlow\nImport",
+			"default": "Manual",
+			"reqd": 1
+		},
+		{
+			"fieldname": "first_message",
+			"fieldtype": "Link",
+			"label": "First Message",
+			"options": "WhatsApp Core Message"
+		},
+		{
+			"fieldname": "last_message",
+			"fieldtype": "Link",
+			"label": "Last Message",
+			"options": "WhatsApp Core Message"
+		},
+		{
+			"fieldname": "message_count",
+			"fieldtype": "Int",
+			"label": "Message Count",
+			"read_only": 1
+		},
+		{
+			"fieldname": "attributes",
+			"fieldtype": "JSON",
+			"label": "Attributes"
+		}
+	],
+	"permissions": [
+		{
+			"role": "System Manager",
+			"read": 1,
+			"write": 1,
+			"create": 1,
+			"delete": 1,
+			"export": 1
+		},
+		{
+			"role": "WhatsApp Manager",
+			"read": 1,
+			"write": 1,
+			"create": 1,
+			"delete": 1
+		}
+	],
+	"sort_field": "modified",
+	"sort_order": "DESC"
 }

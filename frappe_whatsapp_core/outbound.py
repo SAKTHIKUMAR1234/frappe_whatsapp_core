@@ -116,7 +116,7 @@ def outbound_state(conversation: str | None = None) -> dict:
 
 
 @frappe.whitelist()
-@require_core_access()
+@require_core_access(manage=True)
 def start_conversation(
 	channel: str,
 	phone_number: str,
