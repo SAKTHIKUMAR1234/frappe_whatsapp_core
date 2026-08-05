@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
@@ -8,6 +10,10 @@ from frappe_whatsapp_core.campaigns import (
 	prepare_campaign,
 )
 from frappe_whatsapp_core.template_catalog import sync_template_projection
+
+
+def blocked_campaign_preflight(_context):
+	return {"ready": False, "reasons": ["Test business gate is locked"]}
 
 
 class TestCampaigns(FrappeTestCase):
@@ -95,7 +101,7 @@ class TestCampaigns(FrappeTestCase):
 		self.assertTrue(summary["send_authorized"])
 		self.assertEqual(summary["template_approval_status"], "APPROVED")
 
-	def test_essdee_preflight_blocks_launch_while_safety_gates_are_locked(self):
+	def test_business_preflight_blocks_launch_while_gate_is_locked(self):
 		prepare_campaign(
 			self.campaign.name,
 			[self.identities[0].name],
@@ -104,8 +110,14 @@ class TestCampaigns(FrappeTestCase):
 			self.campaign.name,
 			f"AUTHORIZE {self.campaign.campaign_key}",
 		)
-		with self.assertRaises(frappe.ValidationError):
-			launch_campaign(self.campaign.name)
+		with patch(
+			"frappe_whatsapp_core.campaigns.frappe.get_hooks",
+			return_value=[
+				"frappe_whatsapp_core.tests.test_campaigns.blocked_campaign_preflight"
+			],
+		):
+			with self.assertRaises(frappe.ValidationError):
+				launch_campaign(self.campaign.name)
 		self.assertEqual(
 			frappe.db.get_value(
 				"WhatsApp Core Campaign",
@@ -114,4 +126,3 @@ class TestCampaigns(FrappeTestCase):
 			),
 			"Prepared",
 		)
-

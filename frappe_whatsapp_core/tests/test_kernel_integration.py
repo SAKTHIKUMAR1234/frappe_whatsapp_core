@@ -39,14 +39,53 @@ MESSAGE_PAYLOAD = {
 	}],
 }
 
+TEST_SOLUTION_MANIFEST = {
+	"key": "core.test_operations",
+	"name": "Core Test Operations",
+	"version": "0.1.0",
+	"workspaces": [
+		{"key": "core.test_operations.support", "name": "Support"},
+		{"key": "core.test_operations.sales", "name": "Sales"},
+		{"key": "core.test_operations.collections", "name": "Collections"},
+	],
+	"case_types": [
+		{
+			"key": "core.test_operations.tech_support",
+			"name": "Technical Support",
+			"workspace": "core.test_operations.support",
+			"initial_stage": "reported",
+			"fields": {"description": "string"},
+			"stages": [
+				{"key": "reported", "name": "Reported", "state": "open", "required_fields": ["description"]},
+				{"key": "diagnosing", "name": "Diagnosing", "state": "active"},
+				{"key": "resolved", "name": "Resolved", "state": "done"},
+			],
+		},
+		{
+			"key": "core.test_operations.sales_enquiry",
+			"name": "Sales Enquiry",
+			"workspace": "core.test_operations.sales",
+			"initial_stage": "new",
+			"fields": {},
+			"stages": [{"key": "new", "name": "New", "state": "open"}],
+		},
+		{
+			"key": "core.test_operations.collection_followup",
+			"name": "Collection Follow-up",
+			"workspace": "core.test_operations.collections",
+			"initial_stage": "due",
+			"fields": {},
+			"stages": [{"key": "due", "name": "Due", "state": "open"}],
+		},
+	],
+}
+
 
 class TestKernelIntegration(FrappeTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
-		from essdee_whatsapp.solution_pack import MANIFEST
-
-		cls.manifest = copy.deepcopy(MANIFEST)
+		cls.manifest = copy.deepcopy(TEST_SOLUTION_MANIFEST)
 		install_pack(cls.manifest)
 
 	def _event(self, event_id, payload):
@@ -64,11 +103,11 @@ class TestKernelIntegration(FrappeTestCase):
 		second = install_pack(copy.deepcopy(self.manifest))
 		self.assertEqual(first, second)
 		self.assertEqual(
-			frappe.db.count("WhatsApp Core Workspace", {"solution": "essdee.operations"}),
+			frappe.db.count("WhatsApp Core Workspace", {"solution": "core.test_operations"}),
 			3,
 		)
 		self.assertEqual(
-			frappe.db.count("WhatsApp Core Case Type", {"solution": "essdee.operations"}),
+			frappe.db.count("WhatsApp Core Case Type", {"solution": "core.test_operations"}),
 			3,
 		)
 
@@ -183,10 +222,10 @@ class TestKernelIntegration(FrappeTestCase):
 
 	def test_case_required_fields_and_terminal_transition(self):
 		with self.assertRaises(frappe.ValidationError):
-			create_case("essdee.operations.tech_support", "Missing description")
+			create_case("core.test_operations.tech_support", "Missing description")
 
 		case = create_case(
-			"essdee.operations.tech_support",
+			"core.test_operations.tech_support",
 			"Printer is offline",
 			{"description": "Warehouse printer is unreachable"},
 		)
