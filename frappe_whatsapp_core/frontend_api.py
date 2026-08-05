@@ -48,6 +48,8 @@ def bootstrap():
 			"ai-queue",
 			"polls",
 			"flows",
+			"groups",
+			"calling",
 			"connectors",
 			"health",
 			"settings",

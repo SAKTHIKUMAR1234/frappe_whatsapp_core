@@ -7,6 +7,16 @@ import json
 import frappe
 
 from frappe_whatsapp_core.cases import create_case
+from frappe_whatsapp_core.calling import (
+	call_action as whatsapp_call_action,
+	get_call_permission as whatsapp_get_call_permission,
+	request_call_permission as whatsapp_request_call_permission,
+)
+from frappe_whatsapp_core.groups import (
+	get_group as whatsapp_get_group,
+	group_workspace as whatsapp_group_workspace,
+	send_group_message as whatsapp_send_group_message,
+)
 from frappe_whatsapp_core.meta_flows import (
 	create_flow as create_meta_flow,
 	flow_workspace as meta_flow_workspace,
@@ -361,6 +371,36 @@ TOOL_DEFINITIONS = [
 			},
 		},
 	},
+	{
+		"name": "whatsapp.list_groups",
+		"description": "List Meta-hosted WhatsApp groups for a mapped Hub account.",
+		"inputSchema": {"type": "object", "properties": {"account_name": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 1024}}},
+	},
+	{
+		"name": "whatsapp.get_group",
+		"description": "Read group metadata, participants and approval mode.",
+		"inputSchema": {"type": "object", "required": ["account_name", "group_id"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}}},
+	},
+	{
+		"name": "whatsapp.send_group_message",
+		"description": "Send a supported text, media or template message to a WhatsApp group.",
+		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "message_type", "content"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "message_type": {"type": "string", "enum": ["text", "image", "video", "audio", "document", "template"]}, "content": {"type": "object"}, "idempotency_key": {"type": "string"}}},
+	},
+	{
+		"name": "whatsapp.get_call_permission",
+		"description": "Check WhatsApp calling permission for a user or business-scoped recipient.",
+		"inputSchema": {"type": "object", "required": ["account_name"], "properties": {"account_name": {"type": "string"}, "user_wa_id": {"type": "string"}, "recipient": {"type": "string"}}},
+	},
+	{
+		"name": "whatsapp.request_call_permission",
+		"description": "Send Meta's native call-permission request interaction.",
+		"inputSchema": {"type": "object", "required": ["account_name", "body_text"], "properties": {"account_name": {"type": "string"}, "body_text": {"type": "string"}, "to_number": {"type": "string"}, "recipient": {"type": "string"}}},
+	},
+	{
+		"name": "whatsapp.call_action",
+		"description": "Perform a WhatsApp call signaling action using WebRTC SDP.",
+		"inputSchema": {"type": "object", "required": ["account_name", "action"], "properties": {"account_name": {"type": "string"}, "action": {"type": "string", "enum": ["connect", "pre_accept", "accept", "reject", "terminate"]}, "call_id": {"type": "string"}, "to_number": {"type": "string"}, "recipient": {"type": "string"}, "sdp_type": {"type": "string", "enum": ["offer", "answer"]}, "sdp": {"type": "string"}, "biz_opaque_callback_data": {"type": "string"}}},
+	},
 ]
 
 
@@ -453,6 +493,12 @@ def call_tool(name: str, arguments: dict | str | None = None) -> dict | list:
 		"whatsapp.create_flow": lambda: create_meta_flow(**arguments),
 		"whatsapp.upload_flow_json": lambda: upload_meta_flow_json(**arguments),
 		"whatsapp.publish_flow": lambda: _publish_meta_flow(arguments),
+		"whatsapp.list_groups": lambda: whatsapp_group_workspace(**arguments),
+		"whatsapp.get_group": lambda: whatsapp_get_group(**arguments),
+		"whatsapp.send_group_message": lambda: whatsapp_send_group_message(**arguments),
+		"whatsapp.get_call_permission": lambda: whatsapp_get_call_permission(**arguments),
+		"whatsapp.request_call_permission": lambda: whatsapp_request_call_permission(**arguments),
+		"whatsapp.call_action": lambda: whatsapp_call_action(**arguments),
 	}
 	handler = handlers.get(name)
 	if not handler:

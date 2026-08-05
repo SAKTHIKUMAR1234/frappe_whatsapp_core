@@ -2,6 +2,8 @@ import {
 	Activity,
 	Bot,
 	GitBranch,
+	PhoneCall,
+	MessagesSquare,
 	LayoutDashboard,
 	Megaphone,
 	MessageCircleMore,
@@ -32,6 +34,8 @@ export const navigation = [
 			{ label: 'Bulk Messaging', route: 'campaigns', icon: Megaphone },
 			{ label: 'AI Queue', route: 'ai-queue', icon: Bot },
 			{ label: 'Forms & Surveys', route: 'polls', icon: Activity },
+			{ label: 'Groups', route: 'groups', icon: MessagesSquare },
+			{ label: 'Calling', route: 'calling', icon: PhoneCall },
 		],
 	},
 	{

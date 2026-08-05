@@ -9,6 +9,14 @@ clone, migrate, deprecate and inspect Meta-hosted WhatsApp Flows. Core records
 native Flow replies in the conversation log and does not render its own copy of
 the customer Flow.
 
+### Groups and Calling
+
+Core manages Meta-hosted WhatsApp Groups, including lifecycle, invite links,
+join approvals, participants, messages and pinned messages. It also supports
+WhatsApp Business Calling settings, permission requests, WebRTC signaling and
+durable call-event logs. Meta's calling control plane is handled here; audio
+media runs through the configured WebRTC or SIP infrastructure.
+
 ### Installation
 
 You can install this app using the [bench](https://github.com/frappe/bench) CLI:

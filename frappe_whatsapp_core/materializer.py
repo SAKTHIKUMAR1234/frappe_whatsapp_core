@@ -26,6 +26,8 @@ def materialize_event(event, payload):
 				results.append(materialize_inbound_message(event, channel, message))
 			for status in value.get("statuses") or []:
 				results.append(materialize_status(channel, status))
+			for call in value.get("calls") or []:
+				results.append(materialize_call(channel, call))
 	return results
 
 
@@ -80,14 +82,10 @@ def materialize_inbound_message(event, channel, provider_message):
 	if frappe.db.exists("WhatsApp Core Message", message_key):
 		return {"kind": "message", "status": "duplicate", "name": message_key}
 
-	identity = get_or_create_identity(provider_message.get("from") or "")
-	ensure_party_bindings(
-		identity.name,
-		{
-			"channel": channel.name,
-			"provider_message": provider_message,
-		},
-	)
+	group_id = provider_message.get("group_id")
+	identity = get_or_create_group_identity(group_id) if group_id else get_or_create_identity(provider_message.get("from") or "")
+	if not group_id:
+		ensure_party_bindings(identity.name, {"channel": channel.name, "provider_message": provider_message})
 	conversation = get_or_create_conversation(channel, identity)
 	message_type = provider_message.get("type") or "unknown"
 	content = provider_message.get(message_type) or {}
@@ -116,6 +114,55 @@ def materialize_inbound_message(event, channel, provider_message):
 	conversation.last_message_at = provider_timestamp
 	conversation.save(ignore_permissions=True)
 	return {"kind": "message", "status": "created", "name": doc.name}
+
+
+def get_or_create_group_identity(group_id):
+	"""Keep a group thread separate from each participant's direct conversation."""
+	group_id = str(group_id or "").strip()
+	if not group_id:
+		frappe.throw("A group ID is required")
+	identity_key = hashlib.sha256(f"whatsapp-group:{group_id}".encode()).hexdigest()
+	if frappe.db.exists("WhatsApp Core Identity", identity_key):
+		return frappe.get_doc("WhatsApp Core Identity", identity_key)
+	doc = frappe.get_doc({
+		"doctype": "WhatsApp Core Identity", "identity_key": identity_key,
+		"identity_type": "External", "normalized_value": f"group:{group_id}",
+		"display_value": group_id, "provider": "meta", "status": "Active",
+		"resolution_status": "Unresolved", "attributes": {"group_id": group_id},
+	})
+	try:
+		doc.insert(ignore_permissions=True)
+	except frappe.DuplicateEntryError:
+		return frappe.get_doc("WhatsApp Core Identity", identity_key)
+	return doc
+
+
+def materialize_call(channel, provider_call):
+	call_id = str(provider_call.get("id") or provider_call.get("call_id") or "").strip()
+	if not call_id:
+		return {"kind": "call", "status": "ignored", "reason": "missing_call_id"}
+	status = str(provider_call.get("event") or provider_call.get("status") or "received")
+	direction = str(provider_call.get("direction") or "Inbound").title()
+	if direction not in {"Inbound", "Outbound"}:
+		direction = "Inbound"
+	values = {
+		"doctype": "WhatsApp Core Call", "call_id": call_id, "channel": channel.name,
+		"direction": direction, "status": status,
+		"remote_number": provider_call.get("from") or provider_call.get("to") or provider_call.get("recipient") or "",
+		"callback_data": provider_call.get("biz_opaque_callback_data") or "",
+		"session": provider_call.get("session") or {}, "last_event": provider_call,
+	}
+	if status in {"connect", "connected", "ringing"}:
+		values["started_at"] = parse_provider_timestamp(provider_call.get("timestamp"))
+	if status in {"terminate", "terminated", "rejected", "failed"}:
+		values["ended_at"] = parse_provider_timestamp(provider_call.get("timestamp"))
+	if frappe.db.exists("WhatsApp Core Call", call_id):
+		doc = frappe.get_doc("WhatsApp Core Call", call_id)
+		doc.update(values)
+		doc.save(ignore_permissions=True)
+		return {"kind": "call", "status": "updated", "name": doc.name}
+	doc = frappe.get_doc(values).insert(ignore_permissions=True)
+	return {"kind": "call", "status": "created", "name": doc.name}
 
 
 def inbound_message_body(message_type: str, content) -> str:

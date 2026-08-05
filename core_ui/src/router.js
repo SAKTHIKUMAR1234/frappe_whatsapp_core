@@ -53,6 +53,16 @@ const routes = [
 				component: () => import('@/features/flows/views/FlowBuilderView.vue'),
 			},
 			{
+				path: 'groups',
+				name: 'groups',
+				component: () => import('@/features/workspaces/views/GroupsView.vue'),
+			},
+			{
+				path: 'calling',
+				name: 'calling',
+				component: () => import('@/features/workspaces/views/CallingView.vue'),
+			},
+			{
 				path: 'connectors',
 				name: 'connectors',
 				component: () => import('@/features/workspaces/views/ConnectorsView.vue'),

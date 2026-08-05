@@ -48,6 +48,16 @@ delete use Meta's API. Native `nfm_reply` responses are materialized into the
 conversation log. The previous local automation engine remains disabled by
 default for backwards-compatible data access only.
 
+## Groups and calling
+
+Core exposes site-scoped Groups and Calling workspaces while the Integration
+Hub owns Meta credentials and Graph API calls. Inbound group messages use an
+identity keyed by `group:<META_GROUP_ID>`, so group traffic cannot be merged
+with a participant's direct conversation. Calling webhooks are projected into
+`WhatsApp Core Call`, with the immutable Core Event retained as the audit
+source. Core manages settings, permissions and SDP signaling; WebRTC or SIP
+handles the audio media path.
+
 ## Configurable business identity
 
 ```text
