@@ -131,6 +131,7 @@ def get_conversation(conversation: str) -> dict:
 def list_messages(
 	conversation: str,
 	before: str | None = None,
+	before_creation: str | None = None,
 	limit: int = 50,
 	search: str | None = None,
 ) -> dict:
@@ -139,7 +140,19 @@ def list_messages(
 	filters = ["conversation = %(conversation)s"]
 	values = {"conversation": conversation, "limit": limit + 1}
 	if before:
-		filters.append("provider_timestamp < %(before)s")
+		if before_creation:
+			filters.append(
+				"""(
+					provider_timestamp < %(before)s
+					OR (
+						provider_timestamp = %(before)s
+						AND creation < %(before_creation)s
+					)
+				)"""
+			)
+			values["before_creation"] = before_creation
+		else:
+			filters.append("provider_timestamp < %(before)s")
 		values["before"] = before
 	if search:
 		filters.append("body LIKE %(search)s")
@@ -166,6 +179,7 @@ def list_messages(
 		"rows": rows,
 		"has_more": has_more,
 		"next_before": rows[-1].provider_timestamp if has_more and rows else None,
+		"next_before_creation": rows[-1].creation if has_more and rows else None,
 	}
 
 

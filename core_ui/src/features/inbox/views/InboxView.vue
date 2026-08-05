@@ -22,10 +22,12 @@
 	const session = useSessionStore()
 	const loading = ref(true)
 	const detailLoading = ref(false)
+	const loadingOlder = ref(false)
 	const sending = ref(false)
 	const search = ref('')
 	const rows = ref([])
 	const detail = ref(null)
+	const messagePage = ref({ has_more: false })
 	const draft = ref('')
 	const stream = ref(null)
 	const newDialog = ref(false)
@@ -91,6 +93,7 @@
 		detailLoading.value = true
 		try {
 			detail.value = await call('frappe_whatsapp_core.inbox.conversation', { name })
+			messagePage.value = detail.value.message_page || { has_more: false }
 			const latest = detail.value.messages.at(-1)?.name
 			if (latest) {
 				await call('frappe_whatsapp_core.inbox.read_conversation', {
@@ -104,6 +107,33 @@
 		} finally {
 			detailLoading.value = false
 		}
+	}
+
+	async function loadOlderMessages() {
+		if (!detail.value || !messagePage.value.has_more || loadingOlder.value || !stream.value)
+			return
+		loadingOlder.value = true
+		const previousHeight = stream.value.scrollHeight
+		try {
+			const page = await call('frappe_whatsapp_core.workspace_api.list_messages', {
+				conversation: selectedName.value,
+				before: messagePage.value.next_before,
+				before_creation: messagePage.value.next_before_creation,
+				limit: 50,
+			})
+			const known = new Set(detail.value.messages.map((message) => message.name))
+			const older = [...page.rows].reverse().filter((message) => !known.has(message.name))
+			detail.value.messages.unshift(...older)
+			messagePage.value = page
+			await nextTick()
+			stream.value.scrollTop = stream.value.scrollHeight - previousHeight
+		} finally {
+			loadingOlder.value = false
+		}
+	}
+
+	function handleStreamScroll() {
+		if (stream.value?.scrollTop <= 64) loadOlderMessages()
 	}
 
 	function selectConversation(name) {
@@ -306,7 +336,18 @@
 						</div>
 						<span>{{ detail.conversation.status }}</span>
 					</header>
-					<div ref="stream" class="message-stream">
+					<div ref="stream" class="message-stream" @scroll.passive="handleStreamScroll">
+						<div v-if="loadingOlder" class="older-loading">
+							Loading older messages…
+						</div>
+						<button
+							v-else-if="messagePage.has_more"
+							class="older-loading older-button"
+							type="button"
+							@click="loadOlderMessages"
+						>
+							Load older messages
+						</button>
 						<details v-for="topic in topics" :key="topic.name" class="topic-group">
 							<summary>
 								<span>
@@ -544,6 +585,21 @@
 		font-size: 9px;
 		text-align: center;
 		text-transform: uppercase;
+	}
+	.older-loading {
+		display: block;
+		width: fit-content;
+		margin: 0 auto 12px;
+		padding: 5px 10px;
+		border: 0;
+		border-radius: 999px;
+		color: #60726a;
+		background: rgba(255, 255, 255, 0.92);
+		font: inherit;
+		font-size: 9px;
+	}
+	.older-button {
+		cursor: pointer;
 	}
 	.topic-group {
 		margin-bottom: 12px;

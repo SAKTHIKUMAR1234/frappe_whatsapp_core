@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
-from frappe.utils import add_to_date, now_datetime
+from frappe.utils import now_datetime
 
 from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS
 from frappe_whatsapp_core.workspace_api import (
@@ -50,7 +50,7 @@ class TestWorkspaceAPI(FrappeTestCase):
 		}).insert(ignore_permissions=True)
 		self.messages = []
 		for index in range(2):
-			timestamp = add_to_date(now, seconds=index)
+			timestamp = now
 			self.messages.append(
 				frappe.get_doc({
 					"doctype": "WhatsApp Core Message",
@@ -81,6 +81,19 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertEqual(len(page["rows"]), 1)
 		self.assertTrue(page["has_more"])
 		self.assertEqual(page["rows"][0].body, "Message 1")
+		older = list_messages(
+			self.conversation.name,
+			before=page["next_before"],
+			before_creation=page["next_before_creation"],
+			limit=1,
+		)
+		self.assertEqual(older["rows"][0].body, "Message 0")
+
+		from frappe_whatsapp_core.inbox import conversation
+
+		inbox_page = conversation(self.conversation.name, message_limit=1)
+		self.assertEqual(inbox_page["messages"][0].body, "Message 1")
+		self.assertTrue(inbox_page["message_page"]["has_more"])
 
 	def test_team_and_outbound_hook_contracts(self):
 		team = upsert_team(

@@ -1,0 +1,10 @@
+{
+	"name": "frappe-whatsapp-core",
+	"version": "0.1.0",
+	"private": true,
+	"scripts": {
+		"postinstall": "cd core_ui && yarn install --check-files",
+		"dev": "cd core_ui && yarn dev",
+		"build": "cd core_ui && yarn build"
+	}
+}

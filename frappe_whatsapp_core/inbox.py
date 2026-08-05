@@ -122,10 +122,15 @@ def conversation(name: str, message_limit: int = 500) -> dict:
 			"provider_timestamp",
 			"delivery_status",
 			"failure",
+			"creation",
 		],
-		order_by="provider_timestamp asc, creation asc",
-		limit_page_length=message_limit,
+		order_by="provider_timestamp desc, creation desc",
+		limit_page_length=message_limit + 1,
 	)
+	has_more_messages = len(messages) > message_limit
+	messages = messages[:message_limit]
+	oldest_loaded = messages[-1] if messages else None
+	messages.reverse()
 	return {
 		"conversation": doc.as_dict(),
 		"identity": identity.as_dict(),
@@ -137,6 +142,19 @@ def conversation(name: str, message_limit: int = 500) -> dict:
 		),
 		"party_bindings": bindings,
 		"messages": messages,
+		"message_page": {
+			"has_more": has_more_messages,
+			"next_before": (
+				oldest_loaded.provider_timestamp
+				if has_more_messages and oldest_loaded
+				else None
+			),
+			"next_before_creation": (
+				oldest_loaded.creation
+				if has_more_messages and oldest_loaded
+				else None
+			),
+		},
 		"topics": list_topics(doc.name),
 		"readers": frappe.get_all(
 			"WhatsApp Core Conversation Read",

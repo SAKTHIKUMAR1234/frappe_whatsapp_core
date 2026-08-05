@@ -100,11 +100,11 @@ Exact business audience ──► Prepared campaign
                  Meta approved ────┤
                  named SEND gate ──┤
                                    ▼
-                        Business sender adapter
+                      Core batch sender / adapter
                                    │
-                      one recipient at a time
+                       up to 40 per HTTP request
                                    ▼
-                         Durable relay queue
+                  independent durable JetStream items
 ```
 
 Audience resolution is a business-app responsibility. Core stores only exact
