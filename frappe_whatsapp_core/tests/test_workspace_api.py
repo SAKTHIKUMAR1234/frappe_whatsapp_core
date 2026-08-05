@@ -7,6 +7,7 @@ from frappe.utils import add_to_date, now_datetime
 
 from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS
 from frappe_whatsapp_core.workspace_api import (
+	_outbound_handler,
 	get_conversation,
 	list_conversations,
 	list_messages,
@@ -96,6 +97,30 @@ class TestWorkspaceAPI(FrappeTestCase):
 			result = send_text(self.conversation.name, "Hello")
 			self.assertEqual(result["name"], "queued-message")
 			sender.assert_called_once_with(self.conversation.name, "Hello")
+
+	def test_outbound_handler_uses_core_defaults_without_adapter_hooks(self):
+		from frappe_whatsapp_core.outbound import queue_template, queue_text
+
+		with patch(
+			"frappe_whatsapp_core.workspace_api.frappe.get_hooks",
+			return_value=[],
+		):
+			self.assertIs(
+				_outbound_handler("whatsapp_core_outbound_text_sender"),
+				queue_text,
+			)
+			self.assertIs(
+				_outbound_handler("whatsapp_core_outbound_template_sender"),
+				queue_template,
+			)
+
+	def test_outbound_handler_rejects_ambiguous_adapter_hooks(self):
+		with patch(
+			"frappe_whatsapp_core.workspace_api.frappe.get_hooks",
+			return_value=["adapter.one", "adapter.two"],
+		):
+			with self.assertRaises(frappe.ValidationError):
+				_outbound_handler("whatsapp_core_outbound_text_sender")
 
 	def test_mcp_manifest_covers_operator_and_management_surfaces(self):
 		names = {tool["name"] for tool in TOOL_DEFINITIONS}

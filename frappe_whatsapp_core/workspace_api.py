@@ -313,12 +313,26 @@ def upsert_team(
 
 def _outbound_handler(hook_name: str):
 	paths = frappe.get_hooks(hook_name)
-	if len(paths) != 1:
+	if len(paths) > 1:
 		frappe.throw(
-			f"Exactly one {hook_name} hook must be configured",
+			f"At most one {hook_name} hook may be configured",
 			frappe.ValidationError,
 		)
-	return frappe.get_attr(paths[0])
+	if paths:
+		return frappe.get_attr(paths[0])
+	from frappe_whatsapp_core.outbound import queue_template, queue_text
+
+	defaults = {
+		"whatsapp_core_outbound_text_sender": queue_text,
+		"whatsapp_core_outbound_template_sender": queue_template,
+	}
+	handler = defaults.get(hook_name)
+	if not handler:
+		frappe.throw(
+			f"No default outbound handler exists for {hook_name}",
+			frappe.ValidationError,
+		)
+	return handler
 
 
 def _assert_conversation_access(conversation: str) -> None:
