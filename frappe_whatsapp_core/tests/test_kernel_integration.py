@@ -6,12 +6,18 @@ from datetime import datetime
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from frappe_whatsapp_core.api import receive_outbound_result
 from frappe_whatsapp_core.cases import create_case, transition_case
 from frappe_whatsapp_core.flow_router import route_inbound
 from frappe_whatsapp_core.flows import publish_flow, resume_flow
-from frappe_whatsapp_core.materializer import materialize_event
+from frappe_whatsapp_core.materializer import (
+	get_or_create_channel,
+	get_or_create_conversation,
+	get_or_create_identity,
+	materialize_event,
+	materialize_status,
+)
 from frappe_whatsapp_core.packs import install_pack
-
 
 MESSAGE_PAYLOAD = {
 	"object": "whatsapp_business_account",
@@ -81,8 +87,27 @@ class TestKernelIntegration(FrappeTestCase):
 		message = frappe.get_doc("WhatsApp Core Message", created[0]["name"])
 		self.assertEqual(message.body, "Test message")
 		self.assertEqual(message.provider_timestamp, datetime(2024, 4, 5, 19, 34, 38))
-		self.assertEqual(frappe.db.count("WhatsApp Core Conversation"), 1)
-		self.assertEqual(frappe.db.count("WhatsApp Core Identity"), 1)
+		conversation = frappe.get_doc(
+			"WhatsApp Core Conversation",
+			message.conversation,
+		)
+		self.assertEqual(
+			frappe.db.count(
+				"WhatsApp Core Conversation",
+				{
+					"channel": message.channel,
+					"remote_identity": conversation.remote_identity,
+				},
+			),
+			1,
+		)
+		self.assertEqual(
+			frappe.db.count(
+				"WhatsApp Core Identity",
+				{"normalized_value": "919999999999"},
+			),
+			1,
+		)
 
 		status_payload = {
 			"entry": [{
@@ -106,6 +131,55 @@ class TestKernelIntegration(FrappeTestCase):
 			frappe.db.get_value("WhatsApp Core Message", message.name, "delivery_status"),
 			"Delivered",
 		)
+
+	def test_durable_outbound_result_maps_provider_id_without_regression(self):
+		suffix = frappe.generate_hash(length=10)
+		channel = get_or_create_channel(f"callback-phone-{suffix}")
+		identity = get_or_create_identity(
+			f"9198{frappe.utils.now_datetime().strftime('%H%M%S%f')}"
+		)
+		conversation = get_or_create_conversation(channel, identity)
+		message_key = f"callback-message-{suffix}"
+		message = frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": message_key,
+			"idempotency_key": message_key,
+			"conversation": conversation.name,
+			"channel": channel.name,
+			"provider_message_id": f"local:{suffix}",
+			"direction": "Outbound",
+			"message_type": "text",
+			"body": "Queued",
+			"content": "{}",
+			"provider_timestamp": frappe.utils.now_datetime(),
+			"delivery_status": "Queued",
+		}).insert(ignore_permissions=True)
+
+		result = receive_outbound_result(
+			message.name,
+			"sent",
+			success=1,
+			event_id=f"relay-{suffix}",
+			meta_message_id=f"wamid.{suffix}",
+			status_code=200,
+			attempt=1,
+		)
+		self.assertEqual(result["delivery_status"], "Sent")
+		message.reload()
+		self.assertEqual(message.provider_message_id, f"wamid.{suffix}")
+
+		materialize_status(
+			channel,
+			{"id": f"wamid.{suffix}", "status": "delivered"},
+		)
+		receive_outbound_result(
+			message.name,
+			"sent",
+			success=1,
+			meta_message_id=f"wamid.{suffix}",
+		)
+		message.reload()
+		self.assertEqual(message.delivery_status, "Delivered")
 
 	def test_case_required_fields_and_terminal_transition(self):
 		with self.assertRaises(frappe.ValidationError):

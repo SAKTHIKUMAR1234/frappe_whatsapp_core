@@ -4,6 +4,7 @@ import json
 import frappe
 from frappe.utils import now_datetime
 
+from frappe_whatsapp_core.delivery import advance_delivery_status
 from frappe_whatsapp_core.dispatcher import enqueue_event, enqueue_event_batch
 
 
@@ -16,6 +17,80 @@ def receive():
 	if isinstance(payload, list):
 		return receive_batch(payload)
 	return receive_one(payload)
+
+
+@frappe.whitelist()
+def receive_outbound_result(
+	idempotency_key,
+	status,
+	success=0,
+	event_id=None,
+	meta_message_id=None,
+	status_code=None,
+	error=None,
+	attempt=0,
+	**_kwargs,
+):
+	"""Idempotently apply the relay's final provider result to a local message."""
+	idempotency_key = str(idempotency_key or "").strip()
+	if not idempotency_key:
+		frappe.throw("idempotency_key is required")
+	status = str(status or "").strip().lower()
+	if status not in {"sent", "failed"}:
+		frappe.throw("Only final sent/failed relay results are accepted")
+
+	message_name = frappe.db.get_value(
+		"WhatsApp Core Message",
+		{"idempotency_key": idempotency_key},
+		"name",
+	)
+	if not message_name and frappe.db.exists(
+		"WhatsApp Core Message",
+		idempotency_key,
+	):
+		message_name = idempotency_key
+	if not message_name:
+		frappe.throw(
+			f"Outbound message not found for idempotency key {idempotency_key}",
+			frappe.DoesNotExistError,
+		)
+
+	message = frappe.get_doc("WhatsApp Core Message", message_name)
+	incoming = "Sent" if status == "sent" and _as_bool(success) else "Failed"
+	message.delivery_status = advance_delivery_status(
+		message.delivery_status,
+		incoming,
+	)
+	if meta_message_id:
+		message.provider_message_id = meta_message_id
+	if incoming == "Failed":
+		message.failure = json.dumps(
+			{
+				"error": error or "Provider send failed",
+				"status_code": status_code,
+				"attempt": int(attempt or 0),
+				"relay_event": event_id,
+			},
+			separators=(",", ":"),
+		)
+	else:
+		message.failure = None
+	message.save(ignore_permissions=True)
+	frappe.publish_realtime(
+		"whatsapp_core_message_status",
+		{
+			"conversation": message.conversation,
+			"message": message.name,
+			"delivery_status": message.delivery_status,
+			"provider_message_id": message.provider_message_id,
+		},
+		after_commit=True,
+	)
+	return {
+		"status": "applied",
+		"message": message.name,
+		"delivery_status": message.delivery_status,
+	}
 
 
 def receive_one(payload):
@@ -115,6 +190,12 @@ def payload_fingerprint(payload):
 
 def canonical_json(payload):
 	return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _as_bool(value):
+	if isinstance(value, str):
+		return value.lower() in {"1", "true", "yes"}
+	return bool(value)
 
 
 def describe_payload(payload):

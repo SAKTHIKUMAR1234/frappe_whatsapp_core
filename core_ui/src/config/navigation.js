@@ -4,6 +4,7 @@ import {
 	GitBranch,
 	LayoutDashboard,
 	Megaphone,
+	MessageCircleMore,
 	MessageSquareText,
 	PlugZap,
 	Settings,
@@ -13,7 +14,10 @@ import {
 export const navigation = [
 	{
 		label: 'Workspace',
-		items: [{ label: 'Overview', route: 'dashboard', icon: LayoutDashboard }],
+		items: [
+			{ label: 'Shared Inbox', route: 'inbox', icon: MessageCircleMore, badge: 'Live' },
+			{ label: 'Overview', route: 'dashboard', icon: LayoutDashboard },
+		],
 	},
 	{
 		label: 'Engage',

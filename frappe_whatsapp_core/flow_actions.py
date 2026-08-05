@@ -1,6 +1,24 @@
 """Small, typed Core actions available to every solution pack."""
 
+import frappe
+
 from frappe_whatsapp_core.cases import create_case
+
+
+def registered_actions() -> list[str]:
+	handlers = frappe.get_hooks("whatsapp_core_flow_actions") or {}
+	return sorted(handlers) if isinstance(handlers, dict) else []
+
+
+def validate_registered_actions(graph: dict) -> list[str]:
+	registered = set(registered_actions())
+	return [
+		f"Node {node.get('id', '?')} uses an unregistered action: "
+		f"{node.get('config', {}).get('action')}"
+		for node in graph.get("nodes", [])
+		if node.get("type") == "action"
+		and node.get("config", {}).get("action") not in registered
+	]
 
 
 def create_case_action(action_input, context, flow_instance):

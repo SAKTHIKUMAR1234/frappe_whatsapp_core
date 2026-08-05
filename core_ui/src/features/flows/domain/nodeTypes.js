@@ -14,7 +14,7 @@ export function createNodeConfig(type) {
 	const label = NODE_TYPES.find((item) => item.type === type)?.label || type
 
 	const configurations = {
-		send_template: { label, template: '' },
+		send_template: { label, template: '', language: 'en' },
 		send_message: { label, message: '' },
 		ask_text: {
 			label,
@@ -26,6 +26,7 @@ export function createNodeConfig(type) {
 			label,
 			message: '',
 			answer_key: '',
+			button_label: 'Choose',
 			options: [
 				{ label: 'Yes', value: 'yes' },
 				{ label: 'No', value: 'no' },

@@ -141,9 +141,9 @@ def _matches(trigger_type: str, configured: str, received: str) -> bool:
 
 def _extract_answer(event: dict[str, Any]) -> Any:
 	return (
-		event.get("interactive_value")
-		or event.get("button_id")
+		event.get("button_id")
 		or event.get("interactive_id")
+		or event.get("interactive_value")
 		or event.get("body")
 		or event.get("text")
 		or event

@@ -54,12 +54,10 @@ def process_event(event_id):
 	payload = json.loads(event.payload)
 	try:
 		projections = materialize_event(event, payload)
-		handlers = frappe.get_hooks("whatsapp_core_event_handlers") or []
-		if not handlers:
-			event.status = "Unhandled"
-			event.processed_on = now()
-			event.save(ignore_permissions=True)
-			return {"status": "unhandled", "projections": projections}
+		handlers = [
+			"frappe_whatsapp_core.core_event_handler.handle_core_event",
+			*(frappe.get_hooks("whatsapp_core_event_handlers") or []),
+		]
 
 		results = []
 		for handler_path in handlers:

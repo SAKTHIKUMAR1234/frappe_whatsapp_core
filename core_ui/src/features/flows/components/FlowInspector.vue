@@ -6,13 +6,48 @@
 	import ToggleSwitch from 'primevue/toggleswitch'
 	import { Settings2, Trash2 } from 'lucide-vue-next'
 
-	defineProps({
+	const props = defineProps({
 		selectedNode: Object,
 		selectedEdge: Object,
 		choiceOptionsText: String,
+		actions: {
+			type: Array,
+			default: () => [],
+		},
+		templates: {
+			type: Array,
+			default: () => [],
+		},
 	})
 
 	defineEmits(['update:choice-options-text', 'delete', 'ensure-condition'])
+
+	function prepareAction(action) {
+		const config = props.selectedNode.data.config
+		config.action = action
+		config.input ||= {}
+		if (action === 'context.set') {
+			config.input = {
+				key: config.input.key || '',
+				value: config.input.value || '',
+			}
+		}
+		if (action === 'case.create') {
+			config.input = {
+				case_type: config.input.case_type || '',
+				title: config.input.title || '',
+				description: config.input.description || '',
+			}
+		}
+		if (action === 'customer.categorize_interest') {
+			config.input = {
+				...config.input,
+				product: config.input.product || {
+					var: 'answers.favorite_product',
+				},
+			}
+		}
+	}
 </script>
 
 <template>
@@ -37,10 +72,12 @@
 				<label>Available template</label>
 				<Select
 					v-model="selectedNode.data.config.template"
-					:options="[]"
+					:options="templates"
 					placeholder="Select assigned template"
 					fluid
 				/>
+				<label>Language code</label>
+				<InputText v-model="selectedNode.data.config.language" placeholder="en" fluid />
 				<div class="field-note">Read-only catalog from the Integration app.</div>
 			</template>
 
@@ -64,18 +101,59 @@
 					fluid
 					@update:model-value="$emit('update:choice-options-text', $event)"
 				/>
+				<label>List button label</label>
+				<InputText
+					v-model="selectedNode.data.config.button_label"
+					placeholder="Choose"
+					fluid
+				/>
 			</template>
 
 			<template v-if="selectedNode.data.type === 'action'">
 				<label>Registered action</label>
 				<Select
-					v-model="selectedNode.data.config.action"
-					:options="['context.set', 'case.create']"
+					:model-value="selectedNode.data.config.action"
+					:options="actions"
 					fluid
+					@update:model-value="prepareAction"
 				/>
 				<div class="field-note">
 					Only typed actions registered by Core or a solution app can appear.
 				</div>
+				<template v-if="selectedNode.data.config.action === 'context.set'">
+					<label>Context key</label>
+					<InputText v-model="selectedNode.data.config.input.key" fluid />
+					<label>Context value</label>
+					<InputText v-model="selectedNode.data.config.input.value" fluid />
+				</template>
+				<template v-if="selectedNode.data.config.action === 'case.create'">
+					<label>Case type key</label>
+					<InputText v-model="selectedNode.data.config.input.case_type" fluid />
+					<label>Title</label>
+					<InputText v-model="selectedNode.data.config.input.title" fluid />
+					<label>Description</label>
+					<Textarea
+						v-model="selectedNode.data.config.input.description"
+						rows="3"
+						fluid
+					/>
+				</template>
+				<template
+					v-if="selectedNode.data.config.action === 'customer.categorize_interest'"
+				>
+					<label>Product context variable</label>
+					<InputText
+						v-model="selectedNode.data.config.input.product.var"
+						placeholder="answers.favorite_product"
+						fluid
+					/>
+				</template>
+				<label>Save action result as</label>
+				<InputText
+					v-model="selectedNode.data.config.output_key"
+					placeholder="action_result"
+					fluid
+				/>
 			</template>
 
 			<template v-if="selectedNode.data.type === 'wait'">

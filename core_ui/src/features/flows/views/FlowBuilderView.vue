@@ -74,6 +74,8 @@
 				:selected-node="flowBuilder.selectedNode.value"
 				:selected-edge="flowBuilder.selectedEdge.value"
 				:choice-options-text="flowBuilder.choiceOptionsText.value"
+				:actions="flowBuilder.catalog.value.actions"
+				:templates="flowBuilder.catalog.value.templates"
 				@update:choice-options-text="flowBuilder.choiceOptionsText.value = $event"
 				@delete="flowBuilder.deleteSelected"
 				@ensure-condition="flowBuilder.ensureEdgeCondition"

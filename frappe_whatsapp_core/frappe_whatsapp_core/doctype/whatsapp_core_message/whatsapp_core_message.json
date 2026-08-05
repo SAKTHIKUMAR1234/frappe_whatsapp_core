@@ -5,9 +5,10 @@
  "autoname": "field:message_key",
  "naming_rule": "By fieldname",
  "engine": "InnoDB",
- "field_order": ["message_key", "conversation", "relay_event", "channel", "provider_message_id", "direction", "message_type", "body", "content", "provider_timestamp", "delivery_status", "failure"],
+ "field_order": ["message_key", "idempotency_key", "conversation", "relay_event", "channel", "provider_message_id", "direction", "message_type", "body", "content", "provider_timestamp", "delivery_status", "failure"],
  "fields": [
   {"fieldname": "message_key", "fieldtype": "Data", "label": "Message Key", "reqd": 1, "unique": 1},
+  {"fieldname": "idempotency_key", "fieldtype": "Data", "label": "Outbound Idempotency Key", "unique": 1},
   {"fieldname": "conversation", "fieldtype": "Link", "label": "Conversation", "options": "WhatsApp Core Conversation", "reqd": 1, "in_list_view": 1},
   {"fieldname": "relay_event", "fieldtype": "Link", "label": "Relay Event", "options": "WhatsApp Core Event"},
   {"fieldname": "channel", "fieldtype": "Link", "label": "Channel", "options": "WhatsApp Core Channel", "reqd": 1},

@@ -12,6 +12,17 @@ after_migrate = "frappe_whatsapp_core.setup.ensure_core_roles"
 # contains no hospital, manufacturing, sales or Essdee-specific decisions.
 whatsapp_core_event_handlers = []
 
+# Business apps map a neutral phone identity onto exact local business records.
+whatsapp_core_party_resolvers = []
+
+# External AI and operator tools use business-owned party search adapters;
+# Core never imports a sales, hospital or manufacturing module.
+whatsapp_core_party_searchers = []
+
+# Company apps can block a Core send with typed business safety rules. They do
+# not replace the Core transport or create a second outbound implementation.
+whatsapp_core_outbound_preflight = []
+
 # Flow nodes can invoke only registered, typed actions. A builder graph cannot
 # execute arbitrary Python, SQL or shell commands.
 whatsapp_core_flow_actions = {
@@ -19,10 +30,20 @@ whatsapp_core_flow_actions = {
 	"context.set": "frappe_whatsapp_core.flow_actions.set_context_action",
 }
 
+# Business apps resolve a prepared Core identity into their own operational
+# context and queue one message at a time. Core never imports business modules.
+whatsapp_core_campaign_preflight = []
+whatsapp_core_campaign_sender = []
+
 scheduler_events = {
 	"cron": {
+		"* * * * *": [
+			"frappe_whatsapp_core.campaigns.run_due_campaigns",
+			"frappe_whatsapp_core.outbound.retry_queued_messages",
+		],
 		"*/5 * * * *": [
 			"frappe_whatsapp_core.dispatcher.retry_failed_events",
+			"frappe_whatsapp_core.campaigns.refresh_active_campaigns",
 		],
 	},
 }

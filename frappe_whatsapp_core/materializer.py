@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 import frappe
 from frappe.utils import get_datetime, now_datetime
 
+from frappe_whatsapp_core.delivery import advance_delivery_status
+from frappe_whatsapp_core.party_bindings import ensure_party_bindings
+
 
 def materialize_event(event, payload):
 	"""Project a raw provider event into the reusable messaging kernel."""
@@ -92,6 +95,13 @@ def materialize_inbound_message(event, channel, provider_message):
 		return {"kind": "message", "status": "duplicate", "name": message_key}
 
 	identity = get_or_create_identity(provider_message.get("from") or "")
+	ensure_party_bindings(
+		identity.name,
+		{
+			"channel": channel.name,
+			"provider_message": provider_message,
+		},
+	)
 	conversation = get_or_create_conversation(channel, identity)
 	message_type = provider_message.get("type") or "unknown"
 	content = provider_message.get(message_type) or {}
@@ -135,11 +145,17 @@ def materialize_status(channel, provider_status):
 		return {"kind": "status", "status": "orphan", "provider_message_id": provider_id}
 	status = (provider_status.get("status") or "sent").title()
 	allowed = {"Queued", "Sent", "Delivered", "Read", "Failed", "Deleted"}
+	incoming = status if status in allowed else "Sent"
+	current = frappe.db.get_value(
+		"WhatsApp Core Message",
+		message_name,
+		"delivery_status",
+	)
 	frappe.db.set_value(
 		"WhatsApp Core Message",
 		message_name,
 		"delivery_status",
-		status if status in allowed else "Sent",
+		advance_delivery_status(current, incoming),
 	)
 	return {"kind": "status", "status": "updated", "name": message_name}
 

@@ -91,7 +91,7 @@
 				</Button>
 				<div class="global-search">
 					<Search :size="18" />
-					<input placeholder="Search flows, campaigns and templates..." />
+					<input placeholder="Search conversations, flows and campaigns..." />
 					<kbd>⌘ K</kbd>
 				</div>
 				<div class="top-actions">

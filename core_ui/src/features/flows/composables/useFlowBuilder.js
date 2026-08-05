@@ -11,6 +11,10 @@ export function useFlowBuilder({ flowName, toast }) {
 	const nodes = ref([])
 	const edges = ref([])
 	const triggers = ref([])
+	const catalog = ref({
+		actions: [],
+		templates: [],
+	})
 	const flow = ref({
 		title: flowName,
 		status: 'Draft',
@@ -154,6 +158,7 @@ export function useFlowBuilder({ flowName, toast }) {
 		const hydrated = hydrateFlowGraph(result.graph)
 
 		flow.value = result
+		catalog.value = result.catalog || catalog.value
 		nodes.value = hydrated.nodes
 		edges.value = hydrated.edges
 		triggers.value = hydrated.triggers
@@ -242,6 +247,7 @@ export function useFlowBuilder({ flowName, toast }) {
 		nodes,
 		edges,
 		triggers,
+		catalog,
 		flow,
 		selected,
 		selectedNode,

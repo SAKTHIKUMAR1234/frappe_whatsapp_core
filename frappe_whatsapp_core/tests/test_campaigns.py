@@ -1,0 +1,117 @@
+import frappe
+from frappe.tests.utils import FrappeTestCase
+
+from frappe_whatsapp_core.campaigns import (
+	authorize_campaign,
+	create_campaign,
+	launch_campaign,
+	prepare_campaign,
+)
+from frappe_whatsapp_core.template_catalog import sync_template_projection
+
+
+class TestCampaigns(FrappeTestCase):
+	def setUp(self):
+		super().setUp()
+		suffix = frappe.generate_hash(length=8).lower()
+		self.channel = frappe.get_doc({
+			"doctype": "WhatsApp Core Channel",
+			"channel_key": f"meta:campaign-{suffix}",
+			"display_name": "Campaign Test",
+			"provider": "meta",
+			"phone_number_id": f"campaign-{suffix}",
+			"enabled": 1,
+		}).insert(ignore_permissions=True)
+		self.identities = [
+			frappe.get_doc({
+				"doctype": "WhatsApp Core Identity",
+				"identity_key": f"campaign-identity-{suffix}-{index}",
+				"identity_type": "WhatsApp",
+				"normalized_value": f"91990000{suffix[:4]}{index}",
+				"display_value": f"91990000{suffix[:4]}{index}",
+				"provider": "meta",
+				"status": "Active",
+			}).insert(ignore_permissions=True)
+			for index in range(2)
+		]
+		self.template = sync_template_projection({
+			"name": f"campaign_template_{suffix}",
+			"language": "en",
+			"status": "APPROVED",
+			"category": "UTILITY",
+			"components": [{
+				"type": "BODY",
+				"text": "Hello {{1}}",
+			}],
+		})["name"]
+		self.campaign = create_campaign(
+			campaign_key=f"campaign.test.{suffix}",
+			title="Campaign test",
+			channel=self.channel.name,
+			template=self.template,
+			audience_source={"provider": "test"},
+		)
+
+	def test_template_projection_extracts_copy(self):
+		template = frappe.get_doc("WhatsApp Core Template", self.template)
+		self.assertEqual(template.approval_status, "APPROVED")
+		self.assertEqual(template.body_text, "Hello {{1}}")
+		self.assertTrue(template.enabled)
+
+	def test_prepare_is_exact_and_deduplicated(self):
+		summary = prepare_campaign(
+			self.campaign.name,
+			[
+				{
+					"identity": self.identities[0].name,
+					"personalization": {"components": []},
+				},
+				self.identities[0].name,
+				self.identities[1].name,
+			],
+		)
+		self.assertEqual(summary["status"], "Prepared")
+		self.assertEqual(summary["recipient_count"], 2)
+		self.assertEqual(
+			frappe.db.count(
+				"WhatsApp Core Campaign Recipient",
+				{"campaign": self.campaign.name},
+			),
+			2,
+		)
+
+	def test_send_authorization_is_separate_and_explicit(self):
+		prepare_campaign(
+			self.campaign.name,
+			[self.identities[0].name],
+		)
+		with self.assertRaises(frappe.ValidationError):
+			authorize_campaign(self.campaign.name, "yes")
+
+		summary = authorize_campaign(
+			self.campaign.name,
+			f"AUTHORIZE {self.campaign.campaign_key}",
+		)
+		self.assertTrue(summary["send_authorized"])
+		self.assertEqual(summary["template_approval_status"], "APPROVED")
+
+	def test_essdee_preflight_blocks_launch_while_safety_gates_are_locked(self):
+		prepare_campaign(
+			self.campaign.name,
+			[self.identities[0].name],
+		)
+		authorize_campaign(
+			self.campaign.name,
+			f"AUTHORIZE {self.campaign.campaign_key}",
+		)
+		with self.assertRaises(frappe.ValidationError):
+			launch_campaign(self.campaign.name)
+		self.assertEqual(
+			frappe.db.get_value(
+				"WhatsApp Core Campaign",
+				self.campaign.name,
+				"status",
+			),
+			"Prepared",
+		)
+

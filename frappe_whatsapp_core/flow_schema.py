@@ -229,6 +229,38 @@ def _validate_node_config(node: dict[str, Any], errors: list[str]) -> None:
 		options = config.get("options")
 		if not isinstance(options, list) or len(options) < 2:
 			errors.append(f"Node {node_id} requires at least two options")
+		elif len(options) > 10:
+			errors.append(f"Node {node_id} supports at most ten options")
+		else:
+			values: set[str] = set()
+			for index, option in enumerate(options, start=1):
+				if isinstance(option, str):
+					label = value = option.strip()
+				elif isinstance(option, dict):
+					label = str(option.get("label") or "").strip()
+					value = str(option.get("value") or label).strip()
+				else:
+					errors.append(
+						f"Node {node_id} option {index} must be text or an object"
+					)
+					continue
+				if not label or not value:
+					errors.append(
+						f"Node {node_id} option {index} requires label and value"
+					)
+				if len(label) > 24:
+					errors.append(
+						f"Node {node_id} option {index} label exceeds 24 characters"
+					)
+				if len(value) > 200:
+					errors.append(
+						f"Node {node_id} option {index} value exceeds 200 characters"
+					)
+				if value in values:
+					errors.append(
+						f"Node {node_id} has duplicate option value: {value}"
+					)
+				values.add(value)
 	if node_type == "action" and not config.get("action"):
 		errors.append(f"Node {node_id} requires a typed config.action")
 	if node_type == "wait" and not config.get("resume_on"):

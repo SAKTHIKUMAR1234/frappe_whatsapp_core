@@ -1,13 +1,14 @@
 # Frappe WhatsApp Core
 
-This app is a business-neutral plugin boundary, not another copy of the hub.
+This app is the complete business-neutral WhatsApp product installed on every
+company site. It is not another copy of the Hub.
 
 ```text
 Meta callback
    │ fast durable enqueue + immediate ACK
    ▼
 NATS JetStream (file-backed middleman)
-   │ 250 events or 2-minute window
+   │ 250 events or 250-millisecond window
    ▼
 WhatsApp Core Event (one bulk DB insert + dedupe)
    │ one background batch job
@@ -18,10 +19,13 @@ WhatsApp Core Event (one bulk DB insert + dedupe)
 ```
 
 Outbound commands use a separate JetStream work queue and are sent to Meta
-one-by-one. Inbound logging is batched; WhatsApp delivery is never bulk-sent.
-The Base owns only the event contract, durable processing state and handler
-dispatch. A business app owns contacts, cases, permissions, workflows, ERP
-links, AI tools and user interfaces.
+one-by-one. A second durable callback queue returns the provider message ID and
+final send result to Core before later delivery/read webhooks arrive. Inbound
+logging is micro-batched; WhatsApp delivery is never bulk-sent. Core owns
+identity, party binding, shared inbox, optimistic outbound, conversation,
+message, case, campaign, flow, AI queue and MCP contracts. A company app is
+optional. When installed, it adds business hierarchy, ERP links, policies,
+typed actions and a purpose-built frontend through Core APIs.
 
 ## Visual flow engine
 
@@ -55,3 +59,63 @@ Canvas actions are allowlisted through `whatsapp_core_flow_actions`. They
 cannot execute arbitrary Python, SQL or shell commands. An organization app
 registers actions such as `case.create`, `customer.fetch`, or
 `invoice.lookup`, while the Core engine remains business-neutral.
+
+## Templates and campaigns
+
+Template ownership stays in the Integration application. Core receives only a
+site-local, read-only projection after the Hub assigns a template.
+
+```text
+Integration Desk
+ create / edit / Meta approval / site assignment
+                    │ authenticated push
+                    ▼
+          Core Template Catalog
+                    │ select
+                    ▼
+Exact business audience ──► Prepared campaign
+                                   │
+                 Meta approved ────┤
+                 named SEND gate ──┤
+                                   ▼
+                        Business sender adapter
+                                   │
+                      one recipient at a time
+                                   ▼
+                         Durable relay queue
+```
+
+Audience resolution is a business-app responsibility. Core stores only exact
+Core identity references and a JSON source description. Preparing an audience
+does not queue anything. Meta approval and human SEND authorization are
+separate gates; editing the campaign definition revokes SEND authorization.
+
+## External AI boundary
+
+```text
+AI client ── authenticated MCP JSON-RPC ──► Core tools
+                                              ├── list/start/read conversations
+                                              ├── classify unassigned messages
+                                              ├── search and bind exact parties
+                                              ├── create a typed case
+                                              ├── assign/update conversations
+                                              └── queue audited replies/templates
+```
+
+Core does not embed an AI model. The stateless endpoint is
+`/api/method/frappe_whatsapp_core.mcp_transport.handle`; Frappe API
+authentication, Core roles, origin validation, site isolation and an immutable
+invocation audit apply before a tool executes.
+
+The Core UI exposes the same boundaries without pretending they are one
+monolithic feature:
+
+```text
+Core UI
+ ├── Shared Inbox   instant chat + reads + topics + assignment + templates
+ ├── AI Queue       unclassified messages + manual topic approval
+ ├── Polls          question flows + completed-answer counts
+ ├── Connectors     installed hooks + flow actions + MCP tools
+ ├── Health         event / flow / delivery failures
+ └── Settings       Hub onboarding + channel mapping + site inventory
+```

@@ -13,6 +13,11 @@ const routes = [
 		component: () => import('@/layouts/AppShell.vue'),
 		children: [
 			{
+				path: 'inbox/:conversation?',
+				name: 'inbox',
+				component: () => import('@/features/inbox/views/InboxView.vue'),
+			},
+			{
 				path: '',
 				name: 'dashboard',
 				component: () => import('@/features/dashboard/views/DashboardView.vue'),

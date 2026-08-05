@@ -1,0 +1,89 @@
+{
+ "doctype": "DocType",
+ "name": "WhatsApp Core Settings",
+ "module": "Frappe WhatsApp Core",
+ "issingle": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "outbound_enabled",
+  "section_connection",
+  "hub_url",
+  "column_connection",
+  "api_key",
+  "api_secret",
+  "request_timeout",
+  "section_accounts",
+  "accounts"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "WhatsApp Enabled"
+  },
+  {
+   "default": "0",
+   "fieldname": "outbound_enabled",
+   "fieldtype": "Check",
+   "label": "Outbound Enabled"
+  },
+  {
+   "fieldname": "section_connection",
+   "fieldtype": "Section Break",
+   "label": "Integration Hub"
+  },
+  {
+   "fieldname": "hub_url",
+   "fieldtype": "Data",
+   "label": "Hub URL",
+   "description": "Full URL of the central Frappe WhatsApp Integration site"
+  },
+  {
+   "fieldname": "column_connection",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "api_key",
+   "fieldtype": "Password",
+   "label": "Hub API Key"
+  },
+  {
+   "fieldname": "api_secret",
+   "fieldtype": "Password",
+   "label": "Hub API Secret"
+  },
+  {
+   "default": "30",
+   "fieldname": "request_timeout",
+   "fieldtype": "Int",
+   "label": "Request Timeout (seconds)"
+  },
+  {
+   "fieldname": "section_accounts",
+   "fieldtype": "Section Break",
+   "label": "Channel Routing"
+  },
+  {
+   "fieldname": "accounts",
+   "fieldtype": "Table",
+   "label": "Hub Accounts",
+   "options": "WhatsApp Core Hub Account"
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1
+  },
+  {
+   "role": "WhatsApp Core Admin",
+   "read": 1,
+   "write": 1,
+   "create": 1
+  }
+ ]
+}
