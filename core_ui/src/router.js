@@ -101,7 +101,13 @@ const routes = [
 ]
 
 const router = createRouter({
-	history: createWebHashHistory(import.meta.env.DEV ? '/' : '/whatsapp_core'),
+	history: createWebHashHistory(
+		import.meta.env.DEV
+			? '/'
+			: window.location.pathname.startsWith('/whatsapp_core')
+				? '/whatsapp_core/'
+				: '/whatsapp/',
+	),
 	routes,
 })
 

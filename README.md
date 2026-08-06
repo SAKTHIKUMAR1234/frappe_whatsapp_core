@@ -4,6 +4,10 @@ Reusable, configurable WhatsApp business workflow foundation
 
 Supports Frappe **15 and 16** and Python 3.10 or newer.
 
+Open `/whatsapp` for the Core application. The legacy `/whatsapp_core` entry
+remains supported, and each entry keeps its own browser-history base so inbox
+deep links and back navigation do not jump between aliases.
+
 ### MCP and AI agents
 
 The authenticated Streamable HTTP endpoint at

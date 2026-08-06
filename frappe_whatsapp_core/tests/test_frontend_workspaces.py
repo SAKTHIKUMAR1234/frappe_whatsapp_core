@@ -1,5 +1,6 @@
 import json
 import uuid
+from pathlib import Path
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
@@ -132,3 +133,10 @@ class TestFrontendWorkspaces(FrappeTestCase):
 				"messages",
 			},
 		)
+
+	def test_router_preserves_both_public_whatsapp_entry_points(self):
+		router = (
+			Path(__file__).resolve().parents[2] / "core_ui" / "src" / "router.js"
+		).read_text()
+		self.assertIn("window.location.pathname.startsWith('/whatsapp_core')", router)
+		self.assertIn(": '/whatsapp/'", router)
