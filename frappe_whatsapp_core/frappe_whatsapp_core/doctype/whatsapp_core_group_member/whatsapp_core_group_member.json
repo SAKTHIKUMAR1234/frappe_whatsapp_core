@@ -1,0 +1,27 @@
+{
+ "doctype": "DocType",
+ "name": "WhatsApp Core Group Member",
+ "module": "Frappe WhatsApp Core",
+ "autoname": "field:member_key",
+ "naming_rule": "By fieldname",
+ "engine": "InnoDB",
+ "field_order": ["member_key", "relay_event", "group", "participant_id", "status", "join_request_id", "reason", "last_event", "last_synced"],
+ "fields": [
+  {"fieldname": "member_key", "fieldtype": "Data", "label": "Member Key", "reqd": 1, "unique": 1},
+  {"fieldname": "relay_event", "fieldtype": "Link", "options": "WhatsApp Core Event", "label": "Relay Event", "read_only": 1},
+  {"fieldname": "group", "fieldtype": "Link", "options": "WhatsApp Core Group", "label": "Group", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "participant_id", "fieldtype": "Data", "label": "Participant", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "status", "fieldtype": "Select", "options": "Pending\nActive\nRemoved\nRevoked\nFailed", "label": "Status", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "join_request_id", "fieldtype": "Data", "label": "Join Request ID"},
+  {"fieldname": "reason", "fieldtype": "Data", "label": "Reason"},
+  {"fieldname": "last_event", "fieldtype": "JSON", "label": "Last Event", "reqd": 1},
+  {"fieldname": "last_synced", "fieldtype": "Datetime", "label": "Last Synced", "read_only": 1}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1},
+  {"role": "WhatsApp Manager", "read": 1, "export": 1},
+  {"role": "WhatsApp User", "read": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC"
+}

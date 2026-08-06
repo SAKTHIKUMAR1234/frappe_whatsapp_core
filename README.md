@@ -23,16 +23,23 @@ confirmation values, and every invocation is recorded in
 Open `/whatsapp`, then use **Meta Flows** to create, upload, preview, publish,
 clone, migrate, deprecate and inspect Meta-hosted WhatsApp Flows. Core records
 native Flow replies in the conversation log and does not render its own copy of
-the customer Flow. Flow migration and encryption public-key management are
-also performed directly against Meta through the configured Integration Hub.
+the customer Flow. Flow migration and encrypted data-endpoint provisioning are
+performed through the configured Integration Hub. Integration owns Meta
+signatures and encryption keys; Core receives only authenticated decrypted
+payloads and dispatches them to registered
+`whatsapp_core_meta_flow_endpoint_handlers`. Every exchange is idempotently
+recorded in `WhatsApp Core Meta Flow Exchange`.
 
 ### Groups and Calling
 
 Core manages Meta-hosted WhatsApp Groups, including lifecycle, invite links,
-join approvals, participants, messages and pinned messages. It also supports
-WhatsApp Business Calling settings, permission requests, WebRTC signaling and
-durable call-event logs. Meta's calling control plane is handled here; audio
-media runs through the configured WebRTC or SIP infrastructure.
+approved invite templates, join approvals, participants, text/media/template
+messages, pinned messages and per-participant receipts. It also supports
+WhatsApp Business Calling settings, permission requests, call buttons and
+templates, deep links, WebRTC signaling, voicemail announcements, opt-in
+recording/transcription artifacts and durable call-event logs. Meta's calling
+control plane is handled here; audio media runs through the configured WebRTC
+or SIP infrastructure.
 
 ### Installation
 

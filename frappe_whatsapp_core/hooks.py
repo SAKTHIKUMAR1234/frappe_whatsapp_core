@@ -38,6 +38,12 @@ whatsapp_core_flow_actions = {
 	"context.set": "frappe_whatsapp_core.flow_actions.set_context_action",
 }
 
+# Dynamic Meta-hosted Flows call Integration's encrypted endpoint. Integration
+# verifies/decrypts the Meta request and calls these Core business handlers with
+# ``payload`` and a mapped ``context``. Return None when a handler does not own
+# the request; the first dict response wins. Static Meta Flows need no handler.
+whatsapp_core_meta_flow_endpoint_handlers = []
+
 # Business apps resolve a prepared Core identity into their own operational
 # context and queue one message at a time. Core never imports business modules.
 whatsapp_core_campaign_preflight = []

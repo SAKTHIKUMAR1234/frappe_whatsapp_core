@@ -6,40 +6,119 @@ import json
 
 import frappe
 
-from frappe_whatsapp_core.cases import create_case
+from frappe_whatsapp_core.calling import (
+	build_call_deep_link as whatsapp_build_call_deep_link,
+)
 from frappe_whatsapp_core.calling import (
 	call_action as whatsapp_call_action,
+)
+from frappe_whatsapp_core.calling import (
 	calling_workspace as whatsapp_calling_workspace,
+)
+from frappe_whatsapp_core.calling import (
+	get_call_artifact as whatsapp_get_call_artifact,
+)
+from frappe_whatsapp_core.calling import (
 	get_call_permission as whatsapp_get_call_permission,
+)
+from frappe_whatsapp_core.calling import (
 	request_call_permission as whatsapp_request_call_permission,
+)
+from frappe_whatsapp_core.calling import (
+	send_call_button as whatsapp_send_call_button,
+)
+from frappe_whatsapp_core.calling import (
+	send_call_button_template as whatsapp_send_call_button_template,
+)
+from frappe_whatsapp_core.calling import (
 	update_call_settings as whatsapp_update_call_settings,
 )
+from frappe_whatsapp_core.calling import (
+	upload_voicemail_announcement as whatsapp_upload_voicemail_announcement,
+)
+from frappe_whatsapp_core.cases import create_case
 from frappe_whatsapp_core.groups import (
 	change_join_requests as whatsapp_change_join_requests,
+)
+from frappe_whatsapp_core.groups import (
 	create_group as whatsapp_create_group,
+)
+from frappe_whatsapp_core.groups import (
 	delete_group as whatsapp_delete_group,
+)
+from frappe_whatsapp_core.groups import (
 	get_group as whatsapp_get_group,
+)
+from frappe_whatsapp_core.groups import (
 	get_invite_link as whatsapp_get_invite_link,
+)
+from frappe_whatsapp_core.groups import (
+	group_activity as whatsapp_group_activity,
+)
+from frappe_whatsapp_core.groups import (
 	group_workspace as whatsapp_group_workspace,
+)
+from frappe_whatsapp_core.groups import (
 	list_join_requests as whatsapp_list_join_requests,
+)
+from frappe_whatsapp_core.groups import (
 	pin_group_message as whatsapp_pin_group_message,
+)
+from frappe_whatsapp_core.groups import (
 	remove_participants as whatsapp_remove_participants,
+)
+from frappe_whatsapp_core.groups import (
 	reset_invite_link as whatsapp_reset_invite_link,
+)
+from frappe_whatsapp_core.groups import (
+	send_group_invite_template as whatsapp_send_group_invite_template,
+)
+from frappe_whatsapp_core.groups import (
 	send_group_message as whatsapp_send_group_message,
+)
+from frappe_whatsapp_core.groups import (
 	update_group as whatsapp_update_group,
+)
+from frappe_whatsapp_core.groups import (
 	update_group_picture as whatsapp_update_group_picture,
 )
 from frappe_whatsapp_core.meta_flows import (
 	create_flow as create_meta_flow,
+)
+from frappe_whatsapp_core.meta_flows import (
 	delete_flow as delete_meta_flow,
+)
+from frappe_whatsapp_core.meta_flows import (
 	deprecate_flow as deprecate_meta_flow,
+)
+from frappe_whatsapp_core.meta_flows import (
+	flow_endpoint_status as meta_flow_endpoint_status,
+)
+from frappe_whatsapp_core.meta_flows import (
 	flow_workspace as meta_flow_workspace,
+)
+from frappe_whatsapp_core.meta_flows import (
 	get_business_public_key as get_meta_flow_public_key,
+)
+from frappe_whatsapp_core.meta_flows import (
 	get_flow as get_meta_flow,
+)
+from frappe_whatsapp_core.meta_flows import (
 	migrate_flows as migrate_meta_flows,
+)
+from frappe_whatsapp_core.meta_flows import (
+	provision_flow_endpoint as provision_meta_flow_endpoint,
+)
+from frappe_whatsapp_core.meta_flows import (
 	publish_flow as publish_meta_flow,
+)
+from frappe_whatsapp_core.meta_flows import (
 	set_business_public_key as set_meta_flow_public_key,
+)
+from frappe_whatsapp_core.meta_flows import (
 	update_flow as update_meta_flow,
+)
+from frappe_whatsapp_core.meta_flows import (
 	upload_flow_json as upload_meta_flow_json,
 )
 from frappe_whatsapp_core.party_bindings import upsert_party_binding
@@ -284,7 +363,17 @@ TOOL_DEFINITIONS = [
 				"conversation": {"type": "string"},
 				"message_type": {
 					"type": "string",
-					"enum": ["audio", "contacts", "document", "image", "interactive", "location", "reaction", "sticker", "video"],
+					"enum": [
+						"audio",
+						"contacts",
+						"document",
+						"image",
+						"interactive",
+						"location",
+						"reaction",
+						"sticker",
+						"video",
+					],
 				},
 				"payload": {"type": "object"},
 				"body": {"type": "string"},
@@ -389,29 +478,52 @@ TOOL_DEFINITIONS = [
 		"name": "whatsapp.prepare_campaign",
 		"description": "Replace a draft campaign audience with exact Core identity references.",
 		"inputSchema": {
-			"type": "object", "required": ["campaign_name", "recipients"],
-			"properties": {"campaign_name": {"type": "string"}, "recipients": {"type": "array", "items": {"type": "object"}, "maxItems": 10000}},
+			"type": "object",
+			"required": ["campaign_name", "recipients"],
+			"properties": {
+				"campaign_name": {"type": "string"},
+				"recipients": {"type": "array", "items": {"type": "object"}, "maxItems": 10000},
+			},
 		},
 	},
 	{
 		"name": "whatsapp.authorize_campaign",
 		"description": "Record the explicit human send authorization. Confirmation must match AUTHORIZE <campaign key>.",
-		"inputSchema": {"type": "object", "required": ["campaign_name", "confirmation"], "properties": {"campaign_name": {"type": "string"}, "confirmation": {"type": "string"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["campaign_name", "confirmation"],
+			"properties": {"campaign_name": {"type": "string"}, "confirmation": {"type": "string"}},
+		},
 	},
 	{
 		"name": "whatsapp.revoke_campaign_authorization",
 		"description": "Revoke authorization before a campaign starts.",
-		"inputSchema": {"type": "object", "required": ["campaign_name"], "properties": {"campaign_name": {"type": "string"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["campaign_name"],
+			"properties": {"campaign_name": {"type": "string"}},
+		},
 	},
 	{
 		"name": "whatsapp.schedule_campaign",
 		"description": "Schedule an authorized campaign for a future datetime.",
-		"inputSchema": {"type": "object", "required": ["campaign_name", "scheduled_for"], "properties": {"campaign_name": {"type": "string"}, "scheduled_for": {"type": "string"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["campaign_name", "scheduled_for"],
+			"properties": {"campaign_name": {"type": "string"}, "scheduled_for": {"type": "string"}},
+		},
 	},
 	{
 		"name": "whatsapp.cancel_campaign",
 		"description": "Cancel a campaign and skip unsent recipients. Requires confirmation=CANCEL.",
-		"inputSchema": {"type": "object", "required": ["campaign_name", "confirmation"], "properties": {"campaign_name": {"type": "string"}, "confirmation": {"type": "string", "enum": ["CANCEL"]}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["campaign_name", "confirmation"],
+			"properties": {
+				"campaign_name": {"type": "string"},
+				"confirmation": {"type": "string", "enum": ["CANCEL"]},
+			},
+		},
 	},
 	{
 		"name": "whatsapp.list_flows",
@@ -431,11 +543,14 @@ TOOL_DEFINITIONS = [
 		"name": "whatsapp.create_flow",
 		"description": "Create a draft native WhatsApp Flow directly in Meta.",
 		"inputSchema": {
-			"type": "object", "required": ["account_name", "flow_name", "categories"],
+			"type": "object",
+			"required": ["account_name", "flow_name", "categories"],
 			"properties": {
-				"account_name": {"type": "string"}, "flow_name": {"type": "string"},
+				"account_name": {"type": "string"},
+				"flow_name": {"type": "string"},
 				"categories": {"type": "array", "items": {"type": "string"}},
-				"endpoint_uri": {"type": "string"}, "clone_flow_id": {"type": "string"},
+				"endpoint_uri": {"type": "string"},
+				"clone_flow_id": {"type": "string"},
 			},
 		},
 	},
@@ -443,9 +558,11 @@ TOOL_DEFINITIONS = [
 		"name": "whatsapp.upload_flow_json",
 		"description": "Upload a flow.json asset to Meta and return Meta validation errors.",
 		"inputSchema": {
-			"type": "object", "required": ["account_name", "flow_id", "flow_json"],
+			"type": "object",
+			"required": ["account_name", "flow_id", "flow_json"],
 			"properties": {
-				"account_name": {"type": "string"}, "flow_id": {"type": "string"},
+				"account_name": {"type": "string"},
+				"flow_id": {"type": "string"},
 				"flow_json": {"type": "object"},
 			},
 		},
@@ -454,9 +571,11 @@ TOOL_DEFINITIONS = [
 		"name": "whatsapp.publish_flow",
 		"description": "Irreversibly publish a validated Meta Flow. Requires confirmation=PUBLISH.",
 		"inputSchema": {
-			"type": "object", "required": ["account_name", "flow_id", "confirmation"],
+			"type": "object",
+			"required": ["account_name", "flow_id", "confirmation"],
 			"properties": {
-				"account_name": {"type": "string"}, "flow_id": {"type": "string"},
+				"account_name": {"type": "string"},
+				"flow_id": {"type": "string"},
 				"confirmation": {"type": "string", "enum": ["PUBLISH"]},
 			},
 		},
@@ -468,8 +587,10 @@ TOOL_DEFINITIONS = [
 			"type": "object",
 			"required": ["account_name", "flow_id"],
 			"properties": {
-				"account_name": {"type": "string"}, "flow_id": {"type": "string"},
-				"flow_name": {"type": "string"}, "categories": {"type": "array", "items": {"type": "string"}},
+				"account_name": {"type": "string"},
+				"flow_id": {"type": "string"},
+				"flow_name": {"type": "string"},
+				"categories": {"type": "array", "items": {"type": "string"}},
 				"endpoint_uri": {"type": "string"},
 			},
 		},
@@ -478,100 +599,270 @@ TOOL_DEFINITIONS = [
 		"name": "whatsapp.deprecate_flow",
 		"description": "Deprecate a published Meta Flow. Requires confirmation=DEPRECATE.",
 		"inputSchema": {
-			"type": "object", "required": ["account_name", "flow_id", "confirmation"],
-			"properties": {"account_name": {"type": "string"}, "flow_id": {"type": "string"}, "confirmation": {"type": "string", "enum": ["DEPRECATE"]}},
+			"type": "object",
+			"required": ["account_name", "flow_id", "confirmation"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"flow_id": {"type": "string"},
+				"confirmation": {"type": "string", "enum": ["DEPRECATE"]},
+			},
 		},
 	},
 	{
 		"name": "whatsapp.delete_flow",
 		"description": "Delete an unpublished Meta Flow. Requires confirmation=DELETE.",
 		"inputSchema": {
-			"type": "object", "required": ["account_name", "flow_id", "confirmation"],
-			"properties": {"account_name": {"type": "string"}, "flow_id": {"type": "string"}, "confirmation": {"type": "string", "enum": ["DELETE"]}},
+			"type": "object",
+			"required": ["account_name", "flow_id", "confirmation"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"flow_id": {"type": "string"},
+				"confirmation": {"type": "string", "enum": ["DELETE"]},
+			},
 		},
 	},
 	{
 		"name": "whatsapp.migrate_flows",
 		"description": "Migrate selected native Flows from a source WABA into the mapped destination WABA.",
 		"inputSchema": {
-			"type": "object", "required": ["account_name", "source_waba_id"],
-			"properties": {"account_name": {"type": "string"}, "source_waba_id": {"type": "string"}, "source_flow_names": {"type": "array", "items": {"type": "string"}}},
+			"type": "object",
+			"required": ["account_name", "source_waba_id"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"source_waba_id": {"type": "string"},
+				"source_flow_names": {"type": "array", "items": {"type": "string"}},
+			},
 		},
 	},
 	{
 		"name": "whatsapp.get_flow_public_key",
 		"description": "Read the business public key used for encrypted WhatsApp Flow data exchange.",
-		"inputSchema": {"type": "object", "required": ["account_name"], "properties": {"account_name": {"type": "string"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name"],
+			"properties": {"account_name": {"type": "string"}},
+		},
 	},
 	{
 		"name": "whatsapp.set_flow_public_key",
 		"description": "Set the business public key used for encrypted WhatsApp Flow data exchange.",
-		"inputSchema": {"type": "object", "required": ["account_name", "business_public_key"], "properties": {"account_name": {"type": "string"}, "business_public_key": {"type": "string"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "business_public_key"],
+			"properties": {"account_name": {"type": "string"}, "business_public_key": {"type": "string"}},
+		},
+	},
+	{
+		"name": "whatsapp.get_flow_endpoint_status",
+		"description": "Read the Integration-owned encrypted Meta Flow endpoint URI and key status.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name"],
+			"properties": {"account_name": {"type": "string"}},
+		},
+	},
+	{
+		"name": "whatsapp.provision_flow_endpoint",
+		"description": "Provision or rotate the Integration-owned encrypted Meta Flow endpoint key and register its public key in Meta.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name"],
+			"properties": {"account_name": {"type": "string"}, "rotate": {"type": "boolean"}},
+		},
 	},
 	{
 		"name": "whatsapp.list_groups",
 		"description": "List Meta-hosted WhatsApp groups for a mapped Hub account.",
-		"inputSchema": {"type": "object", "properties": {"account_name": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 1024}}},
+		"inputSchema": {
+			"type": "object",
+			"properties": {
+				"account_name": {"type": "string"},
+				"limit": {"type": "integer", "minimum": 1, "maximum": 1024},
+			},
+		},
 	},
 	{
 		"name": "whatsapp.get_group",
 		"description": "Read group metadata, participants and approval mode.",
-		"inputSchema": {"type": "object", "required": ["account_name", "group_id"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "group_id"],
+			"properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}},
+		},
+	},
+	{
+		"name": "whatsapp.get_group_activity",
+		"description": "Read durable Core group state, participants and per-participant message receipts.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["group_id"],
+			"properties": {"group_id": {"type": "string"}},
+		},
 	},
 	{
 		"name": "whatsapp.create_group",
 		"description": "Create a Meta-hosted WhatsApp group.",
-		"inputSchema": {"type": "object", "required": ["account_name", "subject"], "properties": {"account_name": {"type": "string"}, "subject": {"type": "string"}, "description": {"type": "string"}, "join_approval_mode": {"type": "string", "enum": ["auto_approve", "approval_required"]}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "subject"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"subject": {"type": "string"},
+				"description": {"type": "string"},
+				"join_approval_mode": {"type": "string", "enum": ["auto_approve", "approval_required"]},
+			},
+		},
 	},
 	{
 		"name": "whatsapp.update_group",
 		"description": "Update group subject or description.",
-		"inputSchema": {"type": "object", "required": ["account_name", "group_id"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "subject": {"type": "string"}, "description": {"type": "string"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "group_id"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"group_id": {"type": "string"},
+				"subject": {"type": "string"},
+				"description": {"type": "string"},
+			},
+		},
 	},
 	{
 		"name": "whatsapp.update_group_picture",
 		"description": "Upload a base64-encoded group picture.",
-		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "file_content_b64"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "file_content_b64": {"type": "string"}, "filename": {"type": "string"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "group_id", "file_content_b64"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"group_id": {"type": "string"},
+				"file_content_b64": {"type": "string"},
+				"filename": {"type": "string"},
+			},
+		},
 	},
 	{
 		"name": "whatsapp.delete_group",
 		"description": "Delete a WhatsApp group. Requires confirmation=DELETE.",
-		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "confirmation"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "confirmation": {"type": "string", "enum": ["DELETE"]}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "group_id", "confirmation"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"group_id": {"type": "string"},
+				"confirmation": {"type": "string", "enum": ["DELETE"]},
+			},
+		},
 	},
 	{
 		"name": "whatsapp.get_group_invite_link",
 		"description": "Read the current group invite link.",
-		"inputSchema": {"type": "object", "required": ["account_name", "group_id"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "group_id"],
+			"properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}},
+		},
 	},
 	{
 		"name": "whatsapp.reset_group_invite_link",
 		"description": "Invalidate and replace a group invite link. Requires confirmation=RESET.",
-		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "confirmation"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "confirmation": {"type": "string", "enum": ["RESET"]}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "group_id", "confirmation"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"group_id": {"type": "string"},
+				"confirmation": {"type": "string", "enum": ["RESET"]},
+			},
+		},
 	},
 	{
 		"name": "whatsapp.list_group_join_requests",
 		"description": "List pending join requests for a group.",
-		"inputSchema": {"type": "object", "required": ["account_name", "group_id"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "group_id"],
+			"properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}},
+		},
 	},
 	{
 		"name": "whatsapp.decide_group_join_requests",
 		"description": "Approve or reject selected group join requests.",
-		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "join_requests", "approve"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "join_requests": {"type": "array", "items": {"type": "object"}}, "approve": {"type": "boolean"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "group_id", "join_requests", "approve"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"group_id": {"type": "string"},
+				"join_requests": {"type": "array", "items": {"type": "object"}},
+				"approve": {"type": "boolean"},
+			},
+		},
 	},
 	{
 		"name": "whatsapp.remove_group_participants",
 		"description": "Remove participants from a group. Requires confirmation=REMOVE.",
-		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "participants", "confirmation"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "participants": {"type": "array", "items": {"type": "string"}}, "confirmation": {"type": "string", "enum": ["REMOVE"]}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "group_id", "participants", "confirmation"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"group_id": {"type": "string"},
+				"participants": {"type": "array", "items": {"type": "string"}},
+				"confirmation": {"type": "string", "enum": ["REMOVE"]},
+			},
+		},
 	},
 	{
 		"name": "whatsapp.send_group_message",
 		"description": "Send a supported text, media or template message to a WhatsApp group.",
-		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "message_type", "content"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "message_type": {"type": "string", "enum": ["text", "image", "video", "audio", "document", "template"]}, "content": {"type": "object"}, "idempotency_key": {"type": "string"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "group_id", "message_type", "content"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"group_id": {"type": "string"},
+				"message_type": {
+					"type": "string",
+					"enum": ["text", "image", "video", "audio", "document", "template"],
+				},
+				"content": {"type": "object"},
+				"idempotency_key": {"type": "string"},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.send_group_invite_template",
+		"description": "Send an approved Meta group-invite template with the required group_id body parameter.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "group_id", "template_name"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"group_id": {"type": "string"},
+				"template_name": {"type": "string"},
+				"language_code": {"type": "string"},
+				"to_number": {"type": "string"},
+				"recipient": {"type": "string"},
+				"additional_body_parameters": {"type": "array", "items": {"type": "object"}},
+				"idempotency_key": {"type": "string"},
+			},
+		},
 	},
 	{
 		"name": "whatsapp.pin_group_message",
 		"description": "Pin or unpin a group message.",
-		"inputSchema": {"type": "object", "required": ["account_name", "group_id", "message_id", "operation"], "properties": {"account_name": {"type": "string"}, "group_id": {"type": "string"}, "message_id": {"type": "string"}, "operation": {"type": "string", "enum": ["pin", "unpin"]}, "expiration_days": {"type": "integer", "minimum": 1}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "group_id", "message_id", "operation"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"group_id": {"type": "string"},
+				"message_id": {"type": "string"},
+				"operation": {"type": "string", "enum": ["pin", "unpin"]},
+				"expiration_days": {"type": "integer", "minimum": 1},
+			},
+		},
 	},
 	{
 		"name": "whatsapp.get_call_settings",
@@ -581,22 +872,128 @@ TOOL_DEFINITIONS = [
 	{
 		"name": "whatsapp.update_call_settings",
 		"description": "Update Meta Calling API settings.",
-		"inputSchema": {"type": "object", "required": ["account_name", "calling"], "properties": {"account_name": {"type": "string"}, "calling": {"type": "object"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "calling"],
+			"properties": {"account_name": {"type": "string"}, "calling": {"type": "object"}},
+		},
 	},
 	{
 		"name": "whatsapp.get_call_permission",
 		"description": "Check WhatsApp calling permission for a user or business-scoped recipient.",
-		"inputSchema": {"type": "object", "required": ["account_name"], "properties": {"account_name": {"type": "string"}, "user_wa_id": {"type": "string"}, "recipient": {"type": "string"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"user_wa_id": {"type": "string"},
+				"recipient": {"type": "string"},
+			},
+		},
 	},
 	{
 		"name": "whatsapp.request_call_permission",
 		"description": "Send Meta's native call-permission request interaction.",
-		"inputSchema": {"type": "object", "required": ["account_name", "body_text"], "properties": {"account_name": {"type": "string"}, "body_text": {"type": "string"}, "to_number": {"type": "string"}, "recipient": {"type": "string"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "body_text"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"body_text": {"type": "string"},
+				"to_number": {"type": "string"},
+				"recipient": {"type": "string"},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.send_call_button",
+		"description": "Send Meta's native WhatsApp call button interaction.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "body_text"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"body_text": {"type": "string"},
+				"to_number": {"type": "string"},
+				"recipient": {"type": "string"},
+				"display_text": {"type": "string"},
+				"ttl_minutes": {"type": "integer"},
+				"payload": {"type": "string"},
+				"idempotency_key": {"type": "string"},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.send_call_button_template",
+		"description": "Send an approved template containing a WhatsApp voice-call button.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "template_name"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"template_name": {"type": "string"},
+				"language_code": {"type": "string"},
+				"to_number": {"type": "string"},
+				"recipient": {"type": "string"},
+				"ttl_minutes": {"type": "integer"},
+				"payload": {"type": "string"},
+				"idempotency_key": {"type": "string"},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.build_call_deep_link",
+		"description": "Build the official wa.me/call deep link for a configured business phone number.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name"],
+			"properties": {"account_name": {"type": "string"}, "biz_payload": {"type": "string"}},
+		},
+	},
+	{
+		"name": "whatsapp.get_call_artifact",
+		"description": "Resolve a Meta call recording or transcript media URL.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "media_id"],
+			"properties": {"account_name": {"type": "string"}, "media_id": {"type": "string"}},
+		},
+	},
+	{
+		"name": "whatsapp.upload_voicemail_announcement",
+		"description": "Upload an OPUS OGG Core File for Meta's voicemail announcement use case.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "file_url"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"file_url": {"type": "string"},
+				"description": {"type": "string"},
+			},
+		},
 	},
 	{
 		"name": "whatsapp.call_action",
 		"description": "Perform a WhatsApp call signaling action using WebRTC SDP.",
-		"inputSchema": {"type": "object", "required": ["account_name", "action"], "properties": {"account_name": {"type": "string"}, "action": {"type": "string", "enum": ["connect", "pre_accept", "accept", "reject", "terminate"]}, "call_id": {"type": "string"}, "to_number": {"type": "string"}, "recipient": {"type": "string"}, "sdp_type": {"type": "string", "enum": ["offer", "answer"]}, "sdp": {"type": "string"}, "biz_opaque_callback_data": {"type": "string"}}},
+		"inputSchema": {
+			"type": "object",
+			"required": ["account_name", "action"],
+			"properties": {
+				"account_name": {"type": "string"},
+				"action": {
+					"type": "string",
+					"enum": ["connect", "pre_accept", "accept", "reject", "terminate"],
+				},
+				"call_id": {"type": "string"},
+				"to_number": {"type": "string"},
+				"recipient": {"type": "string"},
+				"sdp_type": {"type": "string", "enum": ["offer", "answer"]},
+				"sdp": {"type": "string"},
+				"biz_opaque_callback_data": {"type": "string"},
+				"recording": {"type": "object"},
+				"transcription": {"type": "object"},
+			},
+		},
 	},
 ]
 
@@ -631,9 +1028,7 @@ def call_tool(name: str, arguments: dict | str | None = None) -> dict | list:
 			)
 		),
 		"whatsapp.upsert_topic": lambda: upsert_topic(**arguments),
-		"whatsapp.list_conversation_topics": (
-			lambda: list_topics(arguments["conversation"])
-		),
+		"whatsapp.list_conversation_topics": (lambda: list_topics(arguments["conversation"])),
 		"whatsapp.create_case": lambda: create_case(
 			arguments["case_type"],
 			arguments["title"],
@@ -717,23 +1112,34 @@ def call_tool(name: str, arguments: dict | str | None = None) -> dict | list:
 		"whatsapp.migrate_flows": lambda: migrate_meta_flows(**arguments),
 		"whatsapp.get_flow_public_key": lambda: get_meta_flow_public_key(**arguments),
 		"whatsapp.set_flow_public_key": lambda: set_meta_flow_public_key(**arguments),
+		"whatsapp.get_flow_endpoint_status": lambda: meta_flow_endpoint_status(**arguments),
+		"whatsapp.provision_flow_endpoint": lambda: provision_meta_flow_endpoint(**arguments),
 		"whatsapp.list_groups": lambda: whatsapp_group_workspace(**arguments),
 		"whatsapp.get_group": lambda: whatsapp_get_group(**arguments),
+		"whatsapp.get_group_activity": lambda: whatsapp_group_activity(**arguments),
 		"whatsapp.create_group": lambda: whatsapp_create_group(**arguments),
 		"whatsapp.update_group": lambda: whatsapp_update_group(**arguments),
 		"whatsapp.update_group_picture": lambda: whatsapp_update_group_picture(**arguments),
 		"whatsapp.delete_group": lambda: _confirmed_group_action(arguments, "DELETE", whatsapp_delete_group),
 		"whatsapp.get_group_invite_link": lambda: whatsapp_get_invite_link(**arguments),
-		"whatsapp.reset_group_invite_link": lambda: _confirmed_group_action(arguments, "RESET", whatsapp_reset_invite_link),
+		"whatsapp.reset_group_invite_link": lambda: _confirmed_group_action(
+			arguments, "RESET", whatsapp_reset_invite_link
+		),
 		"whatsapp.list_group_join_requests": lambda: whatsapp_list_join_requests(**arguments),
 		"whatsapp.decide_group_join_requests": lambda: whatsapp_change_join_requests(
-			arguments["account_name"], arguments["group_id"], arguments["join_requests"],
+			arguments["account_name"],
+			arguments["group_id"],
+			arguments["join_requests"],
 			1 if arguments["approve"] else 0,
 		),
 		"whatsapp.remove_group_participants": lambda: _confirmed_group_action(
-			arguments, "REMOVE", whatsapp_remove_participants, "participants",
+			arguments,
+			"REMOVE",
+			whatsapp_remove_participants,
+			"participants",
 		),
 		"whatsapp.send_group_message": lambda: whatsapp_send_group_message(**arguments),
+		"whatsapp.send_group_invite_template": lambda: whatsapp_send_group_invite_template(**arguments),
 		"whatsapp.pin_group_message": lambda: whatsapp_pin_group_message(**arguments),
 		"whatsapp.get_call_settings": lambda: whatsapp_calling_workspace(
 			account_name=arguments.get("account_name"),
@@ -742,6 +1148,11 @@ def call_tool(name: str, arguments: dict | str | None = None) -> dict | list:
 		"whatsapp.update_call_settings": lambda: whatsapp_update_call_settings(**arguments),
 		"whatsapp.get_call_permission": lambda: whatsapp_get_call_permission(**arguments),
 		"whatsapp.request_call_permission": lambda: whatsapp_request_call_permission(**arguments),
+		"whatsapp.send_call_button": lambda: whatsapp_send_call_button(**arguments),
+		"whatsapp.send_call_button_template": lambda: whatsapp_send_call_button_template(**arguments),
+		"whatsapp.build_call_deep_link": lambda: whatsapp_build_call_deep_link(**arguments),
+		"whatsapp.get_call_artifact": lambda: whatsapp_get_call_artifact(**arguments),
+		"whatsapp.upload_voicemail_announcement": lambda: whatsapp_upload_voicemail_announcement(**arguments),
 		"whatsapp.call_action": lambda: whatsapp_call_action(**arguments),
 	}
 	handler = handlers.get(name)
@@ -779,9 +1190,7 @@ def _search_parties(
 		searcher = frappe.get_attr(searcher_path)
 		rows = searcher(query=query, party_role=party_role, limit=limit)
 		if not isinstance(rows, list):
-			frappe.throw(
-				f"Party searcher {searcher_path} returned an invalid result"
-			)
+			frappe.throw(f"Party searcher {searcher_path} returned an invalid result")
 		for row in rows:
 			if isinstance(row, dict):
 				results.append(row)

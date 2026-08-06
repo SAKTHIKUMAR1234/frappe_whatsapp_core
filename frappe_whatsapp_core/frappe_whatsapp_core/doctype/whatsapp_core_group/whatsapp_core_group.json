@@ -1,0 +1,31 @@
+{
+ "doctype": "DocType",
+ "name": "WhatsApp Core Group",
+ "module": "Frappe WhatsApp Core",
+ "autoname": "field:group_id",
+ "naming_rule": "By fieldname",
+ "engine": "InnoDB",
+ "field_order": ["group_id", "relay_event", "channel", "subject", "description", "join_approval_mode", "status", "invite_link", "participant_count", "created_at", "last_event_type", "last_event", "last_synced"],
+ "fields": [
+  {"fieldname": "group_id", "fieldtype": "Data", "label": "Group ID", "reqd": 1, "unique": 1, "in_list_view": 1},
+  {"fieldname": "relay_event", "fieldtype": "Link", "options": "WhatsApp Core Event", "label": "Relay Event", "read_only": 1},
+  {"fieldname": "channel", "fieldtype": "Link", "options": "WhatsApp Core Channel", "label": "Channel", "reqd": 1},
+  {"fieldname": "subject", "fieldtype": "Data", "label": "Subject", "in_list_view": 1},
+  {"fieldname": "description", "fieldtype": "Small Text", "label": "Description"},
+  {"fieldname": "join_approval_mode", "fieldtype": "Data", "label": "Join Approval"},
+  {"fieldname": "status", "fieldtype": "Select", "options": "Active\nSuspended\nDeleted\nFailed", "label": "Status", "default": "Active", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "invite_link", "fieldtype": "Data", "label": "Invite Link"},
+  {"fieldname": "participant_count", "fieldtype": "Int", "label": "Active Participants", "read_only": 1},
+  {"fieldname": "created_at", "fieldtype": "Datetime", "label": "Created At"},
+  {"fieldname": "last_event_type", "fieldtype": "Data", "label": "Last Event"},
+  {"fieldname": "last_event", "fieldtype": "JSON", "label": "Last Event Payload", "reqd": 1},
+  {"fieldname": "last_synced", "fieldtype": "Datetime", "label": "Last Synced", "read_only": 1}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1},
+  {"role": "WhatsApp Manager", "read": 1, "export": 1},
+  {"role": "WhatsApp User", "read": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC"
+}

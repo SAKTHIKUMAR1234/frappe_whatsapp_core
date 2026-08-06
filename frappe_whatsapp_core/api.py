@@ -241,4 +241,22 @@ def describe_payload(payload):
 					"conversation_key": status.get("recipient_id", ""),
 				})
 				return description
+			calls = value.get("calls", [])
+			if calls:
+				call = calls[0]
+				description.update({
+					"event_type": f"call:{call.get('event') or call.get('status') or 'unknown'}",
+					"external_id": call.get("id") or call.get("call_id") or "",
+					"conversation_key": call.get("from") or call.get("to") or call.get("recipient") or "",
+				})
+				return description
+			groups = value.get("groups", [])
+			if groups:
+				group = groups[0]
+				description.update({
+					"event_type": f"group:{group.get('type') or change.get('field') or 'unknown'}",
+					"external_id": group.get("group_id") or group.get("request_id") or "",
+					"conversation_key": group.get("group_id") or "",
+				})
+				return description
 	return description

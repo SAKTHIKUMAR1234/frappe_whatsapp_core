@@ -16,8 +16,10 @@
 	import {
 		createFlow,
 		flowWorkspace,
+		flowEndpointStatus,
 		getBusinessPublicKey,
 		migrateFlows,
+		provisionFlowEndpoint,
 		setBusinessPublicKey,
 	} from '@/features/flows/services/flowService'
 	import { errorMessage } from '@/services/frappe'
@@ -32,6 +34,8 @@
 	const operating = ref(false)
 	const migrateDialog = ref(false)
 	const keyDialog = ref(false)
+	const endpointDialog = ref(false)
+	const endpointStatus = ref(null)
 	const workspace = ref({ accounts: [], flows: [], selected_account: '' })
 	const selectedAccount = ref('')
 	const filter = ref('')
@@ -143,6 +147,45 @@
 		}
 	}
 
+	async function openEndpointDialog() {
+		operating.value = true
+		try {
+			endpointStatus.value = await flowEndpointStatus(selectedAccount.value)
+			endpointDialog.value = true
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Flow endpoint unavailable',
+				detail: errorMessage(error),
+				life: 5000,
+			})
+		} finally {
+			operating.value = false
+		}
+	}
+
+	async function provisionEndpoint(rotate = false) {
+		if (rotate && !window.confirm('Rotate the endpoint key registered in Meta?')) return
+		operating.value = true
+		try {
+			endpointStatus.value = await provisionFlowEndpoint(selectedAccount.value, rotate)
+			toast.add({
+				severity: 'success',
+				summary: rotate ? 'Flow endpoint key rotated' : 'Flow endpoint provisioned',
+				life: 3500,
+			})
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Flow endpoint not provisioned',
+				detail: errorMessage(error),
+				life: 5000,
+			})
+		} finally {
+			operating.value = false
+		}
+	}
+
 	async function migrateNativeFlows() {
 		operating.value = true
 		try {
@@ -192,6 +235,14 @@
 			</p>
 		</div>
 		<div v-if="canManage" class="heading-actions">
+			<Button
+				label="Data endpoint"
+				severity="secondary"
+				outlined
+				:loading="operating"
+				:disabled="!selectedAccount"
+				@click="openEndpointDialog"
+			/>
 			<Button
 				label="Encryption key"
 				severity="secondary"
@@ -307,6 +358,49 @@
 		/></template>
 	</Dialog>
 	<Dialog
+		v-model:visible="endpointDialog"
+		modal
+		header="Encrypted Meta Flow endpoint"
+		:style="{ width: '620px', maxWidth: '94vw' }"
+	>
+		<p class="dialog-help">
+			Integration owns the encrypted private key and validates Meta signatures. Core only
+			receives the decrypted business payload through its authenticated endpoint.
+		</p>
+		<div class="endpoint-state">
+			<div>
+				<span>Status</span
+				><strong>{{
+					endpointStatus?.provisioned ? 'Provisioned' : 'Not provisioned'
+				}}</strong>
+			</div>
+			<div>
+				<span>Endpoint URI</span><code>{{ endpointStatus?.endpoint_uri || '—' }}</code>
+			</div>
+			<div>
+				<span>Key fingerprint</span
+				><code>{{ endpointStatus?.public_key_fingerprint || '—' }}</code>
+			</div>
+		</div>
+		<template #footer>
+			<Button label="Close" text @click="endpointDialog = false" />
+			<Button
+				v-if="endpointStatus?.provisioned"
+				label="Rotate key"
+				severity="danger"
+				outlined
+				:loading="operating"
+				@click="provisionEndpoint(true)"
+			/>
+			<Button
+				v-else
+				label="Provision endpoint"
+				:loading="operating"
+				@click="provisionEndpoint(false)"
+			/>
+		</template>
+	</Dialog>
+	<Dialog
 		v-model:visible="migrateDialog"
 		modal
 		header="Migrate Meta Flows"
@@ -367,6 +461,29 @@
 		color: var(--wa-muted);
 		font-size: 12px;
 		line-height: 1.55;
+	}
+	.endpoint-state {
+		display: grid;
+		gap: 12px;
+		padding: 14px;
+		border: 1px solid var(--wa-border);
+		border-radius: 10px;
+		background: var(--wa-surface-soft, #f8faf9);
+	}
+	.endpoint-state div,
+	.endpoint-state span,
+	.endpoint-state strong,
+	.endpoint-state code {
+		display: block;
+	}
+	.endpoint-state span {
+		margin-bottom: 5px;
+		color: var(--wa-muted);
+		font-size: 10px;
+	}
+	.endpoint-state code {
+		overflow-wrap: anywhere;
+		font-size: 10px;
 	}
 	.key-editor {
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

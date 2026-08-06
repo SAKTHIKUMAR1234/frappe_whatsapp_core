@@ -1,6 +1,7 @@
 <script setup>
 	import { onMounted, onUnmounted, ref } from 'vue'
 	import Button from 'primevue/button'
+	import Checkbox from 'primevue/checkbox'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
 	import Dialog from 'primevue/dialog'
@@ -8,7 +9,7 @@
 	import Select from 'primevue/select'
 	import Tag from 'primevue/tag'
 	import Textarea from 'primevue/textarea'
-	import { call, errorMessage } from '@/services/frappe'
+	import { call, errorMessage, uploadFile } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
 
@@ -19,7 +20,8 @@
 		notice = ref(''),
 		account = ref(''),
 		showSettings = ref(false),
-		showAction = ref(false)
+		showAction = ref(false),
+		showOutreach = ref(false)
 	const workspace = ref({ accounts: [], calls: [], settings: {}, selected_account: '' })
 	const settingsJson = ref('{}')
 	const form = ref({
@@ -30,6 +32,21 @@
 		sdp_type: 'offer',
 		sdp: '',
 		biz_opaque_callback_data: '',
+		recording_enabled: false,
+		transcription_enabled: false,
+		purpose: '',
+		announcement_language: 'en_IN',
+	})
+	const outreach = ref({
+		operation: 'button',
+		to_number: '',
+		recipient: '',
+		body_text: 'Call us on WhatsApp for faster support.',
+		display_text: 'Call Now',
+		template_name: '',
+		language_code: 'en',
+		ttl_minutes: 10080,
+		payload: '',
 	})
 	const permission = ref({
 		user_wa_id: '',
@@ -123,15 +140,29 @@
 			sdp_type: row ? 'answer' : 'offer',
 			sdp: '',
 			biz_opaque_callback_data: '',
+			recording_enabled: false,
+			transcription_enabled: false,
+			purpose: '',
+			announcement_language: 'en_IN',
 		}
 		showAction.value = true
 	}
 	async function executeAction() {
-		const values = { ...form.value }
+		const {
+			recording_enabled,
+			transcription_enabled,
+			purpose,
+			announcement_language,
+			...values
+		} = form.value
 		if (!['connect', 'pre_accept', 'accept'].includes(values.action)) {
 			values.sdp_type = null
 			values.sdp = null
 		}
+		if (['connect', 'accept'].includes(values.action) && recording_enabled)
+			values.recording = { status: 'ENABLED', purpose, announcement_language }
+		if (['connect', 'accept'].includes(values.action) && transcription_enabled)
+			values.transcription = { status: 'ENABLED', purpose, announcement_language }
 		await run(
 			'call',
 			() =>
@@ -143,6 +174,62 @@
 		)
 		showAction.value = false
 		await load()
+	}
+	async function sendOutreach() {
+		const values = outreach.value
+		if (values.operation === 'deep-link') {
+			const result = await run('outreach', () =>
+				call('frappe_whatsapp_core.calling.build_call_deep_link', {
+					account_name: account.value,
+					biz_payload: values.payload || null,
+				}),
+			)
+			notice.value = result?.url || 'Call deep link generated.'
+		} else {
+			const method =
+				values.operation === 'template' ? 'send_call_button_template' : 'send_call_button'
+			await run(
+				'outreach',
+				() =>
+					call(`frappe_whatsapp_core.calling.${method}`, {
+						account_name: account.value,
+						to_number: values.to_number || null,
+						recipient: values.recipient || null,
+						body_text: values.body_text,
+						display_text: values.display_text,
+						template_name: values.template_name,
+						language_code: values.language_code,
+						ttl_minutes: values.ttl_minutes,
+						payload: values.payload || null,
+					}),
+				'Call invitation queued.',
+			)
+		}
+		showOutreach.value = false
+	}
+	async function uploadVoicemail(event) {
+		const file = event.target.files?.[0]
+		if (!file) return
+		await run('voicemail', async () => {
+			const stored = await uploadFile(file, true)
+			const result = await call(
+				'frappe_whatsapp_core.calling.upload_voicemail_announcement',
+				{ account_name: account.value, file_url: stored.file_url },
+			)
+			notice.value = `Voicemail media uploaded: ${result.media_id || ''}`
+			return result
+		})
+		event.target.value = ''
+	}
+	async function openArtifact(mediaId) {
+		const result = await run('artifact', () =>
+			call('frappe_whatsapp_core.calling.get_call_artifact', {
+				account_name: account.value,
+				media_id: mediaId,
+				download: 1,
+			}),
+		)
+		if (result?.file_url) window.open(result.file_url, '_blank', 'noopener')
 	}
 	onMounted(() => {
 		load('')
@@ -162,6 +249,17 @@
 			</p>
 		</div>
 		<div class="actions">
+			<Button
+				label="Call invitation"
+				icon="pi pi-send"
+				outlined
+				@click="showOutreach = true"
+			/>
+			<label class="upload-button">
+				<input type="file" accept="audio/ogg,.ogg" @change="uploadVoicemail" />
+				<span class="pi pi-upload" />
+				{{ action === 'voicemail' ? 'Uploading…' : 'Voicemail audio' }}
+			</label>
 			<Button
 				label="Settings"
 				icon="pi pi-cog"
@@ -234,7 +332,29 @@
 			/><Column field="started_at" header="Started" /><Column
 				field="ended_at"
 				header="Ended"
-			/><Column header=""
+			/><Column header="Artifacts"
+				><template #body="{ data }"
+					><div class="artifact-actions">
+						<Button
+							v-if="data.recording_media_id"
+							label="Recording"
+							icon="pi pi-volume-up"
+							size="small"
+							text
+							@click="openArtifact(data.recording_media_id)"
+						/><Button
+							v-if="data.transcript_media_id"
+							label="Transcript"
+							icon="pi pi-file"
+							size="small"
+							text
+							@click="openArtifact(data.transcript_media_id)"
+						/><span v-if="!data.recording_media_id && !data.transcript_media_id"
+							>—</span
+						>
+					</div></template
+				></Column
+			><Column header=""
 				><template #body="{ data }"
 					><Button
 						label="Act"
@@ -295,6 +415,27 @@
 					v-model="form.biz_opaque_callback_data"
 					maxlength="512"
 			/></label>
+			<div v-if="['connect', 'accept'].includes(form.action)" class="consent-grid">
+				<label class="check-label">
+					<Checkbox v-model="form.recording_enabled" binary /> Record this call
+				</label>
+				<label class="check-label">
+					<Checkbox v-model="form.transcription_enabled" binary /> Transcribe this call
+				</label>
+				<template v-if="form.recording_enabled || form.transcription_enabled">
+					<label class="full-row"
+						>Purpose<InputText
+							v-model="form.purpose"
+							maxlength="250"
+							placeholder="Purpose included in Meta's call announcement"
+					/></label>
+					<label class="full-row"
+						>Announcement language<InputText
+							v-model="form.announcement_language"
+							placeholder="en_IN"
+					/></label>
+				</template>
+			</div>
 		</div>
 		<template #footer
 			><Button
@@ -309,6 +450,70 @@
 				"
 				@click="executeAction" /></template
 	></Dialog>
+	<Dialog
+		v-model:visible="showOutreach"
+		modal
+		header="WhatsApp call invitation"
+		:style="{ width: 'min(42rem,calc(100vw - 2rem))' }"
+	>
+		<div class="form">
+			<label
+				>Invitation type<Select
+					v-model="outreach.operation"
+					:options="[
+						{ label: 'Session call button', value: 'button' },
+						{ label: 'Approved template', value: 'template' },
+						{ label: 'Deep link', value: 'deep-link' },
+					]"
+					option-label="label"
+					option-value="value"
+			/></label>
+			<template v-if="outreach.operation !== 'deep-link'">
+				<label>WhatsApp number<InputText v-model="outreach.to_number" /></label>
+				<label>Recipient ID (optional)<InputText v-model="outreach.recipient" /></label>
+			</template>
+			<label v-if="outreach.operation === 'button'"
+				>Message<Textarea v-model="outreach.body_text" rows="3"
+			/></label>
+			<label v-if="outreach.operation === 'button'"
+				>Button label<InputText v-model="outreach.display_text" maxlength="20"
+			/></label>
+			<label v-if="outreach.operation === 'template'"
+				>Template name<InputText v-model="outreach.template_name"
+			/></label>
+			<label v-if="outreach.operation === 'template'"
+				>Language code<InputText v-model="outreach.language_code"
+			/></label>
+			<label v-if="outreach.operation !== 'deep-link'"
+				>Button TTL (minutes)<InputText
+					v-model="outreach.ttl_minutes"
+					type="number"
+					min="1"
+			/></label>
+			<label
+				>Business payload<InputText
+					v-model="outreach.payload"
+					placeholder="Optional opaque tracking payload"
+			/></label>
+		</div>
+		<template #footer>
+			<Button
+				label="Cancel"
+				severity="secondary"
+				outlined
+				@click="showOutreach = false"
+			/><Button
+				:label="outreach.operation === 'deep-link' ? 'Create link' : 'Send invitation'"
+				:loading="action === 'outreach'"
+				:disabled="
+					outreach.operation !== 'deep-link' &&
+					!outreach.to_number &&
+					!outreach.recipient
+				"
+				@click="sendOutreach"
+			/>
+		</template>
+	</Dialog>
 </template>
 <style scoped>
 	.panel {
@@ -351,6 +556,43 @@
 		gap: 6px;
 		font-size: 12px;
 	}
+	.consent-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 12px;
+		padding: 12px;
+		border: 1px solid var(--wa-border);
+		border-radius: 12px;
+	}
+	.consent-grid .check-label {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.full-row {
+		grid-column: 1 / -1;
+	}
+	.artifact-actions {
+		display: flex;
+		gap: 4px;
+		align-items: center;
+		flex-wrap: wrap;
+	}
+	.upload-button {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		min-height: 40px;
+		padding: 0 14px;
+		border: 1px solid var(--wa-border);
+		border-radius: 8px;
+		cursor: pointer;
+		font-size: 14px;
+		font-weight: 600;
+	}
+	.upload-button input {
+		display: none;
+	}
 	.json-editor {
 		width: 100%;
 		font-family: ui-monospace, SFMono-Regular, monospace;
@@ -391,6 +633,9 @@
 		}
 		.permission-card > * {
 			grid-column: 1 !important;
+		}
+		.consent-grid {
+			grid-template-columns: 1fr;
 		}
 	}
 </style>

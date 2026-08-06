@@ -18,16 +18,21 @@ def _accounts() -> list[dict]:
 	settings = get_settings()
 	rows = []
 	for row in settings.accounts:
-		channel = frappe.db.get_value(
-			"WhatsApp Core Channel", row.channel, ["display_name", "phone_number_id"], as_dict=True
-		) or {}
-		rows.append({
-			"account_name": row.account_name,
-			"channel": row.channel,
-			"display_name": channel.get("display_name") or row.account_name,
-			"phone_number_id": channel.get("phone_number_id") or "",
-			"is_default": bool(row.is_default),
-		})
+		channel = (
+			frappe.db.get_value(
+				"WhatsApp Core Channel", row.channel, ["display_name", "phone_number_id"], as_dict=True
+			)
+			or {}
+		)
+		rows.append(
+			{
+				"account_name": row.account_name,
+				"channel": row.channel,
+				"display_name": channel.get("display_name") or row.account_name,
+				"phone_number_id": channel.get("phone_number_id") or "",
+				"is_default": bool(row.is_default),
+			}
+		)
 	return rows
 
 
@@ -58,7 +63,12 @@ def flow_workspace(account_name: str | None = None) -> dict:
 	selected = _resolve_account_name(account_name)
 	context = _context(selected)
 	result = _call("meta_flows", "list_flows", {"waba_name": context["waba_name"]})
-	return {"accounts": accounts, "selected_account": selected, "context": context, "flows": result.get("data") or []}
+	return {
+		"accounts": accounts,
+		"selected_account": selected,
+		"context": context,
+		"flows": result.get("data") or [],
+	}
 
 
 @frappe.whitelist()
@@ -68,8 +78,11 @@ def get_flow(account_name: str, flow_id: str) -> dict:
 	result = _call("meta_flows", "get_flow", {"waba_name": context["waba_name"], "flow_id": flow_id})
 	asset = _call("meta_flows", "get_flow_json", {"waba_name": context["waba_name"], "flow_id": flow_id})
 	return {
-		"account_name": account_name, "context": context, "flow": result.get("data") or {},
-		"flow_json": asset.get("data"), "asset": asset.get("asset"),
+		"account_name": account_name,
+		"context": context,
+		"flow": result.get("data") or {},
+		"flow_json": asset.get("data"),
+		"asset": asset.get("asset"),
 	}
 
 
@@ -84,11 +97,19 @@ def create_flow(
 	clone_flow_id: str | None = None,
 ):
 	context = _context(account_name)
-	return _call("meta_flows", "create_flow", {
-		"waba_name": context["waba_name"], "flow_name": flow_name, "categories": categories,
-		"endpoint_uri": endpoint_uri, "flow_json": flow_json, "publish": 0,
-		"clone_flow_id": clone_flow_id,
-	})
+	return _call(
+		"meta_flows",
+		"create_flow",
+		{
+			"waba_name": context["waba_name"],
+			"flow_name": flow_name,
+			"categories": categories,
+			"endpoint_uri": endpoint_uri,
+			"flow_json": flow_json,
+			"publish": 0,
+			"clone_flow_id": clone_flow_id,
+		},
+	)
 
 
 @frappe.whitelist()
@@ -101,19 +122,32 @@ def update_flow(
 	endpoint_uri: str | None = None,
 ):
 	context = _context(account_name)
-	return _call("meta_flows", "update_flow_metadata", {
-		"waba_name": context["waba_name"], "flow_id": flow_id, "flow_name": flow_name,
-		"categories": categories, "endpoint_uri": endpoint_uri,
-	})
+	return _call(
+		"meta_flows",
+		"update_flow_metadata",
+		{
+			"waba_name": context["waba_name"],
+			"flow_id": flow_id,
+			"flow_name": flow_name,
+			"categories": categories,
+			"endpoint_uri": endpoint_uri,
+		},
+	)
 
 
 @frappe.whitelist()
 @require_core_access(manage=True)
 def upload_flow_json(account_name: str, flow_id: str, flow_json):
 	context = _context(account_name)
-	return _call("meta_flows", "upload_flow_json", {
-		"waba_name": context["waba_name"], "flow_id": flow_id, "flow_json": flow_json,
-	})
+	return _call(
+		"meta_flows",
+		"upload_flow_json",
+		{
+			"waba_name": context["waba_name"],
+			"flow_id": flow_id,
+			"flow_json": flow_json,
+		},
+	)
 
 
 def _lifecycle(account_name: str, flow_id: str, method: str):
@@ -143,9 +177,14 @@ def delete_flow(account_name: str, flow_id: str):
 @require_core_access(manage=True)
 def list_flow_assets(account_name: str, flow_id: str):
 	context = _context(account_name)
-	result = _call("meta_flows", "list_flow_assets", {
-		"waba_name": context["waba_name"], "flow_id": flow_id,
-	})
+	result = _call(
+		"meta_flows",
+		"list_flow_assets",
+		{
+			"waba_name": context["waba_name"],
+			"flow_id": flow_id,
+		},
+	)
 	return result.get("data") or []
 
 
@@ -158,25 +197,62 @@ def migrate_flows(
 ):
 	"""Copy selected native Flows into this site's mapped destination WABA."""
 	context = _context(account_name)
-	return _call("meta_flows", "migrate_flows", {
-		"destination_waba_name": context["waba_name"],
-		"source_waba_id": source_waba_id,
-		"source_flow_names": source_flow_names,
-	})
+	return _call(
+		"meta_flows",
+		"migrate_flows",
+		{
+			"destination_waba_name": context["waba_name"],
+			"source_waba_id": source_waba_id,
+			"source_flow_names": source_flow_names,
+		},
+	)
 
 
 @frappe.whitelist()
 @require_core_access(manage=True)
 def get_business_public_key(account_name: str):
-	return _call("meta_flows", "get_business_public_key", {
-		"account_name": _resolve_account_name(account_name),
-	})
+	return _call(
+		"meta_flows",
+		"get_business_public_key",
+		{
+			"account_name": _resolve_account_name(account_name),
+		},
+	)
 
 
 @frappe.whitelist()
 @require_core_access(manage=True)
 def set_business_public_key(account_name: str, business_public_key: str):
-	return _call("meta_flows", "set_business_public_key", {
-		"account_name": _resolve_account_name(account_name),
-		"business_public_key": business_public_key,
-	})
+	return _call(
+		"meta_flows",
+		"set_business_public_key",
+		{
+			"account_name": _resolve_account_name(account_name),
+			"business_public_key": business_public_key,
+		},
+	)
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def flow_endpoint_status(account_name: str):
+	return _call(
+		"flow_endpoint",
+		"status",
+		{
+			"account_name": _resolve_account_name(account_name),
+		},
+	)
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def provision_flow_endpoint(account_name: str, rotate=0):
+	return _call(
+		"flow_endpoint",
+		"provision",
+		{
+			"account_name": _resolve_account_name(account_name),
+			"rotate": 1 if frappe.utils.cint(rotate) else 0,
+		},
+	)

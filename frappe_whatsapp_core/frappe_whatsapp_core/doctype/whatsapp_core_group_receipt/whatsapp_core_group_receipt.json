@@ -1,0 +1,27 @@
+{
+ "doctype": "DocType",
+ "name": "WhatsApp Core Group Receipt",
+ "module": "Frappe WhatsApp Core",
+ "autoname": "field:receipt_key",
+ "naming_rule": "By fieldname",
+ "engine": "InnoDB",
+ "field_order": ["receipt_key", "relay_event", "message", "group", "participant_id", "status", "provider_timestamp", "error", "last_event"],
+ "fields": [
+  {"fieldname": "receipt_key", "fieldtype": "Data", "label": "Receipt Key", "reqd": 1, "unique": 1},
+  {"fieldname": "relay_event", "fieldtype": "Link", "options": "WhatsApp Core Event", "label": "Relay Event", "read_only": 1},
+  {"fieldname": "message", "fieldtype": "Link", "options": "WhatsApp Core Message", "label": "Message"},
+  {"fieldname": "group", "fieldtype": "Link", "options": "WhatsApp Core Group", "label": "Group", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "participant_id", "fieldtype": "Data", "label": "Participant", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "status", "fieldtype": "Data", "label": "Status", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "provider_timestamp", "fieldtype": "Datetime", "label": "Provider Timestamp", "in_list_view": 1},
+  {"fieldname": "error", "fieldtype": "JSON", "label": "Error"},
+  {"fieldname": "last_event", "fieldtype": "JSON", "label": "Last Event", "reqd": 1}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1},
+  {"role": "WhatsApp Manager", "read": 1, "export": 1},
+  {"role": "WhatsApp User", "read": 1}
+ ],
+ "sort_field": "provider_timestamp",
+ "sort_order": "DESC"
+}

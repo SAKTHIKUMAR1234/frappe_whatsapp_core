@@ -1,5 +1,5 @@
 <script setup>
-	import { computed, onMounted, ref } from 'vue'
+	import { computed, onMounted, onUnmounted, ref } from 'vue'
 	import Button from 'primevue/button'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
@@ -7,8 +7,11 @@
 	import InputText from 'primevue/inputtext'
 	import Select from 'primevue/select'
 	import Textarea from 'primevue/textarea'
-	import { call, errorMessage } from '@/services/frappe'
+	import { call, errorMessage, uploadFile } from '@/services/frappe'
+	import { subscribe } from '@/services/realtime'
+	import { useSessionStore } from '@/stores/session'
 
+	const session = useSessionStore()
 	const loading = ref(false),
 		saving = ref(false),
 		action = ref(''),
@@ -23,13 +26,21 @@
 		joinRequests = ref([]),
 		selectedRequests = ref([]),
 		participantsToRemove = ref(''),
+		messageType = ref('text'),
 		messageBody = ref(''),
+		messageFileUrl = ref(''),
+		messageFilename = ref(''),
+		messageTemplate = ref(''),
+		messageLanguage = ref('en'),
 		messageId = ref(''),
 		pinOperation = ref('pin'),
-		pinDays = ref(7)
+		pinDays = ref(7),
+		activity = ref({ group: null, members: [], receipts: [] })
 	const form = ref({ subject: '', description: '', join_approval_mode: 'auto_approve' })
 	const edit = ref({ subject: '', description: '' })
+	const invite = ref({ to_number: '', template_name: '', language_code: 'en' })
 	const rows = computed(() => workspace.value.data || [])
+	let unsubscribe = () => {}
 
 	async function run(name, task, success = '') {
 		action.value = name
@@ -97,6 +108,14 @@
 			subject: selected.value.subject || '',
 			description: selected.value.description || '',
 		}
+		await loadActivity()
+	}
+	async function loadActivity() {
+		activity.value = await run('activity', () =>
+			call('frappe_whatsapp_core.groups.group_activity', {
+				group_id: selected.value.id,
+			}),
+		)
 	}
 	async function saveGroup() {
 		await run(
@@ -164,18 +183,62 @@
 		participantsToRemove.value = ''
 	}
 	async function sendMessage() {
+		let content
+		if (messageType.value === 'text') content = { body: messageBody.value }
+		else if (messageType.value === 'template') {
+			content = {
+				name: messageTemplate.value,
+				language: { code: messageLanguage.value || 'en' },
+			}
+		} else {
+			content = { file_url: messageFileUrl.value }
+			if (messageBody.value && messageType.value !== 'audio')
+				content.caption = messageBody.value
+			if (messageType.value === 'document' && messageFilename.value)
+				content.filename = messageFilename.value
+		}
 		await run(
 			'send',
 			() =>
 				call('frappe_whatsapp_core.groups.send_group_message', {
 					account_name: account.value,
 					group_id: selected.value.id,
-					message_type: 'text',
-					content: { body: messageBody.value },
+					message_type: messageType.value,
+					content,
 				}),
 			'Message queued in the shared inbox.',
 		)
 		messageBody.value = ''
+		messageFileUrl.value = ''
+		messageFilename.value = ''
+	}
+	async function selectMessageFile(event) {
+		const file = event.target.files?.[0]
+		if (!file) return
+		await run(
+			'message-upload',
+			async () => {
+				const stored = await uploadFile(file, true)
+				messageFileUrl.value = stored.file_url
+				messageFilename.value = file.name
+				return stored
+			},
+			'File ready to send.',
+		)
+		event.target.value = ''
+	}
+	async function sendInvite() {
+		await run(
+			'send-invite',
+			() =>
+				call('frappe_whatsapp_core.groups.send_group_invite_template', {
+					account_name: account.value,
+					group_id: selected.value.id,
+					...invite.value,
+				}),
+			'Group invite queued.',
+		)
+		invite.value.to_number = ''
 	}
 	async function pinMessage() {
 		await run(
@@ -226,7 +289,14 @@
 		showManage.value = false
 		await load()
 	}
-	onMounted(() => load(''))
+	onMounted(() => {
+		load('')
+		unsubscribe = subscribe(session.boot?.site, 'whatsapp_core_group', (event) => {
+			load()
+			if (showManage.value && selected.value?.id === event.group_id) loadActivity()
+		})
+	})
+	onUnmounted(() => unsubscribe())
 </script>
 
 <template>
@@ -390,9 +460,35 @@
 						@click="decide(false)"
 					/>
 				</div>
+				<div class="form invite-form">
+					<label
+						>Recipient number<InputText
+							v-model="invite.to_number"
+							placeholder="International WhatsApp number"
+					/></label>
+					<label
+						>Approved invite template<InputText
+							v-model="invite.template_name"
+							placeholder="Template record or Meta name"
+					/></label>
+					<label>Language<InputText v-model="invite.language_code" /></label>
+					<Button
+						label="Send approved invite"
+						icon="pi pi-send"
+						:loading="action === 'send-invite'"
+						:disabled="!invite.to_number.trim() || !invite.template_name.trim()"
+						@click="sendInvite"
+					/>
+				</div>
 			</section>
 			<section class="manage-card">
 				<h3>Participants</h3>
+				<div v-if="activity.members.length" class="activity-list">
+					<div v-for="member in activity.members" :key="member.participant_id">
+						<span>{{ member.participant_id }}</span
+						><strong>{{ member.status }}</strong>
+					</div>
+				</div>
 				<label
 					>Numbers or participant IDs<Textarea
 						v-model="participantsToRemove"
@@ -409,11 +505,47 @@
 			</section>
 			<section class="manage-card">
 				<h3>Message group</h3>
-				<label>Message<Textarea v-model="messageBody" rows="3" /></label
+				<label
+					>Message type<Select
+						v-model="messageType"
+						:options="['text', 'image', 'video', 'audio', 'document', 'template']"
+				/></label>
+				<template v-if="messageType === 'template'">
+					<label>Approved template<InputText v-model="messageTemplate" /></label>
+					<label>Language code<InputText v-model="messageLanguage" /></label>
+				</template>
+				<template v-else-if="messageType !== 'text'">
+					<label class="file-input"
+						>Media file<input
+							type="file"
+							:accept="
+								messageType === 'image'
+									? 'image/*'
+									: messageType === 'video'
+										? 'video/*'
+										: messageType === 'audio'
+											? 'audio/*'
+											: '*/*'
+							"
+							@change="selectMessageFile"
+					/></label>
+					<small v-if="messageFileUrl" class="file-ready">
+						{{ messageFilename }} is ready.
+					</small>
+				</template>
+				<label v-if="!['template', 'audio'].includes(messageType)"
+					>{{ messageType === 'text' ? 'Message' : 'Caption'
+					}}<Textarea v-model="messageBody" rows="3" /></label
 				><Button
 					label="Send message"
 					icon="pi pi-send"
-					:disabled="!messageBody.trim()"
+					:disabled="
+						messageType === 'text'
+							? !messageBody.trim()
+							: messageType === 'template'
+								? !messageTemplate.trim()
+								: !messageFileUrl
+					"
 					:loading="action === 'send'"
 					@click="sendMessage"
 				/>
@@ -439,6 +571,15 @@
 						:loading="action === 'pin'"
 						@click="pinMessage"
 					/>
+				</div>
+				<div v-if="activity.receipts.length" class="receipt-summary">
+					<strong>Recent participant receipts</strong>
+					<span
+						v-for="receipt in activity.receipts.slice(0, 8)"
+						:key="`${receipt.message}-${receipt.participant_id}`"
+					>
+						{{ receipt.participant_id }} · {{ receipt.status }}
+					</span>
 				</div>
 			</section>
 		</div>
@@ -485,6 +626,29 @@
 	}
 	.manage-card h3 {
 		margin: 0;
+	}
+	.invite-form {
+		padding-top: 12px;
+		border-top: 1px solid var(--wa-border);
+	}
+	.activity-list,
+	.receipt-summary {
+		display: grid;
+		gap: 8px;
+		font-size: 12px;
+	}
+	.file-input input {
+		padding: 8px;
+		border: 1px solid var(--wa-border);
+		border-radius: 8px;
+	}
+	.file-ready {
+		color: var(--wa-success, #087f5b);
+	}
+	.activity-list > div {
+		display: flex;
+		justify-content: space-between;
+		gap: 12px;
 	}
 	.wide {
 		width: 100%;

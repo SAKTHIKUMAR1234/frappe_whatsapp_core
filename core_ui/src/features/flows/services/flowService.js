@@ -43,3 +43,12 @@ export const setBusinessPublicKey = (accountName, businessPublicKey) =>
 		account_name: accountName,
 		business_public_key: businessPublicKey,
 	})
+
+export const flowEndpointStatus = (accountName) =>
+	call(`${API}.flow_endpoint_status`, { account_name: accountName })
+
+export const provisionFlowEndpoint = (accountName, rotate = false) =>
+	call(`${API}.provision_flow_endpoint`, {
+		account_name: accountName,
+		rotate: rotate ? 1 : 0,
+	})
