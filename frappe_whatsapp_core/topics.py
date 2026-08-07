@@ -63,6 +63,11 @@ def upsert_topic(
 	for message_name in message_names or []:
 		_assign_message(topic, message_name, source, topic.confidence)
 	_refresh_topic(topic)
+	frappe.publish_realtime(
+		"whatsapp_core_topic",
+		{"topic": topic.name, "conversation": topic.conversation, "status": topic.status},
+		after_commit=True,
+	)
 	return topic.as_dict()
 
 

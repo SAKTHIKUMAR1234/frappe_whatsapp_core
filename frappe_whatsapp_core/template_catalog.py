@@ -62,6 +62,7 @@ def sync_template_projection(template, *, enabled: bool = True) -> dict:
 			**values,
 		}).insert(ignore_permissions=True)
 		status = "created"
+	_publish_template(doc)
 
 	return {
 		"name": doc.name,
@@ -85,10 +86,20 @@ def set_template_enabled(template_key: str, enabled) -> dict:
 			"last_synced_at": now_datetime(),
 		},
 	)
+	_publish_template(template_key)
 	return {
 		"name": template_key,
 		"enabled": bool(frappe.utils.sbool(enabled)),
 	}
+
+
+def _publish_template(template) -> None:
+	name = template if isinstance(template, str) else template.name
+	frappe.publish_realtime(
+		"whatsapp_core_template",
+		{"template": name},
+		after_commit=True,
+	)
 
 
 def _template_payload(template) -> dict:
@@ -121,4 +132,3 @@ def _extract_component_copy(values: dict) -> None:
 			values["body_text"] = component.get("text") or values["body_text"]
 		elif component_type == "FOOTER":
 			values["footer_text"] = component.get("text") or values["footer_text"]
-

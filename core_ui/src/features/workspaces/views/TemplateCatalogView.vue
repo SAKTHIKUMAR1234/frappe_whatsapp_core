@@ -1,5 +1,5 @@
 <script setup>
-	import { onMounted, ref } from 'vue'
+	import { onBeforeUnmount, onMounted, ref } from 'vue'
 	import Button from 'primevue/button'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
@@ -9,7 +9,12 @@
 
 	import AsyncState from '@/components/AsyncState.vue'
 	import { call, errorMessage } from '@/services/frappe'
+	import { subscribe } from '@/services/realtime'
+	import { useSessionStore } from '@/stores/session'
 
+	const session = useSessionStore()
+	let realtimeRefresh = null
+	let unsubscribeTemplate = null
 	const loading = ref(true)
 	const loadError = ref('')
 	const catalog = ref({
@@ -17,15 +22,15 @@
 		metrics: {},
 	})
 
-	async function load() {
-		loading.value = true
+	async function load({ silent = false } = {}) {
+		if (!silent) loading.value = true
 		loadError.value = ''
 		try {
 			catalog.value = await call('frappe_whatsapp_core.frontend_api.template_catalog')
 		} catch (error) {
 			loadError.value = errorMessage(error, 'Unable to load the template catalog.')
 		} finally {
-			loading.value = false
+			if (!silent) loading.value = false
 		}
 	}
 
@@ -36,7 +41,18 @@
 		return 'secondary'
 	}
 
-	onMounted(load)
+	onMounted(() => {
+		load()
+		unsubscribeTemplate = subscribe(session.boot?.site, 'whatsapp_core_template', () => {
+			window.clearTimeout(realtimeRefresh)
+			realtimeRefresh = window.setTimeout(() => load({ silent: true }), 200)
+		})
+	})
+
+	onBeforeUnmount(() => {
+		window.clearTimeout(realtimeRefresh)
+		unsubscribeTemplate?.()
+	})
 </script>
 
 <template>

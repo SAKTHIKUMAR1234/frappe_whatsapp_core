@@ -1,5 +1,5 @@
 <script setup>
-	import { computed, onMounted, ref, watch } from 'vue'
+	import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 	import Button from 'primevue/button'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
@@ -24,8 +24,14 @@
 
 	import AsyncState from '@/components/AsyncState.vue'
 	import { call, errorMessage } from '@/services/frappe'
+	import { subscribe } from '@/services/realtime'
+	import { useSessionStore } from '@/stores/session'
 
 	const toast = useToast()
+	const session = useSessionStore()
+	let realtimeRefresh = null
+	let unsubscribeCampaign = null
+	let unsubscribeTemplate = null
 	const loading = ref(true)
 	const saving = ref(false)
 	const loadError = ref('')
@@ -73,16 +79,21 @@
 		},
 	)
 
-	async function load() {
-		loading.value = true
+	async function load({ silent = false } = {}) {
+		if (!silent) loading.value = true
 		loadError.value = ''
 		try {
 			workspace.value = await call('frappe_whatsapp_core.frontend_api.campaign_workspace')
 		} catch (error) {
 			loadError.value = errorMessage(error, 'Unable to load campaigns.')
 		} finally {
-			loading.value = false
+			if (!silent) loading.value = false
 		}
+	}
+
+	function queueRealtimeRefresh() {
+		window.clearTimeout(realtimeRefresh)
+		realtimeRefresh = window.setTimeout(() => load({ silent: true }), 200)
 	}
 
 	async function createCampaign() {
@@ -204,7 +215,18 @@
 		})
 	}
 
-	onMounted(load)
+	onMounted(() => {
+		load()
+		const site = session.boot?.site
+		unsubscribeCampaign = subscribe(site, 'whatsapp_core_campaign', queueRealtimeRefresh)
+		unsubscribeTemplate = subscribe(site, 'whatsapp_core_template', queueRealtimeRefresh)
+	})
+
+	onBeforeUnmount(() => {
+		window.clearTimeout(realtimeRefresh)
+		unsubscribeCampaign?.()
+		unsubscribeTemplate?.()
+	})
 </script>
 
 <template>

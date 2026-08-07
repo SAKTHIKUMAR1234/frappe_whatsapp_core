@@ -1,5 +1,6 @@
 import json
 import uuid
+from unittest.mock import patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
@@ -84,6 +85,23 @@ class TestConversationTopics(FrappeTestCase):
 				message_names=[self.first_message.name],
 			)
 
+	def test_topic_change_notifies_ai_queue_sessions(self):
+		with patch("frappe_whatsapp_core.topics.frappe.publish_realtime") as publish:
+			topic = upsert_topic(
+				self.conversation.name,
+				"Realtime topic",
+				message_names=[self.first_message.name],
+			)
+		publish.assert_any_call(
+			"whatsapp_core_topic",
+			{
+				"topic": topic.name,
+				"conversation": self.conversation.name,
+				"status": "Open",
+			},
+			after_commit=True,
+		)
+
 	def test_topic_rejects_cross_conversation_message(self):
 		with self.assertRaises(frappe.ValidationError):
 			upsert_topic(
@@ -140,18 +158,19 @@ class TestConversationTopics(FrappeTestCase):
 		self.assertEqual(snapshot["topics"][0]["title"], "Test topic")
 
 	def test_mcp_json_rpc_call_is_structured_and_audited(self):
-		response = _dispatch({
-			"jsonrpc": "2.0",
-			"id": 7,
-			"method": "tools/call",
-			"params": {
-				"name": "whatsapp.list_unclassified_messages",
-				"arguments": {
-					"conversation": self.conversation.name,
-					"limit": 2,
+		with patch("frappe_whatsapp_core.mcp_transport.frappe.publish_realtime") as publish:
+			response = _dispatch({
+				"jsonrpc": "2.0",
+				"id": 7,
+				"method": "tools/call",
+				"params": {
+					"name": "whatsapp.list_unclassified_messages",
+					"arguments": {
+						"conversation": self.conversation.name,
+						"limit": 2,
+					},
 				},
-			},
-		})
+			})
 		self.assertEqual(response["id"], 7)
 		self.assertFalse(response["result"]["isError"])
 		self.assertEqual(
@@ -164,6 +183,11 @@ class TestConversationTopics(FrappeTestCase):
 				{"tool_name": "whatsapp.list_unclassified_messages"},
 			)
 		)
+		mcp_calls = [
+			call for call in publish.call_args_list if call.args[0] == "whatsapp_core_mcp_invocation"
+		]
+		self.assertEqual(len(mcp_calls), 1)
+		self.assertTrue(mcp_calls[0].kwargs["after_commit"])
 
 	def test_mcp_audit_redacts_credentials_and_large_transport_payloads(self):
 		value = _safe_audit_value({

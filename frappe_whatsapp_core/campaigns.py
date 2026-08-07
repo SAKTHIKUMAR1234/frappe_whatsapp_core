@@ -22,7 +22,7 @@ def create_campaign(
 	description: str = "",
 	audience_source: dict | None = None,
 ):
-	return frappe.get_doc({
+	campaign = frappe.get_doc({
 		"doctype": "WhatsApp Core Campaign",
 		"campaign_key": campaign_key,
 		"title": title,
@@ -36,6 +36,8 @@ def create_campaign(
 		),
 		"status": "Draft",
 	}).insert()
+	_publish_campaign(campaign)
+	return campaign
 
 
 def prepare_campaign(campaign_name: str, recipients) -> dict:
@@ -111,6 +113,7 @@ def prepare_campaign(campaign_name: str, recipients) -> dict:
 	campaign.recipient_count = len(values)
 	_reset_delivery_counts(campaign)
 	campaign.save()
+	_publish_campaign(campaign)
 	return campaign_summary(campaign.name)
 
 
@@ -137,6 +140,7 @@ def authorize_campaign(campaign_name: str, confirmation: str) -> dict:
 	campaign.authorized_by = frappe.session.user
 	campaign.authorized_at = now_datetime()
 	campaign.save()
+	_publish_campaign(campaign)
 	return campaign_summary(campaign.name)
 
 
@@ -157,6 +161,7 @@ def revoke_campaign_authorization(campaign_name: str) -> dict:
 	campaign.authorized_by = None
 	campaign.authorized_at = None
 	campaign.save()
+	_publish_campaign(campaign)
 	return campaign_summary(campaign.name)
 
 
@@ -175,6 +180,7 @@ def schedule_campaign(campaign_name: str, scheduled_for) -> dict:
 	campaign.status = "Scheduled"
 	campaign.scheduled_for = scheduled_at
 	campaign.save()
+	_publish_campaign(campaign)
 	return campaign_summary(campaign.name)
 
 
@@ -191,6 +197,7 @@ def launch_campaign(campaign_name: str) -> dict:
 	campaign.status = "Running"
 	campaign.started_at = campaign.started_at or now_datetime()
 	campaign.save()
+	_publish_campaign(campaign)
 	frappe.enqueue(
 		"frappe_whatsapp_core.campaigns.process_campaign_batch",
 		queue="short",
@@ -220,6 +227,7 @@ def cancel_campaign(campaign_name: str) -> dict:
 	campaign.completed_at = now_datetime()
 	campaign.save()
 	refresh_campaign_counts(campaign.name)
+	_publish_campaign(campaign)
 	return campaign_summary(campaign.name)
 
 
@@ -348,12 +356,21 @@ def refresh_campaign_counts(campaign_name: str) -> dict:
 		"failed_count": counts.get("Failed", 0),
 		"skipped_count": counts.get("Skipped", 0),
 	}
+	current = frappe.db.get_value(
+		"WhatsApp Core Campaign",
+		campaign_name,
+		list(values),
+		as_dict=True,
+	) or {}
+	changed = any(int(current.get(fieldname) or 0) != int(value or 0) for fieldname, value in values.items())
 	frappe.db.set_value(
 		"WhatsApp Core Campaign",
 		campaign_name,
 		values,
 		update_modified=False,
 	)
+	if changed:
+		_publish_campaign(campaign_name, counts=values)
 	return values
 
 
@@ -597,6 +614,22 @@ def _complete_campaign(campaign) -> None:
 	campaign.status = "Completed"
 	campaign.completed_at = now_datetime()
 	campaign.save(ignore_permissions=True)
+	_publish_campaign(campaign)
+
+
+def _publish_campaign(campaign, *, counts: dict | None = None) -> None:
+	"""Notify every open Core tab after the surrounding transaction commits."""
+	if isinstance(campaign, str):
+		name = campaign
+		status = frappe.db.get_value("WhatsApp Core Campaign", name, "status")
+	else:
+		name = campaign.name
+		status = campaign.status
+	frappe.publish_realtime(
+		"whatsapp_core_campaign",
+		{"campaign": name, "status": status, "counts": counts or {}},
+		after_commit=True,
+	)
 
 
 def _reset_delivery_counts(campaign) -> None:

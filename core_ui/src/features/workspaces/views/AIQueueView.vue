@@ -1,5 +1,5 @@
 <script setup>
-	import { computed, onMounted, ref } from 'vue'
+	import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 	import { useToast } from 'primevue/usetoast'
 	import Button from 'primevue/button'
 	import Column from 'primevue/column'
@@ -13,8 +13,13 @@
 
 	import AsyncState from '@/components/AsyncState.vue'
 	import { call, errorMessage } from '@/services/frappe'
+	import { subscribe } from '@/services/realtime'
+	import { useSessionStore } from '@/stores/session'
 
 	const toast = useToast()
+	const session = useSessionStore()
+	const unsubscribers = []
+	let realtimeRefresh = null
 	const loading = ref(true)
 	const saving = ref(false)
 	const loadError = ref('')
@@ -38,17 +43,30 @@
 		() => selected.value.length > 0 && selectedConversations.value.size === 1,
 	)
 
-	async function load() {
-		loading.value = true
+	async function load({ silent = false, preserveSelection = false } = {}) {
+		if (!silent) loading.value = true
 		loadError.value = ''
+		const selectedNames = preserveSelection
+			? new Set(selected.value.map((row) => row.name))
+			: new Set()
 		try {
 			workspace.value = await call('frappe_whatsapp_core.frontend_api.ai_queue_workspace')
-			selected.value = []
+			selected.value = preserveSelection
+				? workspace.value.messages.filter((row) => selectedNames.has(row.name))
+				: []
 		} catch (error) {
 			loadError.value = errorMessage(error, 'Unable to load the AI review queue.')
 		} finally {
-			loading.value = false
+			if (!silent) loading.value = false
 		}
+	}
+
+	function queueRealtimeRefresh() {
+		window.clearTimeout(realtimeRefresh)
+		realtimeRefresh = window.setTimeout(
+			() => load({ silent: true, preserveSelection: true }),
+			200,
+		)
 	}
 
 	function openClassification() {
@@ -89,7 +107,22 @@
 		return status === 'Completed' ? 'success' : 'danger'
 	}
 
-	onMounted(load)
+	onMounted(() => {
+		load()
+		const site = session.boot?.site
+		for (const event of [
+			'whatsapp_core_message',
+			'whatsapp_core_topic',
+			'whatsapp_core_mcp_invocation',
+		]) {
+			unsubscribers.push(subscribe(site, event, queueRealtimeRefresh))
+		}
+	})
+
+	onBeforeUnmount(() => {
+		window.clearTimeout(realtimeRefresh)
+		unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe())
+	})
 </script>
 
 <template>

@@ -7,7 +7,9 @@
 	import InputText from 'primevue/inputtext'
 	import MultiSelect from 'primevue/multiselect'
 	import Select from 'primevue/select'
+	import Tag from 'primevue/tag'
 	import Textarea from 'primevue/textarea'
+	import { MessageCircleMore, Settings2, ShieldCheck, UsersRound } from 'lucide-vue-next'
 	import { call, errorMessage, uploadFile } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
@@ -49,6 +51,7 @@
 	const rows = computed(() => workspace.value.data || [])
 	const ACTION_FAILED = Symbol('action-failed')
 	let unsubscribe = () => {}
+	let realtimeRefresh = null
 
 	async function run(name, task, success = '') {
 		action.value = name
@@ -65,8 +68,8 @@
 			action.value = ''
 		}
 	}
-	async function load(selectedAccount = account.value) {
-		loading.value = true
+	async function load(selectedAccount = account.value, { silent = false } = {}) {
+		if (!silent) loading.value = true
 		error.value = ''
 		try {
 			workspace.value = await call('frappe_whatsapp_core.groups.group_workspace', {
@@ -77,7 +80,7 @@
 		} catch (e) {
 			error.value = errorMessage(e)
 		} finally {
-			loading.value = false
+			if (!silent) loading.value = false
 		}
 	}
 	async function create() {
@@ -141,7 +144,8 @@
 			'Group details updated.',
 		)
 		if (result === ACTION_FAILED) return
-		await load()
+		selected.value = { ...selected.value, ...edit.value }
+		await load(account.value, { silent: true })
 	}
 	async function loadInvite(reset = false) {
 		const method = reset ? 'reset_invite_link' : 'get_invite_link'
@@ -197,6 +201,7 @@
 		)
 		if (result === ACTION_FAILED) return
 		participantsToRemove.value = []
+		await loadActivity()
 	}
 	async function sendMessage() {
 		let content
@@ -309,14 +314,27 @@
 		showManage.value = false
 		await load()
 	}
+	function groupSeverity(group) {
+		if (group.status === 'Active') return 'success'
+		if (group.status === 'Failed') return 'danger'
+		if (group.status === 'Suspended') return 'warn'
+		return 'secondary'
+	}
+	function queueRealtimeRefresh(event) {
+		window.clearTimeout(realtimeRefresh)
+		realtimeRefresh = window.setTimeout(async () => {
+			await load(account.value, { silent: true })
+			if (showManage.value && selected.value?.id === event?.group_id) await loadActivity()
+		}, 200)
+	}
 	onMounted(() => {
 		load('')
-		unsubscribe = subscribe(session.boot?.site, 'whatsapp_core_group', (event) => {
-			load()
-			if (showManage.value && selected.value?.id === event.group_id) loadActivity()
-		})
+		unsubscribe = subscribe(session.boot?.site, 'whatsapp_core_group', queueRealtimeRefresh)
 	})
-	onUnmounted(() => unsubscribe())
+	onUnmounted(() => {
+		window.clearTimeout(realtimeRefresh)
+		unsubscribe()
+	})
 </script>
 
 <template>
@@ -352,24 +370,47 @@
 				@click="load()"
 			/>
 		</div>
-		<DataTable :value="rows" :loading="loading" striped-rows responsive-layout="scroll"
-			><Column field="subject" header="Group" /><Column
-				field="description"
-				header="Description"
-			/><Column field="total_participant_count" header="Participants" /><Column
-				field="join_approval_mode"
-				header="Join approval"
-			/><Column field="id" header="Meta ID" /><Column header=""
-				><template #body="{ data }"
-					><Button
-						label="Manage"
-						size="small"
-						outlined
-						@click="manage(data)" /></template></Column
-			><template #empty
-				><div class="empty">No groups returned by this account.</div></template
-			></DataTable
-		>
+		<div v-if="loading" class="group-grid" aria-busy="true">
+			<div v-for="index in 4" :key="index" class="group-card loading-card"></div>
+		</div>
+		<div v-else-if="rows.length" class="group-grid">
+			<article v-for="group in rows" :key="group.id" class="group-card">
+				<header>
+					<span class="group-avatar"><UsersRound :size="18" /></span>
+					<div>
+						<strong>{{ group.subject || 'Untitled group' }}</strong>
+						<small>{{ group.id }}</small>
+					</div>
+					<Tag
+						:value="group.status || 'Active'"
+						:severity="groupSeverity(group)"
+						rounded
+					/>
+				</header>
+				<p>{{ group.description || 'No group description has been added.' }}</p>
+				<div class="group-facts">
+					<span
+						><UsersRound :size="14" />{{
+							group.total_participant_count || 0
+						}}
+						participants</span
+					>
+					<span
+						><ShieldCheck :size="14" />{{
+							group.join_approval_mode || 'Automatic approval'
+						}}</span
+					>
+				</div>
+				<Button label="Manage group" outlined fluid @click="manage(group)">
+					<template #icon><Settings2 :size="15" /></template>
+				</Button>
+			</article>
+		</div>
+		<div v-else class="empty">
+			<MessageCircleMore :size="32" />
+			<strong>No WhatsApp groups yet</strong>
+			<span>Create the first group for this account or choose another account.</span>
+		</div>
 	</section>
 	<Dialog
 		v-model:visible="showCreate"
@@ -413,6 +454,21 @@
 		:content-style="{ maxHeight: 'calc(100vh - 11rem)', overflow: 'auto' }"
 	>
 		<div v-if="selected" class="manage-grid">
+			<section class="group-summary">
+				<span class="group-avatar"><UsersRound :size="18" /></span>
+				<div>
+					<strong>{{ selected.subject }}</strong>
+					<small
+						>{{ selected.id }} ·
+						{{ selected.total_participant_count || 0 }} participants</small
+					>
+				</div>
+				<Tag
+					:value="selected.status || 'Active'"
+					:severity="groupSeverity(selected)"
+					rounded
+				/>
+			</section>
 			<section class="manage-card">
 				<h3>Group details</h3>
 				<div class="form">
@@ -650,6 +706,85 @@
 		display: grid;
 		gap: 14px;
 	}
+	.group-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 12px;
+	}
+	.group-card {
+		display: grid;
+		gap: 13px;
+		padding: 15px;
+		border: 1px solid var(--wa-border);
+		border-radius: 14px;
+		background: var(--wa-surface);
+	}
+	.group-card header,
+	.group-summary {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 10px;
+	}
+	.group-card header strong,
+	.group-card header small,
+	.group-summary strong,
+	.group-summary small {
+		display: block;
+	}
+	.group-card header small,
+	.group-summary small {
+		margin-top: 3px;
+		color: var(--wa-muted);
+		font-size: 10px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.group-avatar {
+		display: grid;
+		width: 34px;
+		height: 34px;
+		place-items: center;
+		border-radius: 10px;
+		color: #0b7258;
+		background: #e5f7f0;
+	}
+	.group-card p {
+		min-height: 32px;
+		margin: 0;
+		color: var(--wa-muted);
+		font-size: 11px;
+		line-height: 1.45;
+	}
+	.group-facts {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px 14px;
+		color: var(--wa-muted);
+		font-size: 10px;
+	}
+	.group-facts span {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+	}
+	.loading-card {
+		height: 190px;
+		background: linear-gradient(
+			90deg,
+			var(--wa-surface) 20%,
+			#eef4f1 50%,
+			var(--wa-surface) 80%
+		);
+		background-size: 200% 100%;
+		animation: group-pulse 1.3s ease-in-out infinite;
+	}
+	@keyframes group-pulse {
+		to {
+			background-position: -200% 0;
+		}
+	}
 	.toolbar,
 	.actions,
 	.pin-row {
@@ -676,6 +811,13 @@
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 14px;
+	}
+	.group-summary {
+		grid-column: 1 / -1;
+		padding: 14px 16px;
+		border: 1px solid var(--wa-border);
+		border-radius: 14px;
+		background: var(--wa-surface-soft, #f7faf8);
 	}
 	.manage-card {
 		padding: 16px;
@@ -738,12 +880,16 @@
 		color: #076445;
 	}
 	.empty {
+		display: grid;
+		gap: 7px;
+		justify-items: center;
 		padding: 48px;
 		text-align: center;
 		color: #7d8983;
 	}
 	@media (max-width: 760px) {
-		.manage-grid {
+		.manage-grid,
+		.group-grid {
 			grid-template-columns: 1fr;
 		}
 		.toolbar {

@@ -64,17 +64,36 @@ class TestCampaigns(FrappeTestCase):
 		self.assertEqual(template.body_text, "Hello {{1}}")
 		self.assertTrue(template.enabled)
 
+	def test_template_projection_notifies_open_core_sessions(self):
+		with patch("frappe_whatsapp_core.template_catalog.frappe.publish_realtime") as publish:
+			result = sync_template_projection({
+				"name": f"realtime_{frappe.generate_hash(length=8).lower()}",
+				"language": "en",
+				"status": "APPROVED",
+			})
+		publish.assert_any_call(
+			"whatsapp_core_template",
+			{"template": result["name"]},
+			after_commit=True,
+		)
+
 	def test_prepare_is_exact_and_deduplicated(self):
-		summary = prepare_campaign(
-			self.campaign.name,
-			[
-				{
-					"identity": self.identities[0].name,
-					"personalization": {"components": []},
-				},
-				self.identities[0].name,
-				self.identities[1].name,
-			],
+		with patch("frappe_whatsapp_core.campaigns.frappe.publish_realtime") as publish:
+			summary = prepare_campaign(
+				self.campaign.name,
+				[
+					{
+						"identity": self.identities[0].name,
+						"personalization": {"components": []},
+					},
+					self.identities[0].name,
+					self.identities[1].name,
+				],
+			)
+		publish.assert_called_with(
+			"whatsapp_core_campaign",
+			{"campaign": self.campaign.name, "status": "Prepared", "counts": {}},
+			after_commit=True,
 		)
 		self.assertEqual(summary["status"], "Prepared")
 		self.assertEqual(summary["recipient_count"], 2)

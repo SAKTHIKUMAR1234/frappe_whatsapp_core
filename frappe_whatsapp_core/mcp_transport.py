@@ -141,7 +141,7 @@ def _log_invocation(
 	result=None,
 	error: str | None = None,
 ) -> None:
-	frappe.get_doc({
+	invocation = frappe.get_doc({
 		"doctype": "WhatsApp Core MCP Invocation",
 		"invocation_key": invocation_key,
 		"user": frappe.session.user,
@@ -161,6 +161,15 @@ def _log_invocation(
 		)[:100000] if result is not None else "",
 		"error": (error or "")[:100000],
 	}).insert(ignore_permissions=True)
+	frappe.publish_realtime(
+		"whatsapp_core_mcp_invocation",
+		{
+			"invocation": invocation.name,
+			"tool_name": invocation.tool_name,
+			"status": invocation.status,
+		},
+		after_commit=True,
+	)
 
 
 def _safe_audit_value(value, key: str = ""):
