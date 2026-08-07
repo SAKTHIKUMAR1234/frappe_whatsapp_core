@@ -14,6 +14,15 @@ from frappe_whatsapp_core.outbound import resolve_recipient_phone
 
 
 class TestIdentityResolution(FrappeTestCase):
+	def setUp(self):
+		super().setUp()
+		# These tests deliberately create temporary User documents.  A site with
+		# recent real user creation can otherwise trip Frappe's global one-minute
+		# throttle and make this suite depend on unrelated site activity.
+		throttle_patcher = patch("frappe.core.doctype.user.user.throttle_user_creation")
+		throttle_patcher.start()
+		self.addCleanup(throttle_patcher.stop)
+
 	def test_contact_lookup_searches_business_link_without_loading_all_identities(self):
 		suffix = f"7{str(uuid.uuid4().int)[-9:]}"
 		full_name = f"Searchable Contact {suffix}"
