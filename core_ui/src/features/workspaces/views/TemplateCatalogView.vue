@@ -15,6 +15,7 @@
 	const session = useSessionStore()
 	let realtimeRefresh = null
 	let unsubscribeTemplate = null
+	let loadSequence = 0
 	const loading = ref(true)
 	const loadError = ref('')
 	const catalog = ref({
@@ -23,14 +24,18 @@
 	})
 
 	async function load({ silent = false } = {}) {
+		const request = ++loadSequence
 		if (!silent) loading.value = true
-		loadError.value = ''
+		if (!silent) loadError.value = ''
 		try {
-			catalog.value = await call('frappe_whatsapp_core.frontend_api.template_catalog')
+			const result = await call('frappe_whatsapp_core.frontend_api.template_catalog')
+			if (request !== loadSequence) return
+			catalog.value = result
 		} catch (error) {
-			loadError.value = errorMessage(error, 'Unable to load the template catalog.')
+			if (request === loadSequence)
+				loadError.value = errorMessage(error, 'Unable to load the template catalog.')
 		} finally {
-			if (!silent) loading.value = false
+			if (!silent && request === loadSequence) loading.value = false
 		}
 	}
 

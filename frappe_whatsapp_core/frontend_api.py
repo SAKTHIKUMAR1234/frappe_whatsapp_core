@@ -16,7 +16,7 @@ from frappe_whatsapp_core.campaigns import (
 	schedule_campaign,
 )
 from frappe_whatsapp_core.flow_actions import registered_actions
-from frappe_whatsapp_core.hub_client import connection_status
+from frappe_whatsapp_core.hub_client import call_management, connection_status
 from frappe_whatsapp_core.identity import contact_options
 from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS
 from frappe_whatsapp_core.permissions import (
@@ -538,6 +538,16 @@ def settings_workspace():
 	}
 
 
+@frappe.whitelist()
+@require_core_access(manage=True)
+def discover_hub_accounts():
+	"""Return tenant-scoped Hub accounts without exposing Meta credentials."""
+	result = call_management(
+		"frappe_whatsapp_integration.frappe_whatsapp_hub.api.onboarding.list_site_accounts"
+	)
+	return result.get("accounts") or []
+
+
 def _contact_sources() -> list[dict]:
 	return frappe.get_all(
 		"WhatsApp Core Identity Source",
@@ -677,9 +687,7 @@ def save_core_settings(
 	settings.hub_url = str(hub_url or "").strip()
 	settings.request_timeout = max(2, min(int(request_timeout or 30), 120))
 	settings.default_country_calling_code = str(default_country_calling_code or "91")
-	accounts = frappe.parse_json(accounts) if accounts is not None else []
-	if not isinstance(accounts, list):
-		frappe.throw("Hub accounts must be a list")
+	accounts = _validated_hub_account_mappings(accounts)
 	settings.set("accounts", accounts)
 	if api_key:
 		settings.api_key = api_key
@@ -687,6 +695,43 @@ def save_core_settings(
 		settings.api_secret = api_secret
 	settings.save()
 	return settings_workspace()
+
+
+def _validated_hub_account_mappings(accounts) -> list[dict]:
+	accounts = frappe.parse_json(accounts) if accounts is not None else []
+	if not isinstance(accounts, list):
+		frappe.throw("Hub accounts must be a list", frappe.ValidationError)
+	normalized = []
+	channels = set()
+	account_names = set()
+	default_count = 0
+	for index, row in enumerate(accounts, start=1):
+		if not isinstance(row, dict):
+			frappe.throw(f"Hub account mapping row {index} is invalid", frappe.ValidationError)
+		channel = str(row.get("channel") or "").strip()
+		account_name = str(row.get("account_name") or "").strip()
+		if not channel or not frappe.db.exists("WhatsApp Core Channel", channel):
+			frappe.throw(f"Select a valid Core channel in row {index}", frappe.ValidationError)
+		if not account_name:
+			frappe.throw(f"Select a Hub account in row {index}", frappe.ValidationError)
+		if channel in channels:
+			frappe.throw(f"Core channel {channel} is mapped more than once", frappe.ValidationError)
+		if account_name in account_names:
+			frappe.throw(f"Hub account {account_name} is mapped more than once", frappe.ValidationError)
+		is_default = bool(cint(row.get("is_default")))
+		default_count += int(is_default)
+		channels.add(channel)
+		account_names.add(account_name)
+		normalized.append({
+			"channel": channel,
+			"account_name": account_name,
+			"is_default": is_default,
+		})
+	if default_count > 1:
+		frappe.throw("Only one Hub account can be the default", frappe.ValidationError)
+	if len(normalized) == 1 and default_count == 0:
+		normalized[0]["is_default"] = True
+	return normalized
 
 
 @frappe.whitelist()

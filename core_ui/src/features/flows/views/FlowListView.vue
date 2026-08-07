@@ -12,6 +12,7 @@
 	import Tag from 'primevue/tag'
 	import Textarea from 'primevue/textarea'
 	import { Cloud, GitBranch, Plus, Search, WandSparkles } from 'lucide-vue-next'
+	import { useConfirm } from 'primevue/useconfirm'
 	import { useToast } from 'primevue/usetoast'
 	import {
 		createFlow,
@@ -26,6 +27,7 @@
 	import { useSessionStore } from '@/stores/session'
 
 	const router = useRouter()
+	const confirm = useConfirm()
 	const toast = useToast()
 	const session = useSessionStore()
 	const loading = ref(true)
@@ -37,6 +39,7 @@
 	const keyDialog = ref(false)
 	const endpointDialog = ref(false)
 	const endpointStatus = ref(null)
+	let loadSequence = 0
 	const workspace = ref({ accounts: [], flows: [], selected_account: '' })
 	const selectedAccount = ref('')
 	const filter = ref('')
@@ -66,21 +69,25 @@
 	})
 
 	async function load(account = selectedAccount.value) {
+		const request = ++loadSequence
 		loading.value = true
 		workspaceError.value = ''
 		try {
-			workspace.value = await flowWorkspace(account)
+			const result = await flowWorkspace(account)
+			if (request !== loadSequence) return
+			workspace.value = result
 			selectedAccount.value = workspace.value.selected_account || ''
 			workspaceError.value = workspace.value.error || ''
 		} catch (error) {
-			toast.add({
-				severity: 'error',
-				summary: 'Meta Flows unavailable',
-				detail: errorMessage(error),
-				life: 5000,
-			})
+			if (request === loadSequence)
+				toast.add({
+					severity: 'error',
+					summary: 'Meta Flows unavailable',
+					detail: errorMessage(error),
+					life: 5000,
+				})
 		} finally {
-			loading.value = false
+			if (request === loadSequence) loading.value = false
 		}
 	}
 
@@ -167,8 +174,20 @@
 		}
 	}
 
-	async function provisionEndpoint(rotate = false) {
-		if (rotate && !window.confirm('Rotate the endpoint key registered in Meta?')) return
+	async function provisionEndpoint(rotate = false, confirmed = false) {
+		if (rotate && !confirmed) {
+			confirm.require({
+				header: 'Rotate Flow endpoint key?',
+				message:
+					'The current endpoint key registered in Meta will be replaced. Existing encrypted Flow requests must use the new key.',
+				icon: 'pi pi-key',
+				rejectLabel: 'Keep current key',
+				acceptLabel: 'Rotate key',
+				acceptClass: 'p-button-danger',
+				accept: () => provisionEndpoint(true, true),
+			})
+			return
+		}
 		operating.value = true
 		try {
 			endpointStatus.value = await provisionFlowEndpoint(selectedAccount.value, rotate)

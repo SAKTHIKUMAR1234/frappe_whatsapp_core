@@ -20,6 +20,7 @@
 	const session = useSessionStore()
 	const unsubscribers = []
 	let realtimeRefresh = null
+	let loadSequence = 0
 	const loading = ref(true)
 	const saving = ref(false)
 	const loadError = ref('')
@@ -44,20 +45,24 @@
 	)
 
 	async function load({ silent = false, preserveSelection = false } = {}) {
+		const request = ++loadSequence
 		if (!silent) loading.value = true
 		loadError.value = ''
 		const selectedNames = preserveSelection
 			? new Set(selected.value.map((row) => row.name))
 			: new Set()
 		try {
-			workspace.value = await call('frappe_whatsapp_core.frontend_api.ai_queue_workspace')
+			const loaded = await call('frappe_whatsapp_core.frontend_api.ai_queue_workspace')
+			if (request !== loadSequence) return
+			workspace.value = loaded
 			selected.value = preserveSelection
 				? workspace.value.messages.filter((row) => selectedNames.has(row.name))
 				: []
 		} catch (error) {
-			loadError.value = errorMessage(error, 'Unable to load the AI review queue.')
+			if (request === loadSequence)
+				loadError.value = errorMessage(error, 'Unable to load the AI review queue.')
 		} finally {
-			if (!silent) loading.value = false
+			if (!silent && request === loadSequence) loading.value = false
 		}
 	}
 
@@ -136,7 +141,7 @@
 			</p>
 		</div>
 		<div class="heading-actions">
-			<Button label="Refresh" outlined @click="load">
+			<Button label="Refresh" outlined :loading="loading" :disabled="loading" @click="load">
 				<template #icon><RefreshCw :size="16" /></template>
 			</Button>
 			<Button label="Create topic" :disabled="!canClassify" @click="openClassification">

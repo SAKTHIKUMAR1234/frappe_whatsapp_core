@@ -17,6 +17,7 @@
 	const session = useSessionStore()
 	let unsubscribeContactSources = null
 	let contactSourceRefresh = null
+	let loadSequence = 0
 	const loading = ref(true)
 	const loadError = ref('')
 	const workspace = ref({
@@ -28,14 +29,18 @@
 	})
 
 	async function load() {
+		const request = ++loadSequence
 		loading.value = true
 		loadError.value = ''
 		try {
-			workspace.value = await call('frappe_whatsapp_core.frontend_api.settings_workspace')
+			const result = await call('frappe_whatsapp_core.frontend_api.settings_workspace')
+			if (request !== loadSequence) return
+			workspace.value = result
 		} catch (error) {
-			loadError.value = errorMessage(error, 'Unable to load Core settings.')
+			if (request === loadSequence)
+				loadError.value = errorMessage(error, 'Unable to load Core settings.')
 		} finally {
-			loading.value = false
+			if (request === loadSequence) loading.value = false
 		}
 	}
 

@@ -8,11 +8,13 @@ from frappe.tests.utils import FrappeTestCase
 from frappe.utils import now_datetime
 
 from frappe_whatsapp_core.frontend_api import (
+	_validated_hub_account_mappings,
 	ai_queue_workspace,
 	classify_messages,
 	connectors_workspace,
 	contact_source_doctypes,
 	contact_source_fields,
+	discover_hub_accounts,
 	health_workspace,
 	polls_workspace,
 	save_contact_source,
@@ -137,6 +139,28 @@ class TestFrontendWorkspaces(FrappeTestCase):
 				"messages",
 			},
 		)
+
+	@patch("frappe_whatsapp_core.frontend_api.call_management")
+	def test_hub_account_discovery_returns_only_integration_options(self, call_management):
+		call_management.return_value = {
+			"accounts": [{"name": "Primary Account", "verified_name": "Essdee"}]
+		}
+		self.assertEqual(discover_hub_accounts()[0]["name"], "Primary Account")
+		call_management.assert_called_once_with(
+			"frappe_whatsapp_integration.frappe_whatsapp_hub.api.onboarding.list_site_accounts"
+		)
+
+	def test_hub_account_mappings_reject_duplicates_and_normalize_default(self):
+		channel = get_or_create_channel(f"SETTINGS-{self.suffix}", f"WABA-{self.suffix}")
+		rows = _validated_hub_account_mappings([
+			{"channel": channel.name, "account_name": "Primary Account", "is_default": 0}
+		])
+		self.assertTrue(rows[0]["is_default"])
+		with self.assertRaises(frappe.ValidationError):
+			_validated_hub_account_mappings([
+				{"channel": channel.name, "account_name": "Primary Account"},
+				{"channel": channel.name, "account_name": "Secondary Account"},
+			])
 
 	def test_contact_source_configuration_uses_real_doctype_fields(self):
 		doctypes = contact_source_doctypes(search="User")

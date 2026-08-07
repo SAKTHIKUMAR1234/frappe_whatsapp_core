@@ -1,5 +1,5 @@
 <script setup>
-	import { computed, onMounted, reactive, ref } from 'vue'
+	import { computed, onMounted, reactive, ref, watch } from 'vue'
 	import { useRoute, useRouter } from 'vue-router'
 	import Button from 'primevue/button'
 	import InputText from 'primevue/inputtext'
@@ -57,15 +57,19 @@
 	const mutable = computed(() => flow.value.status === 'DRAFT')
 	const previewUrl = computed(() => flow.value.preview?.preview_url || '')
 	const validationErrors = computed(() => flow.value.validation_errors || [])
+	let loadSequence = 0
 
 	async function load() {
+		const request = ++loadSequence
 		if (!accountName.value) {
 			router.replace({ name: 'flows' })
 			return
 		}
 		loading.value = true
 		try {
-			data.value = await getFlow(accountName.value, flowId.value)
+			const loaded = await getFlow(accountName.value, flowId.value)
+			if (request !== loadSequence) return
+			data.value = loaded
 			form.name = flow.value.name || ''
 			form.categories = [...(flow.value.categories || [])]
 			form.endpoint_uri = flow.value.endpoint_uri || flow.value.data_channel_uri || ''
@@ -73,6 +77,7 @@
 				? JSON.stringify(data.value.flow_json, null, 2)
 				: ''
 		} catch (error) {
+			if (request !== loadSequence) return
 			toast.add({
 				severity: 'error',
 				summary: 'Flow not loaded',
@@ -80,7 +85,7 @@
 				life: 5000,
 			})
 		} finally {
-			loading.value = false
+			if (request === loadSequence) loading.value = false
 		}
 	}
 
@@ -191,7 +196,6 @@
 				params: { flowName: id },
 				query: { account: accountName.value },
 			})
-			await load()
 		} catch (error) {
 			toast.add({
 				severity: 'error',
@@ -231,6 +235,9 @@
 	}
 
 	onMounted(load)
+	watch([accountName, flowId], ([account, flow], [previousAccount, previousFlow]) => {
+		if (account !== previousAccount || flow !== previousFlow) load()
+	})
 </script>
 
 <template>

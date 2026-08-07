@@ -23,16 +23,21 @@
 		components: [],
 		recent_failures: [],
 	})
+	let loadSequence = 0
 
 	async function load() {
+		const request = ++loadSequence
 		loading.value = true
 		loadError.value = ''
 		try {
-			workspace.value = await call('frappe_whatsapp_core.frontend_api.health_workspace')
+			const loaded = await call('frappe_whatsapp_core.frontend_api.health_workspace')
+			if (request !== loadSequence) return
+			workspace.value = loaded
 		} catch (error) {
-			loadError.value = errorMessage(error, 'Unable to load operational health.')
+			if (request === loadSequence)
+				loadError.value = errorMessage(error, 'Unable to load operational health.')
 		} finally {
-			loading.value = false
+			if (request === loadSequence) loading.value = false
 		}
 	}
 
@@ -52,7 +57,7 @@
 			<h1>Audit & Health</h1>
 			<p>Operational state derived from events, flow runs and message delivery records.</p>
 		</div>
-		<Button label="Refresh" outlined @click="load">
+		<Button label="Refresh" outlined :loading="loading" :disabled="loading" @click="load">
 			<template #icon><RefreshCw :size="16" /></template>
 		</Button>
 	</div>

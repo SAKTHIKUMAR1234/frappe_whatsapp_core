@@ -5,6 +5,7 @@
 	import Dialog from 'primevue/dialog'
 	import InputText from 'primevue/inputtext'
 	import Select from 'primevue/select'
+	import Skeleton from 'primevue/skeleton'
 	import Textarea from 'primevue/textarea'
 	import { useToast } from 'primevue/usetoast'
 	import {
@@ -106,7 +107,10 @@
 		template: '',
 	})
 	const unsubscribers = []
+	let listRequest = 0
 	let detailRequest = 0
+	let olderRequest = 0
+	let messageSearchRequest = 0
 
 	const selectedName = computed(() => route.params.conversation || '')
 	const filteredRows = computed(() => {
@@ -147,22 +151,30 @@
 	const textReady = computed(() => Boolean(detail.value?.outbound?.text_ready))
 
 	async function loadRows() {
+		const request = ++listRequest
 		loading.value = true
 		listError.value = ''
 		try {
-			rows.value = await call('frappe_whatsapp_core.inbox.conversations', { limit: 500 })
-			if (!selectedName.value && rows.value.length) selectConversation(rows.value[0].name)
+			const loaded = await call('frappe_whatsapp_core.inbox.conversations', { limit: 500 })
+			if (request !== listRequest) return
+			rows.value = loaded
 		} catch (error) {
-			listError.value = errorMessage(error, 'Unable to load conversations.')
+			if (request === listRequest)
+				listError.value = errorMessage(error, 'Unable to load conversations.')
 		} finally {
-			loading.value = false
+			if (request === listRequest) loading.value = false
 		}
 	}
 
 	async function loadDetail(name) {
 		const request = ++detailRequest
+		olderRequest += 1
+		messageSearchRequest += 1
 		if (!name) {
 			detail.value = null
+			detailLoading.value = false
+			detailError.value = ''
+			loadingOlder.value = false
 			return
 		}
 		detailLoading.value = true
@@ -179,6 +191,7 @@
 					name,
 					message: latest,
 				})
+				if (request !== detailRequest) return
 				const row = rows.value.find((item) => item.name === name)
 				if (row) row.unread_count = 0
 			}
@@ -194,22 +207,32 @@
 	async function loadOlderMessages() {
 		if (!detail.value || !messagePage.value.has_more || loadingOlder.value || !stream.value)
 			return
+		const request = ++olderRequest
+		const conversation = selectedName.value
+		const currentDetail = detail.value
 		loadingOlder.value = true
 		const previousHeight = stream.value.scrollHeight
 		try {
 			const page = await call('frappe_whatsapp_core.workspace_api.list_messages', {
-				conversation: selectedName.value,
+				conversation,
 				before: messagePage.value.next_before,
 				before_creation: messagePage.value.next_before_creation,
 				limit: 50,
 			})
-			const known = new Set(detail.value.messages.map((message) => message.name))
+			if (
+				request !== olderRequest ||
+				conversation !== selectedName.value ||
+				detail.value !== currentDetail
+			)
+				return
+			const known = new Set(currentDetail.messages.map((message) => message.name))
 			const older = [...page.rows].reverse().filter((message) => !known.has(message.name))
-			detail.value.messages.unshift(...older)
+			currentDetail.messages.unshift(...older)
 			messagePage.value = page
 			await nextTick()
 			stream.value.scrollTop = stream.value.scrollHeight - previousHeight
 		} catch (error) {
+			if (request !== olderRequest || conversation !== selectedName.value) return
 			toast.add({
 				severity: 'error',
 				summary: 'Could not load older messages',
@@ -217,7 +240,7 @@
 				life: 4500,
 			})
 		} finally {
-			loadingOlder.value = false
+			if (request === olderRequest) loadingOlder.value = false
 		}
 	}
 
@@ -245,20 +268,25 @@
 	}
 
 	async function runMessageSearch() {
+		const request = ++messageSearchRequest
 		const query = messageSearch.value.trim()
-		if (!query || !selectedName.value) {
+		const conversation = selectedName.value
+		if (!query || !conversation) {
 			messageSearchRows.value = []
+			messageSearching.value = false
 			return
 		}
 		messageSearching.value = true
 		try {
 			const result = await call('frappe_whatsapp_core.workspace_api.list_messages', {
-				conversation: selectedName.value,
+				conversation,
 				search: query,
 				limit: 100,
 			})
+			if (request !== messageSearchRequest || conversation !== selectedName.value) return
 			messageSearchRows.value = [...result.rows].reverse()
 		} catch (error) {
+			if (request !== messageSearchRequest) return
 			messageSearchRows.value = []
 			toast.add({
 				severity: 'error',
@@ -267,11 +295,12 @@
 				life: 4500,
 			})
 		} finally {
-			messageSearching.value = false
+			if (request === messageSearchRequest) messageSearching.value = false
 		}
 	}
 
 	function closeMessageSearch() {
+		messageSearchRequest += 1
 		messageSearchOpen.value = false
 		messageSearch.value = ''
 		messageSearchRows.value = []
@@ -302,8 +331,8 @@
 		}
 	}
 
-	function reconcileMessage(message) {
-		if (!detail.value || !message) return
+	function reconcileMessage(message, conversation = selectedName.value) {
+		if (!detail.value || !message || conversation !== selectedName.value) return
 		const index = detail.value.messages.findIndex(
 			(item) =>
 				item.name === message.name ||
@@ -315,17 +344,18 @@
 	}
 
 	async function queueText(body, contextMessageId = '') {
+		const conversation = selectedName.value
 		const optimistic = optimisticText(body, contextMessageId)
-		reconcileMessage(optimistic)
+		reconcileMessage(optimistic, conversation)
 		scrollToBottom()
 		try {
 			const message = await call('frappe_whatsapp_core.outbound.queue_text', {
-				conversation_name: selectedName.value,
+				conversation_name: conversation,
 				body,
 				context_message_id: contextMessageId,
 				client_message_id: optimistic.client_message_id,
 			})
-			reconcileMessage(message)
+			reconcileMessage(message, conversation)
 			return message
 		} catch (error) {
 			optimistic.delivery_status = 'Failed'
@@ -377,11 +407,12 @@
 
 	async function showTyping() {
 		const current = Date.now()
-		if (!selectedName.value || current - typingSentAt < 25000) return
+		const conversation = selectedName.value
+		if (!conversation || current - typingSentAt < 25000) return
 		typingSentAt = current
 		try {
 			await call('frappe_whatsapp_core.conversation_reads.show_typing', {
-				conversation: selectedName.value,
+				conversation,
 			})
 		} catch {
 			// Typing state is transient and must never interrupt composing.
@@ -478,11 +509,12 @@
 	async function uploadMedia(event) {
 		const file = event.target.files?.[0]
 		if (!file) return
+		const conversation = selectedName.value
 		uploadingMedia.value = true
 		try {
 			const stored = await uploadFile(file, true)
 			const uploaded = await call('frappe_whatsapp_core.outbound.upload_media', {
-				conversation_name: selectedName.value,
+				conversation_name: conversation,
 				file_url: stored.file_url,
 			})
 			richForm.value.media = uploaded.media_id
@@ -519,23 +551,24 @@
 			return
 		}
 		const type = richForm.value.type
+		const conversation = selectedName.value
 		const optimistic = optimisticText(
 			richForm.value.caption.trim() || richForm.value.flow_body.trim() || `[${type}]`,
 		)
 		optimistic.message_type = type
 		optimistic.content = { payload }
-		reconcileMessage(optimistic)
+		reconcileMessage(optimistic, conversation)
 		scrollToBottom()
 		richDialog.value = false
 		replyTo.value = null
 		try {
 			const message = await call('frappe_whatsapp_core.outbound.queue_rich', {
-				conversation_name: selectedName.value,
+				conversation_name: conversation,
 				message_type: type,
 				payload,
 				client_message_id: optimistic.client_message_id,
 			})
-			reconcileMessage(message)
+			reconcileMessage(message, conversation)
 		} catch (error) {
 			optimistic.delivery_status = 'Failed'
 			optimistic.failure = { error: errorMessage(error) }
@@ -551,13 +584,14 @@
 
 	async function sendTemplate(templateName) {
 		if (!templateName) return
+		const conversation = selectedName.value
 		richSending.value = true
 		try {
 			const message = await call('frappe_whatsapp_core.outbound.queue_template', {
-				conversation_name: selectedName.value,
+				conversation_name: conversation,
 				template: templateName,
 			})
-			appendMessage({ conversation: selectedName.value, message })
+			appendMessage({ conversation, message })
 		} catch (error) {
 			toast.add({
 				severity: 'error',
@@ -649,6 +683,7 @@
 			) {
 				row.unread_count = Number(row.unread_count || 0) + 1
 			}
+			rows.value = [row, ...rows.value.filter((item) => item.name !== row.name)]
 		} else {
 			loadRows()
 		}
@@ -664,13 +699,15 @@
 	}
 
 	async function updateStatus(status) {
+		const conversation = selectedName.value
 		try {
 			await call('frappe_whatsapp_core.inbox.update_conversation', {
-				name: selectedName.value,
+				name: conversation,
 				status,
 			})
+			if (conversation !== selectedName.value || !detail.value) return
 			detail.value.conversation.status = status
-			const row = rows.value.find((item) => item.name === selectedName.value)
+			const row = rows.value.find((item) => item.name === conversation)
 			if (row) row.status = status
 		} catch (error) {
 			toast.add({
@@ -721,7 +758,12 @@
 				<p>Instant local updates with durable delivery through the Go relay.</p>
 			</div>
 			<div class="heading-actions">
-				<Button outlined aria-label="Refresh" @click="loadRows"
+				<Button
+					outlined
+					aria-label="Refresh"
+					:loading="loading"
+					:disabled="loading"
+					@click="loadRows"
 					><RefreshCw :size="16"
 				/></Button>
 				<Button v-if="canManage" label="New chat" @click="openNewChat">
@@ -736,7 +778,14 @@
 					<Search :size="16" />
 					<InputText v-model="search" placeholder="Search people or messages" />
 				</label>
-				<div v-if="loading" class="loading-state">Loading conversations…</div>
+				<div v-if="loading" class="list-skeleton" aria-label="Loading conversations">
+					<div v-for="index in 7" :key="index" class="conversation-skeleton">
+						<Skeleton shape="circle" size="42px" />
+						<span
+							><Skeleton width="58%" height="11px" /><Skeleton height="9px"
+						/></span>
+					</div>
+				</div>
 				<div v-else-if="listError" class="panel-error" role="alert">
 					<ShieldAlert :size="22" />
 					<strong>Conversations unavailable</strong>
@@ -754,7 +803,15 @@
 			</aside>
 
 			<main class="chat-panel">
-				<div v-if="detailLoading" class="empty-chat">Loading conversation…</div>
+				<div
+					v-if="detailLoading"
+					class="detail-skeleton"
+					aria-label="Loading conversation"
+				>
+					<Skeleton width="44%" height="58px" border-radius="12px" />
+					<Skeleton width="62%" height="76px" border-radius="12px" />
+					<Skeleton width="38%" height="54px" border-radius="12px" />
+				</div>
 				<div v-else-if="detailError" class="empty-chat error-chat" role="alert">
 					<ShieldAlert :size="38" />
 					<strong>Conversation unavailable</strong>
@@ -1129,6 +1186,34 @@
 		box-shadow: none;
 		background: transparent;
 		font-size: 11px;
+	}
+	.list-skeleton {
+		padding: 3px 0;
+		overflow: hidden;
+	}
+	.conversation-skeleton {
+		display: grid;
+		grid-template-columns: 42px minmax(0, 1fr);
+		align-items: center;
+		gap: 11px;
+		padding: 12px 14px;
+		border-bottom: 1px solid #edf1ef;
+	}
+	.conversation-skeleton span {
+		display: grid;
+		gap: 8px;
+	}
+	.detail-skeleton {
+		min-height: 0;
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 14px;
+		padding: 80px 22px 22px;
+		background: #f2f6f3;
+	}
+	.detail-skeleton > :nth-child(2) {
+		align-self: flex-end;
 	}
 	.loading-state,
 	.empty-chat {

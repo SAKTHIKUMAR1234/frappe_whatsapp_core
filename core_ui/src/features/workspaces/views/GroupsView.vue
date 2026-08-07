@@ -9,6 +9,7 @@
 	import Select from 'primevue/select'
 	import Tag from 'primevue/tag'
 	import Textarea from 'primevue/textarea'
+	import { useConfirm } from 'primevue/useconfirm'
 	import ContactSelect from '@/features/contacts/components/ContactSelect.vue'
 	import { MessageCircleMore, Settings2, ShieldCheck, UsersRound } from 'lucide-vue-next'
 	import { call, errorMessage, uploadFile } from '@/services/frappe'
@@ -16,6 +17,7 @@
 	import { useSessionStore } from '@/stores/session'
 
 	const session = useSessionStore()
+	const confirm = useConfirm()
 	const loading = ref(false),
 		saving = ref(false),
 		action = ref(''),
@@ -53,6 +55,8 @@
 	const ACTION_FAILED = Symbol('action-failed')
 	let unsubscribe = () => {}
 	let realtimeRefresh = null
+	let loadSequence = 0
+	let manageSequence = 0
 
 	async function run(name, task, success = '') {
 		action.value = name
@@ -70,18 +74,21 @@
 		}
 	}
 	async function load(selectedAccount = account.value, { silent = false } = {}) {
+		const request = ++loadSequence
 		if (!silent) loading.value = true
-		error.value = ''
+		if (!silent) error.value = ''
 		try {
-			workspace.value = await call('frappe_whatsapp_core.groups.group_workspace', {
+			const result = await call('frappe_whatsapp_core.groups.group_workspace', {
 				account_name: selectedAccount,
 			})
+			if (request !== loadSequence) return
+			workspace.value = result
 			account.value = workspace.value.selected_account || ''
 			error.value = workspace.value.error || ''
 		} catch (e) {
-			error.value = errorMessage(e)
+			if (request === loadSequence) error.value = errorMessage(e)
 		} finally {
-			if (!silent) loading.value = false
+			if (!silent && request === loadSequence) loading.value = false
 		}
 	}
 	async function create() {
@@ -105,6 +112,7 @@
 		}
 	}
 	async function manage(group) {
+		const request = ++manageSequence
 		selected.value = group
 		edit.value = { subject: group.subject || '', description: group.description || '' }
 		inviteLink.value = ''
@@ -118,20 +126,27 @@
 			}),
 		)
 		if (detail === ACTION_FAILED) return
+		if (request !== manageSequence) return
 		selected.value = detail?.data?.[0] || detail || group
 		edit.value = {
 			subject: selected.value.subject || '',
 			description: selected.value.description || '',
 		}
-		await loadActivity()
+		await loadActivity(selected.value.id, request)
 	}
-	async function loadActivity() {
+	async function loadActivity(groupId = selected.value?.id, request = manageSequence) {
+		if (!groupId) return
 		const result = await run('activity', () =>
 			call('frappe_whatsapp_core.groups.group_activity', {
-				group_id: selected.value.id,
+				group_id: groupId,
 			}),
 		)
-		if (result !== ACTION_FAILED) activity.value = result
+		if (
+			result !== ACTION_FAILED &&
+			request === manageSequence &&
+			selected.value?.id === groupId
+		)
+			activity.value = result
 	}
 	async function saveGroup() {
 		const result = await run(
@@ -300,8 +315,19 @@
 			'Group picture updated.',
 		)
 	}
-	async function deleteGroup() {
-		if (!window.confirm(`Delete ${selected.value.subject || selected.value.id}?`)) return
+	async function deleteGroup(confirmed = false) {
+		if (!confirmed) {
+			confirm.require({
+				header: 'Delete WhatsApp group?',
+				message: `Delete ${selected.value.subject || selected.value.id} from Meta? This action cannot be undone.`,
+				icon: 'pi pi-exclamation-triangle',
+				rejectLabel: 'Keep group',
+				acceptLabel: 'Delete group',
+				acceptClass: 'p-button-danger',
+				accept: () => deleteGroup(true),
+			})
+			return
+		}
 		const result = await run(
 			'delete',
 			() =>
@@ -325,7 +351,8 @@
 		window.clearTimeout(realtimeRefresh)
 		realtimeRefresh = window.setTimeout(async () => {
 			await load(account.value, { silent: true })
-			if (showManage.value && selected.value?.id === event?.group_id) await loadActivity()
+			if (showManage.value && selected.value?.id === event?.group_id)
+				await loadActivity(selected.value.id, manageSequence)
 		}, 200)
 	}
 	onMounted(() => {

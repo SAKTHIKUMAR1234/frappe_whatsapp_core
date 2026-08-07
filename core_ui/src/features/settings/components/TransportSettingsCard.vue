@@ -1,5 +1,5 @@
 <script setup>
-	import { reactive, watch } from 'vue'
+	import { computed, reactive, ref, watch } from 'vue'
 	import Button from 'primevue/button'
 	import InputNumber from 'primevue/inputnumber'
 	import InputText from 'primevue/inputtext'
@@ -7,7 +7,7 @@
 	import Select from 'primevue/select'
 	import ToggleSwitch from 'primevue/toggleswitch'
 	import { useToast } from 'primevue/usetoast'
-	import { KeyRound, Plus, Save, Trash2 } from 'lucide-vue-next'
+	import { KeyRound, Plus, RefreshCw, Save, Trash2 } from 'lucide-vue-next'
 
 	import { call, errorMessage } from '@/services/frappe'
 
@@ -17,6 +17,9 @@
 	})
 	const emit = defineEmits(['saved'])
 	const toast = useToast()
+	const hubAccounts = ref([])
+	const loadingAccounts = ref(false)
+	let discoveryKey = ''
 	const form = reactive({
 		enabled: false,
 		outbound_enabled: false,
@@ -27,6 +30,24 @@
 		api_secret: '',
 		accounts: [],
 		saving: false,
+	})
+	const hubAccountOptions = computed(() => {
+		const options = hubAccounts.value.map((row) => ({
+			...row,
+			label: [row.verified_name || row.account_name || row.name, row.display_phone_number]
+				.filter(Boolean)
+				.join(' · '),
+		}))
+		const known = new Set(options.map((row) => row.name))
+		for (const mapping of form.accounts) {
+			if (mapping.account_name && !known.has(mapping.account_name)) {
+				options.push({
+					name: mapping.account_name,
+					label: `${mapping.account_name} · saved mapping`,
+				})
+			}
+		}
+		return options
 	})
 
 	watch(
@@ -40,6 +61,17 @@
 			form.api_key = ''
 			form.api_secret = ''
 			form.accounts = (workspace.hub_accounts || []).map((row) => ({ ...row }))
+			const nextDiscoveryKey = `${form.hub_url}:${Boolean(
+				workspace.transport?.credentials_configured,
+			)}`
+			if (
+				props.canManage &&
+				workspace.transport?.credentials_configured &&
+				discoveryKey !== nextDiscoveryKey
+			) {
+				discoveryKey = nextDiscoveryKey
+				loadHubAccounts({ silent: true })
+			}
 		},
 		{ immediate: true },
 	)
@@ -50,6 +82,35 @@
 
 	function removeAccount(index) {
 		form.accounts.splice(index, 1)
+	}
+
+	async function loadHubAccounts({ silent = false } = {}) {
+		if (loadingAccounts.value) return
+		loadingAccounts.value = true
+		try {
+			hubAccounts.value = await call(
+				'frappe_whatsapp_core.frontend_api.discover_hub_accounts',
+			)
+			if (!silent) {
+				toast.add({
+					severity: 'success',
+					summary: 'Hub accounts refreshed',
+					detail: `${hubAccounts.value.length} tenant account${hubAccounts.value.length === 1 ? '' : 's'} available.`,
+					life: 3000,
+				})
+			}
+		} catch (error) {
+			if (!silent) {
+				toast.add({
+					severity: 'error',
+					summary: 'Hub accounts unavailable',
+					detail: errorMessage(error),
+					life: 5000,
+				})
+			}
+		} finally {
+			loadingAccounts.value = false
+		}
 	}
 
 	async function save() {
@@ -180,9 +241,21 @@
 				<strong>Channel mappings</strong
 				><span>Local Core channel → central Hub account</span>
 			</div>
-			<Button v-if="canManage" label="Add mapping" text size="small" @click="addAccount">
-				<template #icon><Plus :size="14" /></template>
-			</Button>
+			<div v-if="canManage" class="account-actions">
+				<Button
+					label="Refresh Hub accounts"
+					text
+					size="small"
+					:loading="loadingAccounts"
+					:disabled="!workspace.transport?.credentials_configured"
+					@click="loadHubAccounts()"
+				>
+					<template #icon><RefreshCw :size="14" /></template>
+				</Button>
+				<Button label="Add mapping" text size="small" @click="addAccount">
+					<template #icon><Plus :size="14" /></template>
+				</Button>
+			</div>
 		</div>
 		<div class="account-list">
 			<div v-for="(account, index) in form.accounts" :key="index" class="account-row">
@@ -194,10 +267,14 @@
 					:disabled="!canManage"
 					placeholder="Local channel"
 				/>
-				<InputText
+				<Select
 					v-model="account.account_name"
+					:options="hubAccountOptions"
+					option-label="label"
+					option-value="name"
+					filter
 					:disabled="!canManage"
-					placeholder="Hub account name"
+					placeholder="Hub account"
 				/>
 				<label class="default-map"
 					><ToggleSwitch v-model="account.is_default" :disabled="!canManage" /><span
@@ -308,6 +385,13 @@
 	.account-heading span {
 		display: block;
 	}
+	.account-actions {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+	}
 	.account-heading strong {
 		font-size: 11px;
 	}
@@ -339,6 +423,15 @@
 		border-top: 1px solid var(--wa-border);
 	}
 	@media (max-width: 760px) {
+		header,
+		.account-heading {
+			align-items: flex-start;
+			flex-direction: column;
+		}
+		.account-actions {
+			width: 100%;
+			justify-content: flex-start;
+		}
 		.transport-form {
 			grid-template-columns: 1fr;
 		}

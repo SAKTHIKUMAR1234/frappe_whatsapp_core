@@ -16,6 +16,7 @@
 	const loadError = ref('')
 	const workspace = ref({ accounts: [], flows: [], selected_account: '' })
 	const selectedAccount = ref('')
+	let loadSequence = 0
 	const forms = computed(() =>
 		workspace.value.flows.filter((flow) =>
 			(flow.categories || []).some((category) =>
@@ -26,15 +27,19 @@
 		),
 	)
 	async function load(account = selectedAccount.value) {
+		const request = ++loadSequence
 		loading.value = true
 		loadError.value = ''
 		try {
-			workspace.value = await flowWorkspace(account)
+			const loaded = await flowWorkspace(account)
+			if (request !== loadSequence) return
+			workspace.value = loaded
 			selectedAccount.value = workspace.value.selected_account
 		} catch (error) {
-			loadError.value = errorMessage(error, 'Unable to load Meta forms and surveys.')
+			if (request === loadSequence)
+				loadError.value = errorMessage(error, 'Unable to load Meta forms and surveys.')
 		} finally {
-			loading.value = false
+			if (request === loadSequence) loading.value = false
 		}
 	}
 	function open(flow) {

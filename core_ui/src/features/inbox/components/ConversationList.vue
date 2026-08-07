@@ -83,10 +83,18 @@
 		text-align: left;
 		background: white;
 		cursor: pointer;
+		content-visibility: auto;
+		contain-intrinsic-size: 67px;
 	}
 	.conversation-row:hover,
 	.conversation-row.selected {
 		background: #eff9f5;
+	}
+	.conversation-row:focus-visible {
+		position: relative;
+		z-index: 1;
+		outline: 2px solid #168a62;
+		outline-offset: -2px;
 	}
 	.conversation-row.selected {
 		box-shadow: inset 3px 0 #18a879;
@@ -125,17 +133,17 @@
 		text-overflow: ellipsis;
 	}
 	.row-heading strong {
-		font-size: 12px;
+		font-size: 13px;
 	}
 	time,
 	.row-meta em {
 		color: #829088;
-		font-size: 9px;
+		font-size: 10px;
 		font-style: normal;
 	}
 	.preview {
 		color: #66756e;
-		font-size: 10px;
+		font-size: 11px;
 	}
 	.empty {
 		min-height: 300px;

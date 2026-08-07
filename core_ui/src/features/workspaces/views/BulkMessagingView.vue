@@ -32,6 +32,7 @@
 	let realtimeRefresh = null
 	let unsubscribeCampaign = null
 	let unsubscribeTemplate = null
+	let loadSequence = 0
 	const loading = ref(true)
 	const saving = ref(false)
 	const loadError = ref('')
@@ -80,14 +81,18 @@
 	)
 
 	async function load({ silent = false } = {}) {
+		const request = ++loadSequence
 		if (!silent) loading.value = true
-		loadError.value = ''
+		if (!silent) loadError.value = ''
 		try {
-			workspace.value = await call('frappe_whatsapp_core.frontend_api.campaign_workspace')
+			const result = await call('frappe_whatsapp_core.frontend_api.campaign_workspace')
+			if (request !== loadSequence) return
+			workspace.value = result
 		} catch (error) {
-			loadError.value = errorMessage(error, 'Unable to load campaigns.')
+			if (request === loadSequence)
+				loadError.value = errorMessage(error, 'Unable to load campaigns.')
 		} finally {
-			if (!silent) loading.value = false
+			if (!silent && request === loadSequence) loading.value = false
 		}
 	}
 
