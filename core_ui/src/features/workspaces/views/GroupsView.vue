@@ -50,7 +50,13 @@
 		messageId = ref(''),
 		pinOperation = ref('pin'),
 		pinDays = ref(7),
-		activity = ref({ group: null, conversation: null, messages: [], members: [], receipts: [] })
+		activity = ref({
+			group: null,
+			conversation: null,
+			messages: [],
+			members: [],
+			receipts: [],
+		})
 	const form = ref({ subject: '', description: '', join_approval_mode: 'auto_approve' })
 	const edit = ref({ subject: '', description: '' })
 	const invite = ref({ identity: '', template_name: '', language_code: 'en' })
@@ -63,6 +69,7 @@
 	)
 	const ACTION_FAILED = Symbol('action-failed')
 	let unsubscribe = () => {}
+	let unsubscribeBatch = () => {}
 	let realtimeRefresh = null
 	let loadSequence = 0
 	let manageSequence = 0
@@ -384,10 +391,16 @@
 	onMounted(() => {
 		load('')
 		unsubscribe = subscribe(session.boot?.site, 'whatsapp_core_group', queueRealtimeRefresh)
+		unsubscribeBatch = subscribe(
+			session.boot?.site,
+			'whatsapp_core_batch_committed',
+			queueRealtimeRefresh,
+		)
 	})
 	onUnmounted(() => {
 		window.clearTimeout(realtimeRefresh)
 		unsubscribe()
+		unsubscribeBatch()
 	})
 </script>
 

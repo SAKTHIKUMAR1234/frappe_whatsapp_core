@@ -3,10 +3,11 @@ import json
 
 import frappe
 from frappe.utils import now
+
 from frappe_whatsapp_core.materializer import materialize_event
 
-
 MAX_ATTEMPTS = 6
+MAX_REALTIME_BATCH_SIZE = 100
 
 
 def enqueue_event(event_id, enqueue_after_commit=False):
@@ -21,22 +22,34 @@ def enqueue_event(event_id, enqueue_after_commit=False):
 def enqueue_event_batch(event_ids, enqueue_after_commit=False):
 	if not event_ids:
 		return
-	frappe.enqueue(
-		"frappe_whatsapp_core.dispatcher.process_event_batch",
-		queue="short",
-		enqueue_after_commit=enqueue_after_commit,
-		event_ids=event_ids,
-	)
+	unique_ids = list(dict.fromkeys(event_ids))
+	for offset in range(0, len(unique_ids), MAX_REALTIME_BATCH_SIZE):
+		frappe.enqueue(
+			"frappe_whatsapp_core.dispatcher.process_event_batch",
+			queue="short",
+			enqueue_after_commit=enqueue_after_commit,
+			event_ids=unique_ids[offset : offset + MAX_REALTIME_BATCH_SIZE],
+		)
 
 
 def process_event_batch(event_ids):
-	"""Process one persisted relay window sequentially after its DB commit."""
+	"""Process one committed relay window and notify clients once per batch."""
+	if len(event_ids) > MAX_REALTIME_BATCH_SIZE:
+		frappe.throw(
+			f"Core event batches cannot exceed {MAX_REALTIME_BATCH_SIZE} events",
+			frappe.ValidationError,
+		)
 	results = []
-	for event_id in event_ids:
-		try:
-			results.append({"event_id": event_id, **process_event(event_id)})
-		except Exception:
-			results.append({"event_id": event_id, "status": "failed"})
+	frappe.flags.whatsapp_core_batch_processing = True
+	try:
+		for event_id in event_ids:
+			try:
+				results.append({"event_id": event_id, **process_event(event_id)})
+			except Exception:
+				results.append({"event_id": event_id, "status": "failed"})
+	finally:
+		frappe.flags.whatsapp_core_batch_processing = False
+	_publish_batch_refresh(event_ids, results)
 	return results
 
 
@@ -49,7 +62,6 @@ def process_event(event_id):
 	event.attempts = (event.attempts or 0) + 1
 	event.error = ""
 	event.save(ignore_permissions=True)
-	frappe.db.commit()
 
 	payload = json.loads(event.payload)
 	try:
@@ -98,6 +110,32 @@ def process_event(event_id):
 			message=event.error,
 		)
 		raise
+
+
+def _publish_batch_refresh(event_ids, results):
+	"""Emit one compact refresh only after the worker transaction commits."""
+	message_names = []
+	for result in results:
+		for projection in result.get("projections") or []:
+			if projection.get("kind") in {"message", "status"} and projection.get("name"):
+				message_names.append(projection["name"])
+	conversations = []
+	if message_names:
+		conversations = frappe.get_all(
+			"WhatsApp Core Message",
+			filters={"name": ["in", list(dict.fromkeys(message_names))]},
+			pluck="conversation",
+		)
+	frappe.publish_realtime(
+		"whatsapp_core_batch_committed",
+		{
+			"event_count": len(event_ids),
+			"completed": sum(result.get("status") == "completed" for result in results),
+			"failed": sum(result.get("status") == "failed" for result in results),
+			"conversations": list(dict.fromkeys(conversations)),
+		},
+		after_commit=True,
+	)
 
 
 def _start_handler_run(run_key, event_id, handler_path):

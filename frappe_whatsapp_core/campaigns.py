@@ -241,11 +241,12 @@ def run_due_campaigns() -> None:
 		pluck="name",
 		limit_page_length=100,
 	):
+		savepoint = "whatsapp_campaign_" + hashlib.sha256(campaign_name.encode()).hexdigest()[:16]
+		frappe.db.savepoint(savepoint)
 		try:
 			launch_campaign(campaign_name)
-			frappe.db.commit()
 		except Exception:
-			frappe.db.rollback()
+			frappe.db.rollback(save_point=savepoint)
 			frappe.log_error(
 				title=f"WhatsApp campaign launch failed: {campaign_name}",
 				message=frappe.get_traceback(),
@@ -286,7 +287,6 @@ def process_campaign_batch(
 			) != "Running":
 				return
 			_queue_recipient(campaign, row, sender)
-	frappe.db.commit()
 	refresh_campaign_counts(campaign.name)
 
 	if frappe.db.exists(

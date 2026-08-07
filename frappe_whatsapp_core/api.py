@@ -34,6 +34,29 @@ def receive_outbound_result(
 	attempt=0,
 	**_kwargs,
 ):
+	return _apply_outbound_result(
+		idempotency_key=idempotency_key,
+		status=status,
+		success=success,
+		event_id=event_id,
+		meta_message_id=meta_message_id,
+		status_code=status_code,
+		error=error,
+		attempt=attempt,
+	)
+
+
+def _apply_outbound_result(
+	idempotency_key,
+	status,
+	success=0,
+	event_id=None,
+	meta_message_id=None,
+	status_code=None,
+	error=None,
+	attempt=0,
+	**_provider_metadata,
+):
 	"""Idempotently apply the relay's final provider result to a local message."""
 	idempotency_key = str(idempotency_key or "").strip()
 	if not idempotency_key:
@@ -79,21 +102,60 @@ def receive_outbound_result(
 	else:
 		message.failure = None
 	message.save(ignore_permissions=True)
-	frappe.publish_realtime(
-		"whatsapp_core_message_status",
-		{
-			"conversation": message.conversation,
-			"message": message.name,
-			"delivery_status": message.delivery_status,
-			"provider_message_id": message.provider_message_id,
-		},
-		after_commit=True,
-	)
+	if not frappe.flags.whatsapp_core_result_batch:
+		frappe.publish_realtime(
+			"whatsapp_core_message_status",
+			{
+				"conversation": message.conversation,
+				"message": message.name,
+				"delivery_status": message.delivery_status,
+				"provider_message_id": message.provider_message_id,
+			},
+			after_commit=True,
+		)
 	return {
 		"status": "applied",
 		"message": message.name,
 		"delivery_status": message.delivery_status,
 	}
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def receive_outbound_results(results):
+	"""Apply up to 100 durable relay results and notify the UI once."""
+	if isinstance(results, str):
+		results = frappe.parse_json(results)
+	if not isinstance(results, list) or not 1 <= len(results) <= 100:
+		frappe.throw("results must contain between 1 and 100 items", frappe.ValidationError)
+	if any(not isinstance(result, dict) for result in results):
+		frappe.throw("Every outbound result must be an object", frappe.ValidationError)
+
+	applied = []
+	frappe.flags.whatsapp_core_result_batch = True
+	try:
+		for result in results:
+			applied.append(_apply_outbound_result(**result))
+	finally:
+		frappe.flags.whatsapp_core_result_batch = False
+	conversations = list(dict.fromkeys(
+		frappe.get_all(
+			"WhatsApp Core Message",
+			filters={"name": ["in", [row["message"] for row in applied]]},
+			pluck="conversation",
+		)
+	))
+	frappe.publish_realtime(
+		"whatsapp_core_batch_committed",
+		{
+			"event_count": len(applied),
+			"completed": len(applied),
+			"failed": 0,
+			"conversations": conversations,
+		},
+		after_commit=True,
+	)
+	return {"status": "applied", "count": len(applied), "results": applied}
 
 
 def receive_one(payload):

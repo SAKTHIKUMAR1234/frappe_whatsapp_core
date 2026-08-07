@@ -111,6 +111,7 @@
 	let detailRequest = 0
 	let olderRequest = 0
 	let messageSearchRequest = 0
+	let batchRefreshTimer = null
 
 	const selectedName = computed(() => route.params.conversation || '')
 	const filteredRows = computed(() => {
@@ -150,9 +151,9 @@
 	)
 	const textReady = computed(() => Boolean(detail.value?.outbound?.text_ready))
 
-	async function loadRows() {
+	async function loadRows({ silent = false } = {}) {
 		const request = ++listRequest
-		loading.value = true
+		if (!silent) loading.value = true
 		listError.value = ''
 		try {
 			const loaded = await call('frappe_whatsapp_core.inbox.conversations', { limit: 500 })
@@ -162,11 +163,11 @@
 			if (request === listRequest)
 				listError.value = errorMessage(error, 'Unable to load conversations.')
 		} finally {
-			if (request === listRequest) loading.value = false
+			if (request === listRequest && !silent) loading.value = false
 		}
 	}
 
-	async function loadDetail(name) {
+	async function loadDetail(name, { silent = false } = {}) {
 		const request = ++detailRequest
 		olderRequest += 1
 		messageSearchRequest += 1
@@ -177,7 +178,7 @@
 			loadingOlder.value = false
 			return
 		}
-		detailLoading.value = true
+		if (!silent) detailLoading.value = true
 		detailError.value = ''
 		detail.value = null
 		try {
@@ -200,7 +201,7 @@
 			if (request === detailRequest)
 				detailError.value = errorMessage(error, 'Unable to load this conversation.')
 		} finally {
-			if (request === detailRequest) detailLoading.value = false
+			if (request === detailRequest && !silent) detailLoading.value = false
 		}
 	}
 
@@ -698,6 +699,20 @@
 		}
 	}
 
+	function refreshCommittedBatch(event) {
+		window.clearTimeout(batchRefreshTimer)
+		batchRefreshTimer = window.setTimeout(async () => {
+			await loadRows({ silent: true })
+			if (
+				selectedName.value &&
+				(!event?.conversations?.length || event.conversations.includes(selectedName.value))
+			) {
+				await loadDetail(selectedName.value, { silent: true })
+				scrollToBottom()
+			}
+		}, 100)
+	}
+
 	async function updateStatus(status) {
 		const conversation = selectedName.value
 		try {
@@ -741,10 +756,12 @@
 		unsubscribers.push(
 			subscribe(site, 'whatsapp_core_message', appendMessage),
 			subscribe(site, 'whatsapp_core_message_status', updateMessageStatus),
+			subscribe(site, 'whatsapp_core_batch_committed', refreshCommittedBatch),
 		)
 	})
 	onBeforeUnmount(() => {
 		clearTimeout(messageSearchTimer)
+		window.clearTimeout(batchRefreshTimer)
 		unsubscribers.forEach((unsubscribe) => unsubscribe())
 	})
 </script>

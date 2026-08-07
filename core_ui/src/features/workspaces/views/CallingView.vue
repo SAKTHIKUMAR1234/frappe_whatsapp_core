@@ -65,6 +65,7 @@
 	const permissionResult = ref(null)
 	const ACTION_FAILED = Symbol('action-failed')
 	let unsubscribe = () => {}
+	let unsubscribeBatch = () => {}
 	let refreshTimer = null
 	let loadSequence = 0
 	function hasTarget(values) {
@@ -282,10 +283,16 @@
 	onMounted(() => {
 		load('')
 		unsubscribe = subscribe(session.boot?.site, 'whatsapp_core_call', scheduleRefresh)
+		unsubscribeBatch = subscribe(
+			session.boot?.site,
+			'whatsapp_core_batch_committed',
+			scheduleRefresh,
+		)
 	})
 	onUnmounted(() => {
 		window.clearTimeout(refreshTimer)
 		unsubscribe()
+		unsubscribeBatch()
 	})
 </script>
 

@@ -47,7 +47,8 @@ def handle_core_event(payload, event) -> dict:
 		limit_page_length=100,
 	)
 	for call in calls:
-		frappe.publish_realtime("whatsapp_core_call", call, after_commit=True)
+		if not frappe.flags.whatsapp_core_batch_processing:
+			frappe.publish_realtime("whatsapp_core_call", call, after_commit=True)
 	groups = frappe.get_all(
 		"WhatsApp Core Group",
 		filters={"relay_event": event.name},
@@ -58,16 +59,18 @@ def handle_core_event(payload, event) -> dict:
 		limit_page_length=100,
 	)
 	for group in groups:
-		frappe.publish_realtime("whatsapp_core_group", group, after_commit=True)
+		if not frappe.flags.whatsapp_core_batch_processing:
+			frappe.publish_realtime("whatsapp_core_group", group, after_commit=True)
 	for message in messages:
-		frappe.publish_realtime(
-			"whatsapp_core_message",
-			{
-				"conversation": message.conversation,
-				"message": message,
-			},
-			after_commit=True,
-		)
+		if not frappe.flags.whatsapp_core_batch_processing:
+			frappe.publish_realtime(
+				"whatsapp_core_message",
+				{
+					"conversation": message.conversation,
+					"message": message,
+				},
+				after_commit=True,
+			)
 		flow_event = _flow_event(message)
 		flow_result = (
 			route_inbound(message.conversation, f"{event.name}:{message.name}", flow_event)
