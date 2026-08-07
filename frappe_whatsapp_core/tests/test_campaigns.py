@@ -8,6 +8,7 @@ from frappe_whatsapp_core.campaigns import (
 	create_campaign,
 	launch_campaign,
 	prepare_campaign,
+	process_campaign_batch,
 )
 from frappe_whatsapp_core.template_catalog import sync_template_projection
 
@@ -145,3 +146,14 @@ class TestCampaigns(FrappeTestCase):
 			),
 			"Prepared",
 		)
+
+	def test_campaign_worker_never_exceeds_relay_batch_limit(self):
+		self.campaign.status = "Running"
+		self.campaign.save(ignore_permissions=True)
+		with (
+			patch("frappe_whatsapp_core.campaigns._campaign_batch_sender", return_value=object()),
+			patch("frappe_whatsapp_core.campaigns.frappe.get_all", return_value=[]) as get_all,
+			patch("frappe_whatsapp_core.campaigns._complete_campaign"),
+		):
+			process_campaign_batch(self.campaign.name, batch_size=500)
+		self.assertEqual(get_all.call_args.kwargs["limit_page_length"], 40)

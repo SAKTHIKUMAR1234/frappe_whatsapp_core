@@ -266,7 +266,10 @@ def process_campaign_batch(
 		filters={"campaign": campaign.name, "status": "Prepared"},
 		fields=["name", "identity", "personalization", "attempts"],
 		order_by="creation asc",
-		limit_page_length=max(1, min(int(batch_size), 500)),
+		# The Integration relay deliberately accepts at most 40 independent
+		# messages in one HTTP request. Never let an internal caller override
+		# that transport invariant with a larger worker batch.
+		limit_page_length=max(1, min(int(batch_size), DEFAULT_BATCH_SIZE)),
 	)
 	if not recipients:
 		_complete_campaign(campaign)
