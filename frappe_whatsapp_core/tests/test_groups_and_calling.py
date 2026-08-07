@@ -6,6 +6,8 @@ from frappe.tests.utils import FrappeTestCase
 
 from frappe_whatsapp_core.calling import calling_workspace, get_call_permission, send_call_button
 from frappe_whatsapp_core.groups import (
+	_sync_group_summaries,
+	group_activity,
 	group_workspace,
 	send_group_invite_template,
 	send_group_message,
@@ -216,6 +218,68 @@ class TestGroupsAndCalling(FrappeTestCase):
 			frappe.db.get_value("WhatsApp Core Group Receipt", receipt["name"], "status"),
 			"Read",
 		)
+
+	def test_group_subject_labels_inbox_and_activity_exposes_provider_messages(self):
+		channel = get_or_create_channel("GROUP-SUBJECT-PHONE", "GROUP-SUBJECT-WABA")
+		event = frappe.get_doc({
+			"doctype": "WhatsApp Core Event",
+			"event_id": "GROUP-SUBJECT-EVENT-1",
+			"status": "Pending",
+			"event_type": "group_create",
+			"direction": "Inbound",
+			"payload": "{}",
+		}).insert(ignore_permissions=True)
+		materialize_group_event(event, channel, {
+			"group_id": "GROUP-SUBJECT-1",
+			"type": "group_create",
+			"subject": "Retail Support Team",
+			"description": "Retailer group",
+		})
+		identity = get_or_create_group_identity("GROUP-SUBJECT-1")
+		self.assertEqual(identity.display_value, "Retail Support Team")
+		conversation = frappe.get_doc({
+			"doctype": "WhatsApp Core Conversation",
+			"conversation_key": "GROUP-SUBJECT-CONVERSATION-1",
+			"channel": channel.name,
+			"remote_identity": identity.name,
+			"status": "Open",
+			"last_message_at": frappe.utils.now_datetime(),
+		}).insert(ignore_permissions=True)
+		frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": "GROUP-SUBJECT-MESSAGE-1",
+			"idempotency_key": "GROUP-SUBJECT-IDEMPOTENCY-1",
+			"conversation": conversation.name,
+			"channel": channel.name,
+			"provider_message_id": "wamid.group.subject.1",
+			"direction": "Outbound",
+			"message_type": "text",
+			"body": "Group update",
+			"content": {"body": "Group update"},
+			"provider_timestamp": frappe.utils.now_datetime(),
+			"delivery_status": "Delivered",
+		}).insert(ignore_permissions=True)
+		activity = group_activity("GROUP-SUBJECT-1")
+		self.assertEqual(activity["conversation"], conversation.name)
+		self.assertEqual(activity["messages"][0]["provider_message_id"], "wamid.group.subject.1")
+
+	def test_group_list_sync_labels_preexisting_groups_before_webhook(self):
+		channel = get_or_create_channel("GROUP-LIST-PHONE", "GROUP-LIST-WABA")
+		_sync_group_summaries(
+			"Hub Account",
+			[{
+				"id": "GROUP-LIST-1",
+				"subject": "Distributor Updates",
+				"description": "Announcements",
+				"status": "ACTIVE",
+				"total_participant_count": 24,
+			}],
+			[{"account_name": "Hub Account", "channel": channel.name}],
+		)
+		group = frappe.get_doc("WhatsApp Core Group", "GROUP-LIST-1")
+		identity = get_or_create_group_identity(group.name)
+		self.assertEqual(group.participant_count, 24)
+		self.assertEqual(identity.display_value, "Distributor Updates")
 
 	def test_call_recording_and_transcript_webhooks_update_one_call(self):
 		channel = get_or_create_channel("ARTIFACT-PHONE", "ARTIFACT-WABA")

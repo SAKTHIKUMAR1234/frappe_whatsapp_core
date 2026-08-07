@@ -1,10 +1,12 @@
 <script setup>
 	import { computed, onMounted, onUnmounted, ref } from 'vue'
+	import { useRouter } from 'vue-router'
 	import Button from 'primevue/button'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
 	import Dialog from 'primevue/dialog'
 	import InputText from 'primevue/inputtext'
+	import InputNumber from 'primevue/inputnumber'
 	import MultiSelect from 'primevue/multiselect'
 	import Select from 'primevue/select'
 	import Tag from 'primevue/tag'
@@ -18,6 +20,7 @@
 
 	const session = useSessionStore()
 	const confirm = useConfirm()
+	const router = useRouter()
 	const loading = ref(false),
 		saving = ref(false),
 		action = ref(''),
@@ -47,11 +50,17 @@
 		messageId = ref(''),
 		pinOperation = ref('pin'),
 		pinDays = ref(7),
-		activity = ref({ group: null, members: [], receipts: [] })
+		activity = ref({ group: null, conversation: null, messages: [], members: [], receipts: [] })
 	const form = ref({ subject: '', description: '', join_approval_mode: 'auto_approve' })
 	const edit = ref({ subject: '', description: '' })
 	const invite = ref({ identity: '', template_name: '', language_code: 'en' })
 	const rows = computed(() => workspace.value.data || [])
+	const pinnableMessages = computed(() =>
+		(activity.value.messages || []).map((message) => ({
+			value: message.provider_message_id,
+			label: `${message.direction} · ${message.body || `[${message.message_type}]`} · ${message.delivery_status}`,
+		})),
+	)
 	const ACTION_FAILED = Symbol('action-failed')
 	let unsubscribe = () => {}
 	let realtimeRefresh = null
@@ -114,6 +123,14 @@
 	async function manage(group) {
 		const request = ++manageSequence
 		selected.value = group
+		activity.value = {
+			group: null,
+			conversation: null,
+			messages: [],
+			members: [],
+			receipts: [],
+		}
+		messageId.value = ''
 		edit.value = { subject: group.subject || '', description: group.description || '' }
 		inviteLink.value = ''
 		joinRequests.value = []
@@ -249,6 +266,15 @@
 		messageBody.value = ''
 		messageFileUrl.value = ''
 		messageFilename.value = ''
+		await loadActivity()
+	}
+	function openGroupChat() {
+		if (!activity.value.conversation) return
+		showManage.value = false
+		router.push({
+			name: 'inbox',
+			params: { conversation: activity.value.conversation },
+		})
 	}
 	async function selectMessageFile(event) {
 		const file = event.target.files?.[0]
@@ -496,6 +522,13 @@
 					:severity="groupSeverity(selected)"
 					rounded
 				/>
+				<Button
+					v-if="activity.conversation"
+					label="Open chat"
+					icon="pi pi-comments"
+					text
+					@click="openGroupChat"
+				/>
 			</section>
 			<section class="manage-card">
 				<h3>Group details</h3>
@@ -627,6 +660,18 @@
 			</section>
 			<section class="manage-card">
 				<h3>Message group</h3>
+				<div v-if="activity.messages.length" class="message-preview-list">
+					<button
+						v-for="message in activity.messages.slice(0, 6)"
+						:key="message.name"
+						type="button"
+						@click="messageId = message.provider_message_id"
+					>
+						<span>{{ message.direction }}</span>
+						<strong>{{ message.body || `[${message.message_type}]` }}</strong>
+						<small>{{ message.delivery_status }}</small>
+					</button>
+				</div>
 				<label
 					>Message type<Select
 						v-model="messageType"
@@ -680,7 +725,14 @@
 					@click="sendMessage"
 				/>
 				<div class="pin-row">
-					<InputText v-model="messageId" placeholder="Message ID" /><Select
+					<Select
+						v-model="messageId"
+						:options="pinnableMessages"
+						option-label="label"
+						option-value="value"
+						filter
+						placeholder="Choose a recent group message"
+					/><Select
 						v-model="pinOperation"
 						:options="[
 							{ label: 'Pin', value: 'pin' },
@@ -688,11 +740,11 @@
 						]"
 						option-label="label"
 						option-value="value"
-					/><InputText
+					/><InputNumber
 						v-if="pinOperation === 'pin'"
 						v-model="pinDays"
-						type="number"
-						min="1"
+						:min="1"
+						:max="30"
 						placeholder="Days"
 					/><Button
 						label="Apply"
@@ -829,6 +881,7 @@
 	}
 	.group-summary {
 		grid-column: 1 / -1;
+		grid-template-columns: auto minmax(0, 1fr) auto auto;
 		padding: 14px 16px;
 		border: 1px solid var(--wa-border);
 		border-radius: 14px;
@@ -852,6 +905,45 @@
 		display: grid;
 		gap: 8px;
 		font-size: 12px;
+	}
+	.message-preview-list {
+		display: grid;
+		gap: 6px;
+		max-height: 190px;
+		overflow: auto;
+	}
+	.message-preview-list button {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		gap: 8px;
+		align-items: center;
+		width: 100%;
+		padding: 9px 10px;
+		border: 1px solid var(--wa-border);
+		border-radius: 9px;
+		color: inherit;
+		background: var(--wa-surface-soft, #f7faf8);
+		font: inherit;
+		text-align: left;
+		cursor: pointer;
+	}
+	.message-preview-list button:hover,
+	.message-preview-list button:focus-visible {
+		border-color: var(--wa-primary, #0d8065);
+		outline: none;
+		background: color-mix(in srgb, var(--wa-primary, #0d8065) 8%, var(--wa-surface));
+	}
+	.message-preview-list span,
+	.message-preview-list small {
+		color: var(--wa-muted);
+		font-size: 10px;
+	}
+	.message-preview-list strong {
+		overflow: hidden;
+		font-size: 11px;
+		font-weight: 600;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.file-input input {
 		padding: 8px;
@@ -901,6 +993,12 @@
 		}
 		.pin-row > * {
 			width: 100%;
+		}
+		.group-summary {
+			grid-template-columns: auto minmax(0, 1fr) auto;
+		}
+		.group-summary :deep(.p-button) {
+			grid-column: 1 / -1;
 		}
 	}
 </style>

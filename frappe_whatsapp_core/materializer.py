@@ -146,6 +146,28 @@ def get_or_create_group_identity(group_id):
 	return doc
 
 
+def sync_group_identity(group):
+	"""Keep the shared-inbox thread readable as Meta group details change."""
+	identity = get_or_create_group_identity(group.group_id)
+	attributes = identity.attributes or {}
+	if isinstance(attributes, str):
+		attributes = frappe.parse_json(attributes)
+	if not isinstance(attributes, dict):
+		attributes = {}
+	attributes.update({
+		"group_id": group.group_id,
+		"subject": group.subject or "",
+		"description": group.description or "",
+		"status": group.status or "",
+	})
+	display_value = str(group.subject or group.group_id).strip()[:140]
+	if identity.display_value != display_value or identity.attributes != attributes:
+		identity.display_value = display_value
+		identity.attributes = attributes
+		identity.save(ignore_permissions=True)
+	return identity
+
+
 def materialize_call(event, channel, provider_call):
 	call_id = str(provider_call.get("id") or provider_call.get("call_id") or "").strip()
 	if not call_id:
@@ -254,6 +276,7 @@ def materialize_group_event(event, channel, provider_group, webhook_field="group
 	else:
 		group = frappe.get_doc(values).insert(ignore_permissions=True)
 		projection_status = "created"
+	sync_group_identity(group)
 
 	member_results = _materialize_group_members(event, group, provider_group)
 	if member_results:

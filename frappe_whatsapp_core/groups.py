@@ -3,7 +3,11 @@
 import frappe
 
 from frappe_whatsapp_core.identity import contact_options
-from frappe_whatsapp_core.materializer import get_or_create_conversation, get_or_create_group_identity
+from frappe_whatsapp_core.materializer import (
+	get_or_create_conversation,
+	get_or_create_group_identity,
+	sync_group_identity,
+)
 from frappe_whatsapp_core.meta_flows import _accounts, _call, _resolve_account_name, _workspace_failure
 from frappe_whatsapp_core.outbound import (
 	queue_rich,
@@ -17,6 +21,53 @@ from frappe_whatsapp_core.permissions import require_core_access
 
 def _account(account_name=None):
 	return _resolve_account_name(account_name)
+
+
+def _sync_group_summaries(account_name, rows, accounts):
+	"""Project Meta list responses so existing groups are readable before a webhook arrives."""
+	account = next((row for row in accounts if row.get("account_name") == account_name), None)
+	if (
+		not account
+		or not account.get("channel")
+		or not frappe.db.exists("WhatsApp Core Channel", account["channel"])
+	):
+		return
+	for row in rows or []:
+		group_id = str(row.get("id") or row.get("group_id") or "").strip()
+		if not group_id:
+			continue
+		status = str(row.get("status") or "Active").strip().title()
+		if status not in {"Active", "Suspended", "Deleted", "Failed"}:
+			status = "Active"
+		values = {
+			"channel": account["channel"],
+			"status": status,
+			"last_event_type": "group_list_sync",
+			"last_event": row,
+			"last_synced": frappe.utils.now_datetime(),
+		}
+		for fieldname, source in {
+			"subject": "subject",
+			"description": "description",
+			"join_approval_mode": "join_approval_mode",
+			"invite_link": "invite_link",
+		}.items():
+			if row.get(source) is not None:
+				values[fieldname] = row[source]
+		participant_count = row.get("total_participant_count", row.get("participant_count"))
+		if participant_count is not None:
+			values["participant_count"] = int(participant_count or 0)
+		if frappe.db.exists("WhatsApp Core Group", group_id):
+			group = frappe.get_doc("WhatsApp Core Group", group_id)
+			group.update(values)
+			group.save(ignore_permissions=True)
+		else:
+			group = frappe.get_doc({
+				"doctype": "WhatsApp Core Group",
+				"group_id": group_id,
+				**values,
+			}).insert(ignore_permissions=True)
+		sync_group_identity(group)
 
 
 @frappe.whitelist()
@@ -38,6 +89,7 @@ def group_workspace(account_name=None, limit=100, after=None, before=None):
 		result = _call("groups", "list_groups", {
 			"account_name": selected, "limit": limit, "after": after, "before": before,
 		})
+		_sync_group_summaries(selected, result.get("data") or [], accounts)
 		return {
 			"configured": True,
 			"available": True,
@@ -143,8 +195,34 @@ def group_activity(group_id):
 		if frappe.db.exists("WhatsApp Core Group", group_id)
 		else None
 	)
+	conversation = None
+	messages = []
+	if group:
+		identity = get_or_create_group_identity(group_id)
+		conversation = frappe.db.get_value(
+			"WhatsApp Core Conversation",
+			{"channel": group.channel, "remote_identity": identity.name},
+			"name",
+			order_by="last_message_at desc",
+		)
+		if conversation:
+			messages = frappe.get_all(
+				"WhatsApp Core Message",
+				filters={
+					"conversation": conversation,
+					"provider_message_id": ["not like", "local:%"],
+				},
+				fields=[
+					"name", "provider_message_id", "direction", "message_type",
+					"body", "delivery_status", "provider_timestamp",
+				],
+				order_by="provider_timestamp desc, creation desc",
+				limit_page_length=50,
+			)
 	return {
 		"group": group,
+		"conversation": conversation,
+		"messages": messages,
 		"members": frappe.get_all(
 			"WhatsApp Core Group Member",
 			filters={"group": group_id},
