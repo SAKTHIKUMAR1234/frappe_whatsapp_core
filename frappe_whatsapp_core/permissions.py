@@ -86,9 +86,9 @@ def assert_conversation_access(conversation: str) -> None:
 		conversation,
 		["assigned_team", "assigned_user"],
 	)
-	if assigned_user == frappe.session.user or not assigned_team:
+	if assigned_user == frappe.session.user:
 		return
-	if frappe.db.exists(
+	if assigned_team and frappe.db.exists(
 		"WhatsApp Core Team Member",
 		{
 			"parent": assigned_team,
@@ -96,6 +96,8 @@ def assert_conversation_access(conversation: str) -> None:
 			"enabled": 1,
 		},
 	):
+		return
+	if not assigned_team and not assigned_user:
 		return
 	frappe.throw("You are not assigned to this conversation", frappe.PermissionError)
 
@@ -119,7 +121,10 @@ def conversation_conditions(alias: str = "conversation") -> tuple[list[str], dic
 		values["teams"] = tuple(teams)
 		conditions.append(
 			f"""(
-				COALESCE({alias}.assigned_team, '') = ''
+				(
+					COALESCE({alias}.assigned_team, '') = ''
+					AND COALESCE({alias}.assigned_user, '') = ''
+				)
 				OR {alias}.assigned_team IN %(teams)s
 				OR {alias}.assigned_user = %(current_user)s
 			)"""
@@ -127,7 +132,10 @@ def conversation_conditions(alias: str = "conversation") -> tuple[list[str], dic
 	else:
 		conditions.append(
 			f"""(
-				COALESCE({alias}.assigned_team, '') = ''
+				(
+					COALESCE({alias}.assigned_team, '') = ''
+					AND COALESCE({alias}.assigned_user, '') = ''
+				)
 				OR {alias}.assigned_user = %(current_user)s
 			)"""
 		)

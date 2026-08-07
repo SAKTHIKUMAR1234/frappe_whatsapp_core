@@ -252,6 +252,33 @@ class TestWorkspaceAPI(FrappeTestCase):
 		finally:
 			frappe.local.session.user = original_user
 
+	def test_inbox_and_outbound_enforce_direct_user_assignment(self):
+		from frappe_whatsapp_core.inbox import conversation, conversations
+		from frappe_whatsapp_core.outbound import queue_text
+
+		frappe.db.set_value(
+			"WhatsApp Core Conversation",
+			self.conversation.name,
+			{"assigned_team": None, "assigned_user": "other-agent@example.com"},
+		)
+		original_user = frappe.session.user
+		frappe.local.session.user = "unassigned@example.com"
+		try:
+			with patch(
+				"frappe_whatsapp_core.permissions.frappe.get_roles",
+				return_value=["WhatsApp User"],
+			):
+				self.assertNotIn(
+					self.conversation.name,
+					[row["name"] for row in conversations(limit=500)],
+				)
+				with self.assertRaises(frappe.PermissionError):
+					conversation(self.conversation.name)
+				with self.assertRaises(frappe.PermissionError):
+					queue_text(self.conversation.name, "Not allowed")
+		finally:
+			frappe.local.session.user = original_user
+
 	def test_outbound_handler_uses_core_defaults_without_adapter_hooks(self):
 		from frappe_whatsapp_core.outbound import queue_template, queue_text
 
