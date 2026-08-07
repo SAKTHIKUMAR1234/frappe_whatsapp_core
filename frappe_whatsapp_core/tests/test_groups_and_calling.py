@@ -4,7 +4,7 @@ from unittest.mock import patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from frappe_whatsapp_core.calling import get_call_permission
+from frappe_whatsapp_core.calling import calling_workspace, get_call_permission
 from frappe_whatsapp_core.groups import group_workspace, send_group_message
 from frappe_whatsapp_core.materializer import (
 	get_or_create_channel,
@@ -40,11 +40,33 @@ class TestGroupsAndCalling(FrappeTestCase):
 			queue_text.return_value = frappe._dict(name="MSG-1", delivery_status="Queued")
 			sent = send_group_message("Hub Account", "GROUP-1", "text", {"body": "Hello"})
 		self.assertEqual(workspace["data"][0]["id"], "GROUP-1")
+		self.assertTrue(workspace["available"])
 		self.assertEqual(sent["conversation"], "GROUP-CONVERSATION")
 		self.assertEqual(sent["message"].delivery_status, "Queued")
 		queue_text.assert_called_once_with(
 			"GROUP-CONVERSATION", "Hello", source="Core Group UI",
 		)
+
+	@patch("frappe_whatsapp_core.groups._workspace_failure")
+	@patch("frappe_whatsapp_core.groups._accounts", side_effect=frappe.ValidationError("Hub unavailable"))
+	def test_group_workspace_returns_empty_state_without_hub(self, accounts, failure):
+		failure.return_value = {"available": False, "data": [], "error": "Hub unavailable"}
+		result = group_workspace()
+		self.assertFalse(result["available"])
+		self.assertEqual(result["data"], [])
+
+	@patch("frappe_whatsapp_core.calling._workspace_failure")
+	@patch("frappe_whatsapp_core.calling._accounts", side_effect=frappe.ValidationError("Hub unavailable"))
+	@patch("frappe_whatsapp_core.calling.frappe.get_all", return_value=[{"call_id": "CALL-LOCAL"}])
+	def test_calling_workspace_keeps_local_history_without_hub(self, get_all, accounts, failure):
+		failure.return_value = {
+			"available": False,
+			"calls": [{"call_id": "CALL-LOCAL"}],
+			"error": "Hub unavailable",
+		}
+		result = calling_workspace()
+		self.assertFalse(result["available"])
+		self.assertEqual(result["calls"][0]["call_id"], "CALL-LOCAL")
 
 	@patch("frappe_whatsapp_core.groups._accounts")
 	@patch("frappe_whatsapp_core.groups._account", return_value="Hub Account")

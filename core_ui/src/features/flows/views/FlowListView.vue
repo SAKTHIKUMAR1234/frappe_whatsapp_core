@@ -29,6 +29,7 @@
 	const toast = useToast()
 	const session = useSessionStore()
 	const loading = ref(true)
+	const workspaceError = ref('')
 	const creating = ref(false)
 	const dialog = ref(false)
 	const operating = ref(false)
@@ -66,9 +67,11 @@
 
 	async function load(account = selectedAccount.value) {
 		loading.value = true
+		workspaceError.value = ''
 		try {
 			workspace.value = await flowWorkspace(account)
-			selectedAccount.value = workspace.value.selected_account
+			selectedAccount.value = workspace.value.selected_account || ''
+			workspaceError.value = workspace.value.error || ''
 		} catch (error) {
 			toast.add({
 				severity: 'error',
@@ -240,7 +243,7 @@
 				severity="secondary"
 				outlined
 				:loading="operating"
-				:disabled="!selectedAccount"
+				:disabled="!selectedAccount || !workspace.available"
 				@click="openEndpointDialog"
 			/>
 			<Button
@@ -248,21 +251,26 @@
 				severity="secondary"
 				outlined
 				:loading="operating"
-				:disabled="!selectedAccount"
+				:disabled="!selectedAccount || !workspace.available"
 				@click="openKeyDialog"
 			/>
 			<Button
 				label="Migrate Flows"
 				severity="secondary"
 				outlined
-				:disabled="!selectedAccount"
+				:disabled="!selectedAccount || !workspace.available"
 				@click="migrateDialog = true"
 			/>
-			<Button label="Create Meta Flow" :disabled="!selectedAccount" @click="dialog = true">
+			<Button
+				label="Create Meta Flow"
+				:disabled="!selectedAccount || !workspace.available"
+				@click="dialog = true"
+			>
 				<template #icon><Plus :size="16" /></template>
 			</Button>
 		</div>
 	</div>
+	<div v-if="workspaceError" class="banner error-banner">{{ workspaceError }}</div>
 
 	<section class="surface-card flow-list">
 		<div class="list-toolbar">

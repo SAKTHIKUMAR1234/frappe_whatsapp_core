@@ -6,28 +6,51 @@ from pathlib import Path
 
 import frappe
 
-from frappe_whatsapp_core.meta_flows import _accounts, _call, _resolve_account_name
+from frappe_whatsapp_core.meta_flows import _accounts, _call, _resolve_account_name, _workspace_failure
 from frappe_whatsapp_core.permissions import require_core_access
 
 
 @frappe.whitelist()
 @require_core_access(manage=True)
 def calling_workspace(account_name=None, include_sip_credentials=0):
-	selected = _resolve_account_name(account_name)
-	settings = _call("calling", "get_call_settings", {
-		"account_name": selected, "include_sip_credentials": include_sip_credentials,
-	})
+	call_fields = [
+		"name", "call_id", "channel", "direction", "status", "remote_number",
+		"remote_user_id", "remote_username", "started_at", "ended_at",
+		"cta_payload", "deeplink_payload", "recording_media_id",
+		"recording_mime_type", "transcript_media_id", "transcript_mime_type", "modified",
+	]
+	meta = frappe.get_meta("WhatsApp Core Call")
+	call_fields = [field for field in call_fields if field == "name" or meta.has_field(field)]
 	calls = frappe.get_all(
 		"WhatsApp Core Call",
-		fields=[
-			"name", "call_id", "channel", "direction", "status", "remote_number",
-			"remote_user_id", "remote_username", "started_at", "ended_at",
-			"cta_payload", "deeplink_payload", "recording_media_id",
-			"recording_mime_type", "transcript_media_id", "transcript_mime_type", "modified",
-		],
+		fields=call_fields,
 		order_by="modified desc", limit_page_length=100,
 	)
-	return {"accounts": _accounts(), "selected_account": selected, "settings": settings, "calls": calls}
+	accounts = []
+	selected = None
+	try:
+		accounts = _accounts()
+		selected = _resolve_account_name(account_name)
+		settings = _call("calling", "get_call_settings", {
+			"account_name": selected, "include_sip_credentials": include_sip_credentials,
+		})
+		return {
+			"configured": True,
+			"available": True,
+			"error": "",
+			"accounts": accounts,
+			"selected_account": selected,
+			"settings": settings,
+			"calls": calls,
+		}
+	except Exception as error:
+		return _workspace_failure(
+			error,
+			accounts=accounts,
+			selected_account=selected,
+			settings={},
+			calls=calls,
+		)
 
 
 @frappe.whitelist()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import frappe
 
-from frappe_whatsapp_core.hub_client import call_management, get_settings
+from frappe_whatsapp_core.hub_client import call_management, connection_status, get_settings
 from frappe_whatsapp_core.permissions import require_core_access
 
 INTEGRATION_API = "frappe_whatsapp_integration.frappe_whatsapp_hub.api"
@@ -56,19 +56,55 @@ def _context(account_name: str | None = None) -> dict:
 	return _call("onboarding", "get_account_meta_context", {"account_name": account_name})
 
 
+def _workspace_failure(error: Exception, **payload) -> dict:
+	"""Return a renderable state for read-only workspaces when Hub is unavailable."""
+	if isinstance(error, frappe.PermissionError):
+		raise error
+	try:
+		status = connection_status()
+	except Exception:
+		status = {}
+	configured = bool(
+		status.get("enabled")
+		and status.get("hub_url")
+		and status.get("credentials_configured")
+		and status.get("account_count")
+	)
+	return {
+		"configured": configured,
+		"available": False,
+		"error": str(error) or "WhatsApp Integration Hub is unavailable",
+		**payload,
+	}
+
+
 @frappe.whitelist()
 @require_core_access(manage=True)
 def flow_workspace(account_name: str | None = None) -> dict:
-	accounts = _accounts()
-	selected = _resolve_account_name(account_name)
-	context = _context(selected)
-	result = _call("meta_flows", "list_flows", {"waba_name": context["waba_name"]})
-	return {
-		"accounts": accounts,
-		"selected_account": selected,
-		"context": context,
-		"flows": result.get("data") or [],
-	}
+	accounts = []
+	selected = None
+	try:
+		accounts = _accounts()
+		selected = _resolve_account_name(account_name)
+		context = _context(selected)
+		result = _call("meta_flows", "list_flows", {"waba_name": context["waba_name"]})
+		return {
+			"configured": True,
+			"available": True,
+			"error": "",
+			"accounts": accounts,
+			"selected_account": selected,
+			"context": context,
+			"flows": result.get("data") or [],
+		}
+	except Exception as error:
+		return _workspace_failure(
+			error,
+			accounts=accounts,
+			selected_account=selected,
+			context={},
+			flows=[],
+		)
 
 
 @frappe.whitelist()

@@ -76,7 +76,8 @@
 			workspace.value = await call('frappe_whatsapp_core.calling.calling_workspace', {
 				account_name: selected,
 			})
-			account.value = workspace.value.selected_account
+			account.value = workspace.value.selected_account || ''
+			error.value = workspace.value.error || ''
 			settingsJson.value = JSON.stringify(
 				workspace.value.settings?.calling || workspace.value.settings || {},
 				null,
@@ -253,10 +254,16 @@
 				label="Call invitation"
 				icon="pi pi-send"
 				outlined
+				:disabled="!workspace.available"
 				@click="showOutreach = true"
 			/>
 			<label class="upload-button">
-				<input type="file" accept="audio/ogg,.ogg" @change="uploadVoicemail" />
+				<input
+					type="file"
+					accept="audio/ogg,.ogg"
+					:disabled="!workspace.available"
+					@change="uploadVoicemail"
+				/>
 				<span class="pi pi-upload" />
 				{{ action === 'voicemail' ? 'Uploading…' : 'Voicemail audio' }}
 			</label>
@@ -264,8 +271,14 @@
 				label="Settings"
 				icon="pi pi-cog"
 				outlined
+				:disabled="!workspace.available"
 				@click="showSettings = true"
-			/><Button label="Start call" icon="pi pi-phone" @click="openAction()" />
+			/><Button
+				label="Start call"
+				icon="pi pi-phone"
+				:disabled="!workspace.available"
+				@click="openAction()"
+			/>
 		</div>
 	</div>
 	<div v-if="error" class="banner error-banner">{{ error }}</div>

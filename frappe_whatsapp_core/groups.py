@@ -2,8 +2,8 @@
 
 import frappe
 
-from frappe_whatsapp_core.meta_flows import _accounts, _call, _resolve_account_name
 from frappe_whatsapp_core.materializer import get_or_create_conversation, get_or_create_group_identity
+from frappe_whatsapp_core.meta_flows import _accounts, _call, _resolve_account_name, _workspace_failure
 from frappe_whatsapp_core.outbound import (
 	queue_rich,
 	queue_template_internal,
@@ -21,11 +21,29 @@ def _account(account_name=None):
 @frappe.whitelist()
 @require_core_access(manage=True)
 def group_workspace(account_name=None, limit=100, after=None, before=None):
-	selected = _account(account_name)
-	result = _call("groups", "list_groups", {
-		"account_name": selected, "limit": limit, "after": after, "before": before,
-	})
-	return {"accounts": _accounts(), "selected_account": selected, **result}
+	accounts = []
+	selected = None
+	try:
+		accounts = _accounts()
+		selected = _account(account_name)
+		result = _call("groups", "list_groups", {
+			"account_name": selected, "limit": limit, "after": after, "before": before,
+		})
+		return {
+			"configured": True,
+			"available": True,
+			"error": "",
+			"accounts": accounts,
+			"selected_account": selected,
+			**result,
+		}
+	except Exception as error:
+		return _workspace_failure(
+			error,
+			accounts=accounts,
+			selected_account=selected,
+			data=[],
+		)
 
 
 @frappe.whitelist()

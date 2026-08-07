@@ -62,8 +62,18 @@ class TestMetaFlowProxy(FrappeTestCase):
 			{"success": True, "data": [{"id": "FLOW-1", "name": "Support", "status": "DRAFT"}]},
 		]
 		result = flow_workspace()
+		self.assertTrue(result["available"])
 		self.assertEqual(result["flows"][0]["id"], "FLOW-1")
 		self.assertEqual(call.call_args_list[1].args[0:2], ("meta_flows", "list_flows"))
+
+	@patch("frappe_whatsapp_core.meta_flows.connection_status", return_value={"enabled": False})
+	@patch("frappe_whatsapp_core.meta_flows._accounts", side_effect=frappe.ValidationError("Hub not configured"))
+	def test_workspace_returns_renderable_state_without_hub(self, accounts, status):
+		result = flow_workspace()
+		self.assertFalse(result["available"])
+		self.assertFalse(result["configured"])
+		self.assertEqual(result["flows"], [])
+		self.assertIn("Hub not configured", result["error"])
 
 	@patch("frappe_whatsapp_core.meta_flows._context", return_value={"waba_name": "WABA Doc"})
 	@patch("frappe_whatsapp_core.meta_flows._call")

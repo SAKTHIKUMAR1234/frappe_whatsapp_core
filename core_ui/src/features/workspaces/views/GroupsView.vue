@@ -64,7 +64,8 @@
 			workspace.value = await call('frappe_whatsapp_core.groups.group_workspace', {
 				account_name: selectedAccount,
 			})
-			account.value = workspace.value.selected_account
+			account.value = workspace.value.selected_account || ''
+			error.value = workspace.value.error || ''
 		} catch (e) {
 			error.value = errorMessage(e)
 		} finally {
@@ -306,7 +307,12 @@
 			<h1>WhatsApp Groups</h1>
 			<p>Create, moderate and message Meta-hosted business groups without leaving Core.</p>
 		</div>
-		<Button label="Create group" icon="pi pi-plus" @click="showCreate = true" />
+		<Button
+			label="Create group"
+			icon="pi pi-plus"
+			:disabled="!workspace.available"
+			@click="showCreate = true"
+		/>
 	</div>
 	<div v-if="error" class="banner error-banner">{{ error }}</div>
 	<div v-if="notice" class="banner success-banner">{{ notice }}</div>
