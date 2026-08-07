@@ -1,5 +1,5 @@
 <script setup>
-	import { onMounted, ref } from 'vue'
+	import { onBeforeUnmount, onMounted, ref } from 'vue'
 	import Button from 'primevue/button'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
@@ -9,16 +9,21 @@
 
 	import AsyncState from '@/components/AsyncState.vue'
 	import { call, errorMessage } from '@/services/frappe'
+	import { subscribe } from '@/services/realtime'
+	import ContactSourcesCard from '@/features/settings/components/ContactSourcesCard.vue'
 	import TransportSettingsCard from '@/features/settings/components/TransportSettingsCard.vue'
 	import { useSessionStore } from '@/stores/session'
 
 	const session = useSessionStore()
+	let unsubscribeContactSources = null
+	let contactSourceRefresh = null
 	const loading = ref(true)
 	const loadError = ref('')
 	const workspace = ref({
 		channels: [],
 		workspaces: [],
 		solutions: [],
+		contact_sources: [],
 		inventory: {},
 	})
 
@@ -34,7 +39,19 @@
 		}
 	}
 
-	onMounted(load)
+	onMounted(() => {
+		load()
+		const site = session.boot?.site
+		unsubscribeContactSources = subscribe(site, 'whatsapp_core_contact_sources', () => {
+			window.clearTimeout(contactSourceRefresh)
+			contactSourceRefresh = window.setTimeout(load, 200)
+		})
+	})
+
+	onBeforeUnmount(() => {
+		window.clearTimeout(contactSourceRefresh)
+		unsubscribeContactSources?.()
+	})
 </script>
 
 <template>
@@ -97,6 +114,12 @@
 			:workspace="workspace"
 			:can-manage="Boolean(session.boot?.can_manage)"
 			@saved="workspace = $event"
+		/>
+
+		<ContactSourcesCard
+			:sources="workspace.contact_sources || []"
+			:can-manage="Boolean(session.boot?.can_manage)"
+			@saved="load"
 		/>
 
 		<div class="settings-grid">

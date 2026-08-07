@@ -5,6 +5,7 @@
 	import DataTable from 'primevue/datatable'
 	import Dialog from 'primevue/dialog'
 	import InputText from 'primevue/inputtext'
+	import MultiSelect from 'primevue/multiselect'
 	import Select from 'primevue/select'
 	import Textarea from 'primevue/textarea'
 	import { call, errorMessage, uploadFile } from '@/services/frappe'
@@ -19,13 +20,19 @@
 		showManage = ref(false),
 		error = ref(''),
 		notice = ref('')
-	const workspace = ref({ accounts: [], data: [], templates: [], selected_account: '' })
+	const workspace = ref({
+		accounts: [],
+		data: [],
+		templates: [],
+		contacts: [],
+		selected_account: '',
+	})
 	const account = ref(''),
 		selected = ref(null),
 		inviteLink = ref(''),
 		joinRequests = ref([]),
 		selectedRequests = ref([]),
-		participantsToRemove = ref(''),
+		participantsToRemove = ref([]),
 		messageType = ref('text'),
 		messageBody = ref(''),
 		messageFileUrl = ref(''),
@@ -38,7 +45,7 @@
 		activity = ref({ group: null, members: [], receipts: [] })
 	const form = ref({ subject: '', description: '', join_approval_mode: 'auto_approve' })
 	const edit = ref({ subject: '', description: '' })
-	const invite = ref({ to_number: '', template_name: '', language_code: 'en' })
+	const invite = ref({ identity: '', template_name: '', language_code: 'en' })
 	const rows = computed(() => workspace.value.data || [])
 	const ACTION_FAILED = Symbol('action-failed')
 	let unsubscribe = () => {}
@@ -178,19 +185,18 @@
 		await loadRequests()
 	}
 	async function removeParticipants() {
-		const participants = participantsToRemove.value.split(/[\s,]+/).filter(Boolean)
 		const result = await run(
 			'remove',
 			() =>
 				call('frappe_whatsapp_core.groups.remove_participants', {
 					account_name: account.value,
 					group_id: selected.value.id,
-					participants,
+					participants: participantsToRemove.value,
 				}),
 			'Participants removed.',
 		)
 		if (result === ACTION_FAILED) return
-		participantsToRemove.value = ''
+		participantsToRemove.value = []
 	}
 	async function sendMessage() {
 		let content
@@ -251,7 +257,7 @@
 			'Group invite queued.',
 		)
 		if (result === ACTION_FAILED) return
-		invite.value.to_number = ''
+		invite.value.identity = ''
 	}
 	async function pinMessage() {
 		await run(
@@ -480,11 +486,26 @@
 					/>
 				</div>
 				<div class="form invite-form">
-					<label
-						>Recipient number<InputText
-							v-model="invite.to_number"
-							placeholder="International WhatsApp number"
-					/></label>
+					<label>
+						Recipient contact
+						<Select
+							v-model="invite.identity"
+							:options="workspace.contacts || []"
+							option-label="label"
+							option-value="identity"
+							filter
+							placeholder="Select a Core contact"
+						>
+							<template #option="{ option }">
+								<div class="contact-option">
+									<strong>{{ option.label }}</strong>
+									<small
+										>{{ option.phone_number }} · {{ option.reference }}</small
+									>
+								</div>
+							</template>
+						</Select>
+					</label>
 					<label
 						>Approved invite template<Select
 							v-model="invite.template_name"
@@ -499,7 +520,7 @@
 						label="Send approved invite"
 						icon="pi pi-send"
 						:loading="action === 'send-invite'"
-						:disabled="!invite.to_number.trim() || !invite.template_name.trim()"
+						:disabled="!invite.identity || !invite.template_name.trim()"
 						@click="sendInvite"
 					/>
 				</div>
@@ -512,16 +533,23 @@
 						><strong>{{ member.status }}</strong>
 					</div>
 				</div>
-				<label
-					>Numbers or participant IDs<Textarea
+				<label>
+					Participants to remove
+					<MultiSelect
 						v-model="participantsToRemove"
-						rows="3"
-						placeholder="Comma or line separated" /></label
-				><Button
+						:options="activity.members"
+						option-label="participant_id"
+						option-value="participant_id"
+						filter
+						display="chip"
+						placeholder="Choose participants"
+					/>
+				</label>
+				<Button
 					label="Remove participants"
 					severity="danger"
 					outlined
-					:disabled="!participantsToRemove.trim()"
+					:disabled="!participantsToRemove.length"
 					:loading="action === 'remove'"
 					@click="removeParticipants"
 				/>
@@ -675,6 +703,18 @@
 	}
 	.file-ready {
 		color: var(--wa-success, #087f5b);
+	}
+	.contact-option strong,
+	.contact-option small {
+		display: block;
+	}
+	.contact-option strong {
+		font-size: 12px;
+	}
+	.contact-option small {
+		margin-top: 2px;
+		color: var(--wa-muted);
+		font-size: 10px;
 	}
 	.activity-list > div {
 		display: flex;

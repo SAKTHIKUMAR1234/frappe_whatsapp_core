@@ -18,6 +18,44 @@ def _account(account_name=None):
 	return _resolve_account_name(account_name)
 
 
+def _contact_options() -> list[dict]:
+	identities = frappe.get_all(
+		"WhatsApp Core Identity",
+		filters={"identity_type": "WhatsApp", "status": "Active"},
+		fields=["name", "normalized_value", "display_value", "primary_link"],
+		order_by="display_value asc, normalized_value asc",
+		limit_page_length=1000,
+	)
+	link_names = [row.primary_link for row in identities if row.primary_link]
+	links = {
+		row.name: row
+		for row in frappe.get_all(
+			"WhatsApp Core Identity Link",
+			filters={"name": ["in", link_names], "status": "Active"},
+			fields=["name", "display_name", "reference_doctype", "reference_name"],
+			limit_page_length=max(1, len(link_names)),
+		)
+	} if link_names else {}
+	return [
+		{
+			"identity": row.name,
+			"phone_number": row.normalized_value,
+			"label": (
+				links[row.primary_link].display_name
+				or links[row.primary_link].reference_name
+				if row.primary_link in links
+				else row.display_value or row.normalized_value
+			),
+			"reference": (
+				f"{links[row.primary_link].reference_doctype} · {links[row.primary_link].reference_name}"
+				if row.primary_link in links
+				else "WhatsApp contact"
+			),
+		}
+		for row in identities
+	]
+
+
 @frappe.whitelist()
 @require_core_access(manage=True)
 def group_workspace(account_name=None, limit=100, after=None, before=None):
@@ -30,6 +68,7 @@ def group_workspace(account_name=None, limit=100, after=None, before=None):
 		order_by="template_name asc, language_code asc",
 		limit_page_length=500,
 	)
+	contacts = _contact_options()
 	try:
 		accounts = _accounts()
 		selected = _account(account_name)
@@ -43,6 +82,7 @@ def group_workspace(account_name=None, limit=100, after=None, before=None):
 			"accounts": accounts,
 			"selected_account": selected,
 			"templates": templates,
+			"contacts": contacts,
 			**result,
 		}
 	except Exception as error:
@@ -51,6 +91,7 @@ def group_workspace(account_name=None, limit=100, after=None, before=None):
 			accounts=accounts,
 			selected_account=selected,
 			templates=templates,
+			contacts=contacts,
 			data=[],
 		)
 
@@ -166,6 +207,7 @@ def send_group_invite_template(
 	template_name,
 	language_code="en",
 	to_number=None,
+	identity=None,
 	recipient=None,
 	additional_body_parameters=None,
 	idempotency_key=None,
@@ -181,7 +223,7 @@ def send_group_invite_template(
 	additional_body_parameters = additional_body_parameters or []
 	if not isinstance(additional_body_parameters, list):
 		frappe.throw("additional_body_parameters must be a list", frappe.ValidationError)
-	if not to_number:
+	if not to_number and not identity:
 		return _call("groups", "send_group_invite_template", {
 			"account_name": selected,
 			"group_id": group_id,
@@ -194,7 +236,12 @@ def send_group_invite_template(
 	account = next((row for row in _accounts() if row["account_name"] == selected), None)
 	if not account:
 		frappe.throw("Hub account is not mapped to this Core site", frappe.PermissionError)
-	conversation = start_conversation(account["channel"], to_number)["conversation"]
+	if identity:
+		identity_doc = frappe.get_doc("WhatsApp Core Identity", identity)
+		channel = frappe.get_cached_doc("WhatsApp Core Channel", account["channel"])
+		conversation = get_or_create_conversation(channel, identity_doc).name
+	else:
+		conversation = start_conversation(account["channel"], to_number)["conversation"]
 	components = [{
 		"type": "body",
 		"parameters": [

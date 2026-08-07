@@ -41,6 +41,34 @@ recording/transcription artifacts and durable call-event logs. Meta's calling
 control plane is handled here; audio media runs through the configured WebRTC
 or SIP infrastructure.
 
+### Business contact resolution
+
+Core owns the canonical WhatsApp identity and can link it to documents that
+already belong to the installed Frappe site. A WhatsApp Manager configures each
+allowed DocType under **Core Settings → Contact sources**, including its phone,
+display-name and optional entity-type fields. Parent fields and one-level child
+table phone fields are supported.
+
+Outbound delivery resolves the current number in this order:
+
+1. a source-specific `whatsapp_core_contact_phone_resolvers` hook;
+2. a document `get_whatsapp_contact_number(context=...)` or
+   `get_contact_number(context=...)` method;
+3. the configured contact-source phone field.
+
+An app can register a source-specific resolver without changing Core:
+
+```python
+whatsapp_core_contact_phone_resolvers = {
+    "sales_partner": "my_app.whatsapp.resolve_partner_number",
+}
+```
+
+The resolver receives `identity`, `link`, `source`, `document` and `context`
+and returns either a phone string or `{ "phone_number": "..." }`. Core rejects
+missing records, empty configured numbers and ambiguous resolver registrations
+with an actionable validation error instead of silently sending to stale data.
+
 ### Installation
 
 You can install this app using the [bench](https://github.com/frappe/bench) CLI:

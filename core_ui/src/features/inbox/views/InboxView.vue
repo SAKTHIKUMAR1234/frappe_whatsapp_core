@@ -238,6 +238,14 @@
 				limit: 100,
 			})
 			messageSearchRows.value = [...result.rows].reverse()
+		} catch (error) {
+			messageSearchRows.value = []
+			toast.add({
+				severity: 'error',
+				summary: 'Search failed',
+				detail: errorMessage(error),
+				life: 4500,
+			})
 		} finally {
 			messageSearching.value = false
 		}
@@ -332,10 +340,19 @@
 	}
 
 	async function toggleBookmark(message) {
-		const result = await call('frappe_whatsapp_core.inbox.toggle_message_bookmark', {
-			message: message.name,
-		})
-		message.bookmarked = result.bookmarked
+		try {
+			const result = await call('frappe_whatsapp_core.inbox.toggle_message_bookmark', {
+				message: message.name,
+			})
+			message.bookmarked = result.bookmarked
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Bookmark not updated',
+				detail: errorMessage(error),
+				life: 4500,
+			})
+		}
 	}
 
 	async function showTyping() {
@@ -493,6 +510,13 @@
 				template: templateName,
 			})
 			appendMessage({ conversation: selectedName.value, message })
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Template not sent',
+				detail: errorMessage(error),
+				life: 5000,
+			})
 		} finally {
 			richSending.value = false
 		}
@@ -528,19 +552,28 @@
 
 	async function openNewChat() {
 		if (!canManage.value) return
-		const [templateData, settingsData] = await Promise.all([
-			call('frappe_whatsapp_core.frontend_api.template_catalog'),
-			call('frappe_whatsapp_core.frontend_api.settings_workspace'),
-		])
-		catalog.value = templateData
-		settings.value = settingsData
-		newChat.value.channel =
-			settingsData.channels.find((channel) => channel.enabled)?.name || ''
-		newChat.value.template =
-			templateData.templates.find(
-				(template) => template.enabled && template.approval_status === 'APPROVED',
-			)?.name || ''
-		newDialog.value = true
+		try {
+			const [templateData, settingsData] = await Promise.all([
+				call('frappe_whatsapp_core.frontend_api.template_catalog'),
+				call('frappe_whatsapp_core.frontend_api.settings_workspace'),
+			])
+			catalog.value = templateData
+			settings.value = settingsData
+			newChat.value.channel =
+				settingsData.channels.find((channel) => channel.enabled)?.name || ''
+			newChat.value.template =
+				templateData.templates.find(
+					(template) => template.enabled && template.approval_status === 'APPROVED',
+				)?.name || ''
+			newDialog.value = true
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'New conversation unavailable',
+				detail: errorMessage(error),
+				life: 5000,
+			})
+		}
 	}
 
 	function appendMessage(event) {
@@ -574,13 +607,22 @@
 	}
 
 	async function updateStatus(status) {
-		await call('frappe_whatsapp_core.inbox.update_conversation', {
-			name: selectedName.value,
-			status,
-		})
-		detail.value.conversation.status = status
-		const row = rows.value.find((item) => item.name === selectedName.value)
-		if (row) row.status = status
+		try {
+			await call('frappe_whatsapp_core.inbox.update_conversation', {
+				name: selectedName.value,
+				status,
+			})
+			detail.value.conversation.status = status
+			const row = rows.value.find((item) => item.name === selectedName.value)
+			if (row) row.status = status
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Conversation not updated',
+				detail: errorMessage(error, 'Unable to update the conversation status.'),
+				life: 5000,
+			})
+		}
 	}
 
 	async function scrollToBottom() {

@@ -9,7 +9,7 @@
 	import { useToast } from 'primevue/usetoast'
 	import { KeyRound, Plus, Save, Trash2 } from 'lucide-vue-next'
 
-	import { call } from '@/services/frappe'
+	import { call, errorMessage } from '@/services/frappe'
 
 	const props = defineProps({
 		workspace: { type: Object, required: true },
@@ -71,6 +71,13 @@
 				summary: 'Core transport saved',
 				detail: 'The site can now use the durable Integration Hub.',
 				life: 3000,
+			})
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Transport not saved',
+				detail: errorMessage(error),
+				life: 5000,
 			})
 		} finally {
 			form.saving = false

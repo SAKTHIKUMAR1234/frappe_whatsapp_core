@@ -11,8 +11,11 @@ from frappe_whatsapp_core.frontend_api import (
 	ai_queue_workspace,
 	classify_messages,
 	connectors_workspace,
+	contact_source_doctypes,
+	contact_source_fields,
 	health_workspace,
 	polls_workspace,
+	save_contact_source,
 	settings_workspace,
 )
 from frappe_whatsapp_core.materializer import (
@@ -134,6 +137,24 @@ class TestFrontendWorkspaces(FrappeTestCase):
 				"messages",
 			},
 		)
+
+	def test_contact_source_configuration_uses_real_doctype_fields(self):
+		doctypes = contact_source_doctypes(search="User")
+		self.assertIn("User", {row.name for row in doctypes})
+		fields = contact_source_fields("User")
+		self.assertIn("mobile_no", {row["value"] for row in fields["phone_fields"]})
+		source = save_contact_source({
+			"source_key": f"ui.user.{self.suffix}",
+			"display_name": "UI Users",
+			"source_doctype": "User",
+			"phone_field": "mobile_no",
+			"display_name_field": "full_name",
+			"enabled": 1,
+			"auto_resolve": 1,
+			"priority": 50,
+		})
+		self.assertEqual(source.source_doctype, "User")
+		self.assertIn(source.name, {row.name for row in settings_workspace()["contact_sources"]})
 
 	def test_router_preserves_both_public_whatsapp_entry_points(self):
 		router = (

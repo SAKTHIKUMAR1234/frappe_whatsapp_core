@@ -1,4 +1,5 @@
 import uuid
+from unittest.mock import patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
@@ -7,9 +8,44 @@ from frappe_whatsapp_core.identity import (
 	get_or_create_identity,
 	resolve_identity,
 )
+from frappe_whatsapp_core.outbound import resolve_recipient_phone
 
 
 class TestIdentityResolution(FrappeTestCase):
+	def test_outbound_uses_current_phone_from_linked_document(self):
+		suffix = f"7{str(uuid.uuid4().int)[-9:]}"
+		replacement = f"8{str(uuid.uuid4().int)[-9:]}"
+		user = frappe.get_doc({
+			"doctype": "User",
+			"email": f"whatsapp.outbound.{suffix}@example.com",
+			"first_name": "Outbound",
+			"mobile_no": f"+91{suffix}",
+			"enabled": 1,
+			"send_welcome_email": 0,
+		}).insert(ignore_permissions=True)
+		frappe.get_doc({
+			"doctype": "WhatsApp Core Identity Source",
+			"source_key": f"test.outbound.{suffix}",
+			"display_name": "Outbound Users",
+			"source_doctype": "User",
+			"enabled": 1,
+			"auto_resolve": 1,
+			"priority": 1,
+			"phone_field": "mobile_no",
+			"display_name_field": "full_name",
+		}).insert(ignore_permissions=True)
+
+		identity = get_or_create_identity(suffix)
+		user.mobile_no = f"+91{replacement}"
+		user.save(ignore_permissions=True)
+		frappe.clear_document_cache("User", user.name)
+
+		with patch(
+			"frappe_whatsapp_core.outbound.frappe.get_hooks",
+			side_effect=lambda key: {} if key == "whatsapp_core_contact_phone_resolvers" else [],
+		):
+			self.assertEqual(resolve_recipient_phone(identity), f"91{replacement}")
+
 	def test_generic_source_resolves_and_deactivates_cleanly(self):
 		suffix = f"7{str(uuid.uuid4().int)[-9:]}"
 		user = frappe.get_doc(

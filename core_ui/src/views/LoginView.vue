@@ -18,7 +18,11 @@
 	const submitting = ref(false)
 	const attempted = ref(false)
 	const sessionNotice = computed(() =>
-		route.query.expired ? 'Your session expired. Sign in again to continue.' : '',
+		route.query.expired
+			? 'Your session expired. Sign in again to continue.'
+			: route.query.unavailable
+				? 'The Frappe site could not be reached. Check the server and try again.'
+				: '',
 	)
 
 	async function submit() {

@@ -5,7 +5,12 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from frappe_whatsapp_core.calling import calling_workspace, get_call_permission
-from frappe_whatsapp_core.groups import group_workspace, send_group_message
+from frappe_whatsapp_core.groups import (
+	group_workspace,
+	send_group_invite_template,
+	send_group_message,
+)
+from frappe_whatsapp_core.identity import get_or_create_identity
 from frappe_whatsapp_core.materializer import (
 	get_or_create_channel,
 	get_or_create_group_identity,
@@ -41,6 +46,7 @@ class TestGroupsAndCalling(FrappeTestCase):
 			sent = send_group_message("Hub Account", "GROUP-1", "text", {"body": "Hello"})
 		self.assertEqual(workspace["data"][0]["id"], "GROUP-1")
 		self.assertTrue(workspace["available"])
+		self.assertIn("contacts", workspace)
 		self.assertEqual(sent["conversation"], "GROUP-CONVERSATION")
 		self.assertEqual(sent["message"].delivery_status, "Queued")
 		queue_text.assert_called_once_with(
@@ -96,6 +102,29 @@ class TestGroupsAndCalling(FrappeTestCase):
 			{"id": "MEDIA-1", "filename": "proof.pdf"},
 			source="Core Group UI",
 		)
+
+	@patch("frappe_whatsapp_core.groups._accounts")
+	@patch("frappe_whatsapp_core.groups._account", return_value="Hub Account")
+	def test_group_invite_uses_selected_core_contact(self, account, accounts):
+		identity = get_or_create_identity("919876543219", resolve=False)
+		accounts.return_value = [{
+			"account_name": "Hub Account", "display_name": "Primary", "channel": "CHANNEL-1",
+		}]
+		with (
+			patch("frappe_whatsapp_core.groups.get_or_create_conversation") as conversation,
+			patch("frappe_whatsapp_core.groups.frappe.get_cached_doc"),
+			patch("frappe_whatsapp_core.groups.queue_template_internal") as queue_template,
+		):
+			conversation.return_value = frappe._dict(name="GROUP-INVITE-CONVERSATION")
+			queue_template.return_value = frappe._dict(name="MSG-INVITE")
+			result = send_group_invite_template(
+				"Hub Account",
+				"GROUP-1",
+				"group_invite",
+				identity=identity.name,
+			)
+		self.assertEqual(result["conversation"], "GROUP-INVITE-CONVERSATION")
+		queue_template.assert_called_once()
 
 	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
 	@patch("frappe_whatsapp_core.calling._call", return_value={"data": [{"permission": "granted"}]})

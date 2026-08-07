@@ -26,6 +26,7 @@ from frappe_whatsapp_core.materializer import (
 	get_or_create_identity,
 	normalize_phone,
 )
+from frappe_whatsapp_core.identity import phone_candidates
 from frappe_whatsapp_core.permissions import assert_conversation_access, require_core_access
 
 
@@ -63,6 +64,8 @@ def resolve_recipient_phone(identity, context: dict | None = None) -> str:
 			resolved = resolved.get("phone_number")
 		if resolved:
 			value = resolved
+	else:
+		value = _linked_recipient_phone(identity, context or {}) or value
 
 	default_country_code = str(
 		(context or {}).get("default_country_calling_code")
@@ -80,6 +83,88 @@ def resolve_recipient_phone(identity, context: dict | None = None) -> str:
 			frappe.ValidationError,
 		)
 	return phone
+
+
+def _linked_recipient_phone(identity, context: dict) -> str | None:
+	"""Resolve a linked business document through an adapter or its configured field."""
+	link_name = getattr(identity, "primary_link", None)
+	if not link_name:
+		return None
+	link = frappe.get_cached_doc("WhatsApp Core Identity Link", link_name)
+	if link.status != "Active":
+		return None
+	if not frappe.db.exists(link.reference_doctype, link.reference_name):
+		frappe.throw(
+			f"Linked WhatsApp contact {link.reference_doctype} {link.reference_name} no longer exists",
+			frappe.ValidationError,
+		)
+	source = frappe.get_cached_doc("WhatsApp Core Identity Source", link.identity_source)
+	document = frappe.get_cached_doc(link.reference_doctype, link.reference_name)
+	resolver = _contact_phone_resolver(source.source_key)
+	if resolver:
+		resolved = frappe.get_attr(resolver)(
+			identity=identity,
+			link=link,
+			source=source,
+			document=document,
+			context=context,
+		)
+		if isinstance(resolved, dict):
+			resolved = resolved.get("phone_number")
+		if resolved:
+			return str(resolved)
+
+	for method_name in ("get_whatsapp_contact_number", "get_contact_number"):
+		method = getattr(document, method_name, None)
+		if callable(method):
+			resolved = method(context=context)
+			if isinstance(resolved, dict):
+				resolved = resolved.get("phone_number")
+			if resolved:
+				return str(resolved)
+
+	value = _mapped_phone_value(document, source.phone_field, identity.normalized_value)
+	if value:
+		return str(value)
+	frappe.throw(
+		f"{link.reference_doctype} is not usable as a WhatsApp contact because "
+		f"{source.phone_field or 'a phone field'} has no value. Configure the contact source "
+		"or register a whatsapp_core_contact_phone_resolvers hook.",
+		frappe.ValidationError,
+	)
+
+
+def _contact_phone_resolver(source_key: str) -> str | None:
+	hooks = frappe.get_hooks("whatsapp_core_contact_phone_resolvers") or {}
+	if not isinstance(hooks, dict):
+		return None
+	paths = hooks.get(source_key) or []
+	if isinstance(paths, str):
+		paths = [paths]
+	paths = list(dict.fromkeys(paths))
+	if len(paths) > 1:
+		frappe.throw(
+			f"Multiple contact phone resolvers are registered for {source_key}",
+			frappe.ValidationError,
+		)
+	return paths[0] if paths else None
+
+
+def _mapped_phone_value(document, phone_field: str, identity_value: str) -> str | None:
+	path = str(phone_field or "").strip()
+	if not path:
+		return None
+	if "." not in path:
+		return document.get(path)
+	table_field, child_field = path.split(".", 1)
+	values = [row.get(child_field) for row in (document.get(table_field) or []) if row.get(child_field)]
+	if not values:
+		return None
+	candidates = set(phone_candidates(identity_value))
+	for value in values:
+		if candidates.intersection(phone_candidates(value)):
+			return value
+	return values[0]
 
 
 def outbound_state(conversation: str | None = None) -> dict:

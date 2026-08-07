@@ -523,6 +523,7 @@ def settings_workspace():
 		],
 		"request_timeout": settings.request_timeout or 30,
 		"default_country_calling_code": settings.default_country_calling_code or "91",
+		"contact_sources": _contact_sources(),
 		"inventory": {
 			"identities": frappe.db.count("WhatsApp Core Identity"),
 			"verified_bindings": frappe.db.count(
@@ -533,6 +534,127 @@ def settings_workspace():
 			"messages": frappe.db.count("WhatsApp Core Message"),
 		},
 	}
+
+
+def _contact_sources() -> list[dict]:
+	return frappe.get_all(
+		"WhatsApp Core Identity Source",
+		fields=[
+			"name",
+			"source_key",
+			"display_name",
+			"source_doctype",
+			"enabled",
+			"auto_resolve",
+			"priority",
+			"phone_field",
+			"display_name_field",
+			"entity_type_field",
+			"filters",
+		],
+		order_by="priority asc, display_name asc",
+		limit_page_length=500,
+	)
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def contact_source_doctypes(search: str = "") -> list[dict]:
+	filters = {"istable": 0, "issingle": 0}
+	if search:
+		filters["name"] = ["like", f"%{str(search).strip()}%"]
+	return frappe.get_all(
+		"DocType",
+		filters=filters,
+		fields=["name", "module"],
+		order_by="name asc",
+		limit_page_length=500,
+	)
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def contact_source_fields(source_doctype: str) -> dict:
+	if not frappe.db.exists("DocType", source_doctype):
+		frappe.throw("Select a valid source DocType", frappe.ValidationError)
+	meta = frappe.get_meta(source_doctype)
+	ignored = {
+		"Section Break",
+		"Column Break",
+		"Tab Break",
+		"HTML",
+		"Button",
+		"Fold",
+		"Heading",
+	}
+	fields = []
+	phone_fields = []
+	phone_fieldtypes = {"Data", "Phone", "Read Only", "Small Text", "Text", "Long Text"}
+	for field in meta.fields:
+		if field.fieldtype == "Table" and field.options:
+			child_meta = frappe.get_meta(field.options)
+			for child in child_meta.fields:
+				if child.fieldtype in ignored or child.fieldtype in {"Table", "Table MultiSelect"}:
+					continue
+				option = {
+					"label": f"{field.label or field.fieldname} → {child.label or child.fieldname}",
+					"value": f"{field.fieldname}.{child.fieldname}",
+				}
+				if child.fieldtype in phone_fieldtypes:
+					phone_fields.append(option)
+			continue
+		if field.fieldtype in ignored or field.fieldtype in {"Table", "Table MultiSelect"}:
+			continue
+		option = {
+			"label": field.label or field.fieldname,
+			"value": field.fieldname,
+			"fieldtype": field.fieldtype,
+		}
+		fields.append(option)
+		if field.fieldtype in phone_fieldtypes:
+			phone_fields.append(option)
+	return {"fields": fields, "phone_fields": phone_fields}
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def save_contact_source(source):
+	payload = frappe.parse_json(source) if isinstance(source, str) else source
+	if not isinstance(payload, dict):
+		frappe.throw("Contact source must be an object", frappe.ValidationError)
+	source_key = frappe.scrub(payload.get("source_key") or payload.get("source_doctype") or "")
+	if not source_key:
+		frappe.throw("Source key is required", frappe.ValidationError)
+	name = str(payload.get("name") or source_key).strip()
+	doc = (
+		frappe.get_doc("WhatsApp Core Identity Source", name)
+		if frappe.db.exists("WhatsApp Core Identity Source", name)
+		else frappe.new_doc("WhatsApp Core Identity Source")
+	)
+	if not doc.is_new() and doc.source_key != source_key:
+		frappe.throw("Source key cannot be changed after creation", frappe.ValidationError)
+	doc.update({
+		"source_key": source_key,
+		"display_name": str(payload.get("display_name") or payload.get("source_doctype") or "").strip(),
+		"source_doctype": payload.get("source_doctype"),
+		"enabled": cint(payload.get("enabled", 1)),
+		"auto_resolve": cint(payload.get("auto_resolve", 1)),
+		"priority": max(1, cint(payload.get("priority") or 100)),
+		"phone_field": str(payload.get("phone_field") or "").strip(),
+		"display_name_field": str(payload.get("display_name_field") or "").strip(),
+		"entity_type_field": str(payload.get("entity_type_field") or "").strip(),
+		"filters": payload.get("filters") or "{}",
+	})
+	if doc.is_new():
+		doc.insert()
+	else:
+		doc.save()
+	frappe.publish_realtime(
+		"whatsapp_core_contact_sources",
+		{"source": doc.name},
+		after_commit=True,
+	)
+	return doc.as_dict()
 
 
 @frappe.whitelist()

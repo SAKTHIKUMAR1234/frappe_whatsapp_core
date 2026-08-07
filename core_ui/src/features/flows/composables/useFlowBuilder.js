@@ -6,6 +6,7 @@ import {
 	serializeFlowGraph,
 } from '@/features/flows/domain/nodeTypes'
 import { getFlow, publishFlow, saveFlowDraft } from '@/features/flows/services/flowService'
+import { errorMessage } from '@/services/frappe'
 
 export function useFlowBuilder({ flowName, toast }) {
 	const nodes = ref([])
@@ -187,6 +188,14 @@ export function useFlowBuilder({ flowName, toast }) {
 				})
 			}
 			return result
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Draft not saved',
+				detail: errorMessage(error),
+				life: 5000,
+			})
+			return null
 		} finally {
 			saving.value = false
 		}
@@ -196,6 +205,7 @@ export function useFlowBuilder({ flowName, toast }) {
 		validating.value = true
 		try {
 			const result = await save({ notify: false })
+			if (!result) return
 			if (result.errors.length) {
 				toast.add({
 					severity: 'warn',
@@ -220,6 +230,7 @@ export function useFlowBuilder({ flowName, toast }) {
 		publishing.value = true
 		try {
 			const validation = await save({ notify: false })
+			if (!validation) return
 			if (validation.errors.length) {
 				toast.add({
 					severity: 'error',
@@ -237,6 +248,13 @@ export function useFlowBuilder({ flowName, toast }) {
 				summary: `Version ${result.version} published`,
 				detail: 'Running conversations are pinned safely.',
 				life: 3500,
+			})
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Flow not published',
+				detail: errorMessage(error),
+				life: 5000,
 			})
 		} finally {
 			publishing.value = false

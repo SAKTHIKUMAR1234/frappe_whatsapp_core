@@ -118,7 +118,14 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
 	const session = useSessionStore()
-	if (!session.boot) await session.fetchBoot()
+	if (!session.boot) {
+		try {
+			await session.fetchBoot()
+		} catch {
+			if (to.name !== 'login')
+				return { name: 'login', query: { redirect: to.fullPath, unavailable: '1' } }
+		}
+	}
 	if (!to.meta.public && !session.authenticated) {
 		return { name: 'login', query: { redirect: to.fullPath } }
 	}
