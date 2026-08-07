@@ -19,24 +19,27 @@ def materialize_event(event, payload):
 		for change in entry.get("changes", []):
 			value = change.get("value") or {}
 			phone_number_id = value.get("metadata", {}).get("phone_number_id")
-			if not phone_number_id:
-				continue
-			channel = get_or_create_channel(phone_number_id, entry.get("id"))
-			for message in value.get("messages") or []:
-				results.append(materialize_inbound_message(event, channel, message))
-			for status in value.get("statuses") or []:
-				results.append(materialize_status(channel, status, event=event))
-			for call in value.get("calls") or []:
-				results.append(materialize_call(event, channel, call))
-			for group_event in value.get("groups") or []:
-				results.append(
-					materialize_group_event(
-						event,
-						channel,
-						group_event,
-						change.get("field") or "groups",
+			if phone_number_id:
+				channel = get_or_create_channel(phone_number_id, entry.get("id"))
+				for message in value.get("messages") or []:
+					results.append(materialize_inbound_message(event, channel, message))
+				for message in value.get("message_echoes") or []:
+					results.append(materialize_provider_message(event, channel, message, "Outbound"))
+				for status in value.get("statuses") or []:
+					results.append(materialize_status(channel, status, event=event))
+				for call in value.get("calls") or []:
+					results.append(materialize_call(event, channel, call))
+				for group_event in value.get("groups") or []:
+					results.append(
+						materialize_group_event(
+							event,
+							channel,
+							group_event,
+							change.get("field") or "groups",
+						)
 					)
-				)
+			results.extend(materialize_history(event, entry, value))
+			results.extend(materialize_state_sync(value))
 	return results
 
 
@@ -84,6 +87,14 @@ def get_or_create_conversation(channel, identity):
 
 
 def materialize_inbound_message(event, channel, provider_message):
+	return materialize_provider_message(event, channel, provider_message, "Inbound")
+
+
+def materialize_provider_message(event, channel, provider_message, direction="Inbound"):
+	"""Project inbound, history, or Business App echo messages into one model."""
+	message_type = str(provider_message.get("type") or "unknown").lower()
+	if message_type in {"edit", "revoke"}:
+		return materialize_message_mutation(event, channel, provider_message, message_type)
 	provider_id = provider_message.get("id")
 	if not provider_id:
 		return {"kind": "message", "status": "ignored", "reason": "missing_provider_id"}
@@ -92,11 +103,17 @@ def materialize_inbound_message(event, channel, provider_message):
 		return {"kind": "message", "status": "duplicate", "name": message_key}
 
 	group_id = provider_message.get("group_id")
-	identity = get_or_create_group_identity(group_id) if group_id else get_or_create_identity(provider_message.get("from") or "")
+	remote_number = (
+		provider_message.get("from")
+		if direction == "Inbound"
+		else provider_message.get("to") or provider_message.get("recipient_id")
+	)
+	if not group_id and not str(remote_number or "").strip():
+		return {"kind": "message", "status": "ignored", "reason": "missing_remote_identity"}
+	identity = get_or_create_group_identity(group_id) if group_id else get_or_create_identity(remote_number or "")
 	if not group_id:
 		ensure_party_bindings(identity.name, {"channel": channel.name, "provider_message": provider_message})
 	conversation = get_or_create_conversation(channel, identity)
-	message_type = provider_message.get("type") or "unknown"
 	content = provider_message.get(message_type) or {}
 	body = inbound_message_body(message_type, content)
 	timestamp = provider_message.get("timestamp")
@@ -108,21 +125,126 @@ def materialize_inbound_message(event, channel, provider_message):
 		"relay_event": event.name,
 		"channel": channel.name,
 		"provider_message_id": provider_id,
-		"direction": "Inbound",
+		"direction": direction,
 		"message_type": message_type,
 		"body": body or "",
 		"content": json.dumps(provider_message, separators=(",", ":"), ensure_ascii=False),
 		"provider_timestamp": provider_timestamp,
-		"delivery_status": "Received",
+		"delivery_status": "Received" if direction == "Inbound" else "Sent",
 	})
 	try:
 		doc.insert(ignore_permissions=True)
 	except frappe.DuplicateEntryError:
 		return {"kind": "message", "status": "duplicate", "name": message_key}
-	conversation.last_inbound_at = provider_timestamp
+	if direction == "Inbound":
+		conversation.last_inbound_at = provider_timestamp
 	conversation.last_message_at = provider_timestamp
 	conversation.save(ignore_permissions=True)
 	return {"kind": "message", "status": "created", "name": doc.name}
+
+
+def materialize_message_mutation(event, channel, provider_message, mutation_type):
+	"""Apply WhatsApp Business App edit/revoke echoes to their original message."""
+	mutation = provider_message.get(mutation_type) or {}
+	if not isinstance(mutation, dict):
+		mutation = {}
+	nested_message = mutation.get("message") or provider_message.get("message") or {}
+	if not isinstance(nested_message, dict):
+		nested_message = {}
+	context = provider_message.get("context") or {}
+	target_id = str(
+		mutation.get("message_id")
+		or mutation.get("original_message_id")
+		or nested_message.get("id")
+		or context.get("id")
+		or provider_message.get("id")
+		or ""
+	).strip()
+	if not target_id:
+		return {"kind": mutation_type, "status": "ignored", "reason": "missing_provider_id"}
+	message_name = frappe.db.get_value(
+		"WhatsApp Core Message",
+		{"channel": channel.name, "provider_message_id": target_id},
+		"name",
+	)
+	if not message_name:
+		return {"kind": mutation_type, "status": "orphan", "provider_message_id": target_id}
+	doc = frappe.get_doc("WhatsApp Core Message", message_name)
+	try:
+		content = json.loads(doc.content or "{}") if isinstance(doc.content, str) else (doc.content or {})
+	except (TypeError, ValueError):
+		content = {}
+	if not isinstance(content, dict):
+		content = {}
+	content.setdefault("mutations", []).append(provider_message)
+	if mutation_type == "revoke":
+		doc.delivery_status = "Deleted"
+		doc.body = "[Message deleted]"
+	else:
+		replacement = nested_message or mutation
+		replacement_type = str(replacement.get("type") or doc.message_type or "text").lower()
+		replacement_content = replacement.get(replacement_type) or replacement.get("text") or replacement
+		doc.message_type = replacement_type
+		doc.body = inbound_message_body(replacement_type, replacement_content)
+	doc.content = json.dumps(content, separators=(",", ":"), ensure_ascii=False)
+	doc.relay_event = event.name
+	doc.save(ignore_permissions=True)
+	return {"kind": mutation_type, "status": "updated", "name": doc.name}
+
+
+def materialize_history(event, entry, value):
+	"""Import coexistence history batches while preserving message directions."""
+	results = []
+	history_batches = value.get("history") or []
+	if isinstance(history_batches, dict):
+		history_batches = [history_batches]
+	for batch in history_batches:
+		if not isinstance(batch, dict):
+			continue
+		metadata = batch.get("metadata") or value.get("metadata") or {}
+		phone_number_id = metadata.get("phone_number_id")
+		if not phone_number_id:
+			continue
+		channel = get_or_create_channel(phone_number_id, entry.get("id"))
+		for thread in batch.get("threads") or []:
+			if not isinstance(thread, dict):
+				continue
+			thread_id = str(thread.get("id") or thread.get("wa_id") or thread.get("phone_number") or "")
+			for provider_message in thread.get("messages") or []:
+				if not isinstance(provider_message, dict):
+					continue
+				message = dict(provider_message)
+				direction = str(message.pop("direction", "") or "").title()
+				if direction not in {"Inbound", "Outbound"}:
+					direction = "Inbound" if message.get("from") == thread_id else "Outbound"
+				if direction == "Inbound" and not message.get("from"):
+					message["from"] = thread_id
+				if direction == "Outbound" and not message.get("to"):
+					message["to"] = thread_id
+				results.append(materialize_provider_message(event, channel, message, direction))
+	return results
+
+
+def materialize_state_sync(value):
+	"""Resolve coexistence contacts; raw state remains durable in the Core Event."""
+	results = []
+	states = value.get("state_sync") or []
+	if isinstance(states, dict):
+		states = [states]
+	for state in states:
+		if not isinstance(state, dict):
+			continue
+		contacts = state.get("contacts") or []
+		for contact in contacts:
+			if not isinstance(contact, dict):
+				continue
+			contact_value = contact.get("wa_id") or contact.get("phone_number") or contact.get("phone")
+			if contact_value:
+				identity = get_or_create_identity(contact_value)
+				results.append({"kind": "state_sync", "status": "resolved", "name": identity.name})
+		if not contacts:
+			results.append({"kind": "state_sync", "status": "recorded"})
+	return results
 
 
 def get_or_create_group_identity(group_id):

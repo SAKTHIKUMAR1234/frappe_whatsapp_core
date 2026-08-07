@@ -558,6 +558,7 @@
 		)
 		optimistic.message_type = type
 		optimistic.content = { payload }
+		richSending.value = true
 		reconcileMessage(optimistic, conversation)
 		scrollToBottom()
 		richDialog.value = false
@@ -580,6 +581,8 @@
 				detail: errorMessage(error),
 				life: 5000,
 			})
+		} finally {
+			richSending.value = false
 		}
 	}
 

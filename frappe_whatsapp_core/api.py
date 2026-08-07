@@ -324,4 +324,29 @@ def describe_payload(payload):
 					"conversation_key": group.get("group_id") or "",
 				})
 				return description
+			message_echoes = value.get("message_echoes", [])
+			if message_echoes:
+				message = message_echoes[0]
+				description.update({
+					"event_type": f"message_echo:{message.get('type', 'unknown')}",
+					"external_id": message.get("id", ""),
+					"conversation_key": message.get("to") or message.get("recipient_id") or "",
+				})
+				return description
+			history = value.get("history", [])
+			if history:
+				batch = history[0] if isinstance(history, list) else history
+				threads = batch.get("threads", []) if isinstance(batch, dict) else []
+				thread = threads[0] if threads else {}
+				message = (thread.get("messages") or [{}])[0]
+				description.update({
+					"event_type": "coexistence:history",
+					"channel_key": (batch.get("metadata") or {}).get("phone_number_id", ""),
+					"external_id": message.get("id", ""),
+					"conversation_key": thread.get("id") or thread.get("wa_id") or "",
+				})
+				return description
+			if value.get("state_sync"):
+				description["event_type"] = "coexistence:state_sync"
+				return description
 	return description
