@@ -9,6 +9,7 @@
 	import Select from 'primevue/select'
 	import Tag from 'primevue/tag'
 	import Textarea from 'primevue/textarea'
+	import ContactSelect from '@/features/contacts/components/ContactSelect.vue'
 	import { call, errorMessage, uploadFile } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
@@ -26,15 +27,17 @@
 		accounts: [],
 		calls: [],
 		templates: [],
+		contacts: [],
 		settings: {},
 		selected_account: '',
 	})
+	const settingsStatus = ref('DISABLED')
 	const settingsJson = ref('{}')
 	const form = ref({
 		action: 'connect',
 		call_id: '',
-		to_number: '',
-		recipient: '',
+		identity: '',
+		manual_number: '',
 		sdp_type: 'offer',
 		sdp: '',
 		biz_opaque_callback_data: '',
@@ -45,8 +48,8 @@
 	})
 	const outreach = ref({
 		operation: 'button',
-		to_number: '',
-		recipient: '',
+		identity: '',
+		manual_number: '',
 		body_text: 'Call us on WhatsApp for faster support.',
 		display_text: 'Call Now',
 		template_name: '',
@@ -55,12 +58,26 @@
 		payload: '',
 	})
 	const permission = ref({
-		user_wa_id: '',
-		recipient: '',
+		identity: '',
+		manual_number: '',
 		body_text: 'May we call you on WhatsApp?',
 	})
+	const permissionResult = ref(null)
 	const ACTION_FAILED = Symbol('action-failed')
 	let unsubscribe = () => {}
+	let refreshTimer = null
+	let loadSequence = 0
+	function hasTarget(values) {
+		return Boolean(values.identity || values.manual_number?.trim())
+	}
+	function permissionSummary(result) {
+		const value = result?.data?.[0] || result || {}
+		return {
+			status:
+				value.permission_status || value.permission || value.status || 'Response received',
+			expiresAt: value.expiration_time || value.expires_at || value.expiration || '',
+		}
+	}
 	async function run(name, task, success = '') {
 		action.value = name
 		error.value = ''
@@ -76,34 +93,47 @@
 			action.value = ''
 		}
 	}
-	async function load(selected = account.value) {
-		loading.value = true
+	async function load(selected = account.value, { silent = false } = {}) {
+		const request = ++loadSequence
+		if (!silent) loading.value = true
 		error.value = ''
 		try {
-			workspace.value = await call('frappe_whatsapp_core.calling.calling_workspace', {
+			const result = await call('frappe_whatsapp_core.calling.calling_workspace', {
 				account_name: selected,
 			})
+			if (request !== loadSequence) return
+			workspace.value = result
 			account.value = workspace.value.selected_account || ''
 			error.value = workspace.value.error || ''
-			settingsJson.value = JSON.stringify(
-				workspace.value.settings?.calling || workspace.value.settings || {},
-				null,
-				2,
-			)
+			const calling = {
+				...(workspace.value.settings?.calling || workspace.value.settings || {}),
+			}
+			settingsStatus.value = String(calling.status || 'DISABLED').toUpperCase()
+			delete calling.status
+			settingsJson.value = JSON.stringify(calling, null, 2)
 		} catch (e) {
-			error.value = errorMessage(e)
+			if (request === loadSequence) error.value = errorMessage(e)
 		} finally {
-			loading.value = false
+			if (!silent && request === loadSequence) loading.value = false
 		}
+	}
+	function scheduleRefresh() {
+		window.clearTimeout(refreshTimer)
+		refreshTimer = window.setTimeout(() => load(account.value, { silent: true }), 180)
 	}
 	async function saveSettings() {
 		let calling
 		try {
 			calling = JSON.parse(settingsJson.value)
 		} catch {
-			error.value = 'Calling settings must be valid JSON.'
+			error.value = 'Advanced calling settings must be valid JSON.'
 			return
 		}
+		if (!calling || Array.isArray(calling) || typeof calling !== 'object') {
+			error.value = 'Advanced calling settings must be a JSON object.'
+			return
+		}
+		calling = { ...calling, status: settingsStatus.value }
 		const result = await run(
 			'settings',
 			() =>
@@ -118,15 +148,16 @@
 		await load()
 	}
 	async function checkPermission() {
+		permissionResult.value = null
 		const result = await run('permission', () =>
 			call('frappe_whatsapp_core.calling.get_call_permission', {
 				account_name: account.value,
-				user_wa_id: permission.value.user_wa_id || null,
-				recipient: permission.value.recipient || null,
+				identity: permission.value.identity || null,
+				user_wa_id: permission.value.manual_number || null,
 			}),
 		)
 		if (result === ACTION_FAILED) return
-		notice.value = JSON.stringify(result)
+		permissionResult.value = permissionSummary(result)
 	}
 	async function requestPermission() {
 		await run(
@@ -135,8 +166,8 @@
 				call('frappe_whatsapp_core.calling.request_call_permission', {
 					account_name: account.value,
 					body_text: permission.value.body_text,
-					to_number: permission.value.user_wa_id || null,
-					recipient: permission.value.recipient || null,
+					identity: permission.value.identity || null,
+					to_number: permission.value.manual_number || null,
 				}),
 			'Call permission requested.',
 		)
@@ -145,8 +176,8 @@
 		form.value = {
 			action: row ? 'pre_accept' : 'connect',
 			call_id: row?.call_id || '',
-			to_number: '',
-			recipient: '',
+			identity: '',
+			manual_number: '',
 			sdp_type: row ? 'answer' : 'offer',
 			sdp: '',
 			biz_opaque_callback_data: '',
@@ -163,6 +194,7 @@
 			transcription_enabled,
 			purpose,
 			announcement_language,
+			manual_number,
 			...values
 		} = form.value
 		if (!['connect', 'pre_accept', 'accept'].includes(values.action)) {
@@ -179,6 +211,7 @@
 				call('frappe_whatsapp_core.calling.call_action', {
 					account_name: account.value,
 					...values,
+					to_number: manual_number || null,
 				}),
 			`Call action “${values.action}” sent.`,
 		)
@@ -205,8 +238,8 @@
 				() =>
 					call(`frappe_whatsapp_core.calling.${method}`, {
 						account_name: account.value,
-						to_number: values.to_number || null,
-						recipient: values.recipient || null,
+						identity: values.identity || null,
+						to_number: values.manual_number || null,
 						body_text: values.body_text,
 						display_text: values.display_text,
 						template_name: values.template_name,
@@ -248,9 +281,12 @@
 	}
 	onMounted(() => {
 		load('')
-		unsubscribe = subscribe(session.boot?.site, 'whatsapp_core_call', () => load())
+		unsubscribe = subscribe(session.boot?.site, 'whatsapp_core_call', scheduleRefresh)
 	})
-	onUnmounted(() => unsubscribe())
+	onUnmounted(() => {
+		window.clearTimeout(refreshTimer)
+		unsubscribe()
+	})
 </script>
 
 <template>
@@ -306,8 +342,8 @@
 				option-value="account_name"
 				@change="load($event.value)"
 			/><Tag
-				:value="workspace.settings?.calling?.status || 'Not configured'"
-				severity="info"
+				:value="settingsStatus === 'ENABLED' ? 'Calling enabled' : 'Calling disabled'"
+				:severity="settingsStatus === 'ENABLED' ? 'success' : 'secondary'"
 			/><Button
 				label="Reload"
 				icon="pi pi-refresh"
@@ -321,29 +357,44 @@
 			<div>
 				<strong>Customer call permission</strong
 				><small
-					>Check the current permission or send Meta's permission request message.</small
+					>Select a Core contact, then check or request Meta's call permission.</small
 				>
 			</div>
-			<InputText v-model="permission.user_wa_id" placeholder="WhatsApp number" /><InputText
-				v-model="permission.recipient"
-				placeholder="Recipient ID (optional)"
-			/><Textarea v-model="permission.body_text" rows="2" />
+			<div class="target-fields">
+				<ContactSelect
+					v-model="permission.identity"
+					:options="workspace.contacts || []"
+					@update:model-value="permission.manual_number = ''"
+				/>
+				<span>or</span>
+				<InputText
+					v-model="permission.manual_number"
+					placeholder="Enter a WhatsApp number"
+					@input="permission.identity = ''"
+				/>
+			</div>
+			<Textarea v-model="permission.body_text" rows="2" />
 			<div class="actions">
 				<Button
 					label="Check"
 					outlined
 					:loading="action === 'permission'"
-					:disabled="!permission.user_wa_id && !permission.recipient"
+					:disabled="!hasTarget(permission)"
 					@click="checkPermission"
 				/><Button
 					label="Request"
 					:loading="action === 'permission'"
-					:disabled="
-						(!permission.user_wa_id && !permission.recipient) || !permission.body_text
-					"
+					:disabled="!hasTarget(permission) || !permission.body_text.trim()"
 					@click="requestPermission"
 				/>
 			</div>
+		</div>
+		<div v-if="permissionResult" class="permission-result">
+			<div>
+				<small>Current permission</small>
+				<strong>{{ permissionResult.status }}</strong>
+			</div>
+			<span v-if="permissionResult.expiresAt">Expires {{ permissionResult.expiresAt }}</span>
 		</div>
 		<DataTable
 			:value="workspace.calls || []"
@@ -398,11 +449,31 @@
 		modal
 		header="Calling settings"
 		:style="{ width: 'min(48rem,calc(100vw - 2rem))' }"
-		><p class="help">
-			Edit the Meta <code>calling</code> settings object. SIP credentials remain on the
-			integration hub.
-		</p>
-		<Textarea v-model="settingsJson" rows="18" class="json-editor" /><template #footer
+		><div class="form">
+			<label
+				>Calling availability<Select
+					v-model="settingsStatus"
+					:options="[
+						{ label: 'Enabled', value: 'ENABLED' },
+						{ label: 'Disabled', value: 'DISABLED' },
+					]"
+					option-label="label"
+					option-value="value"
+			/></label>
+			<p class="help">
+				Audio transport and SIP credentials remain on the Integration hub. Core only
+				manages the Meta control plane.
+			</p>
+			<details class="advanced">
+				<summary>Advanced Meta settings</summary>
+				<p class="help">
+					Use this only for provider options not represented above. Enter the fields
+					inside Meta's <code>calling</code> object; status is managed separately.
+				</p>
+				<Textarea v-model="settingsJson" rows="14" class="json-editor" />
+			</details>
+		</div>
+		<template #footer
 			><Button
 				label="Cancel"
 				severity="secondary"
@@ -421,27 +492,47 @@
 			<label
 				>Action<Select
 					v-model="form.action"
-					:options="['connect', 'pre_accept', 'accept', 'reject', 'terminate']" /></label
-			><label v-if="form.action === 'connect'"
-				>WhatsApp number<InputText v-model="form.to_number" /></label
-			><label v-if="form.action === 'connect'"
-				>Recipient ID (optional)<InputText v-model="form.recipient" /></label
-			><label v-else>Call ID<InputText v-model="form.call_id" /></label
-			><template v-if="['connect', 'pre_accept', 'accept'].includes(form.action)"
-				><label
-					>SDP type<Select
-						v-model="form.sdp_type"
-						:options="['offer', 'answer']" /></label
-				><label
-					>SDP session<Textarea
-						v-model="form.sdp"
-						rows="10"
-						placeholder="v=0…" /></label></template
-			><label
-				>Opaque callback data<InputText
-					v-model="form.biz_opaque_callback_data"
-					maxlength="512"
+					:options="['connect', 'pre_accept', 'accept', 'reject', 'terminate']"
 			/></label>
+			<template v-if="form.action === 'connect'">
+				<label
+					>Contact<ContactSelect
+						v-model="form.identity"
+						:options="workspace.contacts || []"
+						@update:model-value="form.manual_number = ''"
+				/></label>
+				<label
+					>Or enter a WhatsApp number<InputText
+						v-model="form.manual_number"
+						placeholder="Country code and number"
+						@input="form.identity = ''"
+				/></label>
+			</template>
+			<label v-else>Call ID<InputText v-model="form.call_id" /></label>
+			<details
+				v-if="['connect', 'pre_accept', 'accept'].includes(form.action)"
+				class="advanced"
+				:open="form.action !== 'connect'"
+			>
+				<summary>Advanced WebRTC signaling</summary>
+				<p class="help">
+					Supply the SDP created by your WebRTC/SIP client. Core sends signaling; it does
+					not carry call audio.
+				</p>
+				<div class="form compact-form">
+					<label
+						>SDP type<Select v-model="form.sdp_type" :options="['offer', 'answer']"
+					/></label>
+					<label
+						>SDP session<Textarea v-model="form.sdp" rows="9" placeholder="v=0…"
+					/></label>
+					<label
+						>Opaque callback data<InputText
+							v-model="form.biz_opaque_callback_data"
+							maxlength="512"
+					/></label>
+				</div>
+			</details>
 			<div v-if="['connect', 'accept'].includes(form.action)" class="consent-grid">
 				<label class="check-label">
 					<Checkbox v-model="form.recording_enabled" binary /> Record this call
@@ -473,7 +564,8 @@
 				label="Send action"
 				:loading="action === 'call'"
 				:disabled="
-					form.action === 'connect' ? !form.to_number && !form.recipient : !form.call_id
+					(form.action === 'connect' ? !hasTarget(form) : !form.call_id) ||
+					(['connect', 'pre_accept', 'accept'].includes(form.action) && !form.sdp.trim())
 				"
 				@click="executeAction" /></template
 	></Dialog>
@@ -496,8 +588,18 @@
 					option-value="value"
 			/></label>
 			<template v-if="outreach.operation !== 'deep-link'">
-				<label>WhatsApp number<InputText v-model="outreach.to_number" /></label>
-				<label>Recipient ID (optional)<InputText v-model="outreach.recipient" /></label>
+				<label
+					>Contact<ContactSelect
+						v-model="outreach.identity"
+						:options="workspace.contacts || []"
+						@update:model-value="outreach.manual_number = ''"
+				/></label>
+				<label
+					>Or enter a WhatsApp number<InputText
+						v-model="outreach.manual_number"
+						placeholder="Country code and number"
+						@input="outreach.identity = ''"
+				/></label>
 			</template>
 			<label v-if="outreach.operation === 'button'"
 				>Message<Textarea v-model="outreach.body_text" rows="3"
@@ -539,9 +641,9 @@
 				:label="outreach.operation === 'deep-link' ? 'Create link' : 'Send invitation'"
 				:loading="action === 'outreach'"
 				:disabled="
-					outreach.operation !== 'deep-link' &&
-					!outreach.to_number &&
-					!outreach.recipient
+					(outreach.operation !== 'deep-link' && !hasTarget(outreach)) ||
+					(outreach.operation === 'button' && !outreach.body_text.trim()) ||
+					(outreach.operation === 'template' && !outreach.template_name)
 				"
 				@click="sendOutreach"
 			/>
@@ -553,6 +655,16 @@
 		padding: 16px;
 		display: grid;
 		gap: 16px;
+		min-width: 0;
+		max-width: 100%;
+		overflow: hidden;
+	}
+	.panel :deep(.p-datatable) {
+		min-width: 0;
+		max-width: 100%;
+	}
+	.panel :deep(.p-datatable-table-container) {
+		overflow-x: auto;
 	}
 	.toolbar,
 	.actions {
@@ -564,7 +676,7 @@
 	.permission-card {
 		display: grid;
 		grid-template-columns:
-			minmax(12rem, 1.2fr) repeat(2, minmax(10rem, 1fr)) minmax(15rem, 1.5fr)
+			minmax(12rem, 1.1fr) minmax(18rem, 1.7fr) minmax(15rem, 1.3fr)
 			auto;
 		gap: 10px;
 		align-items: center;
@@ -575,6 +687,37 @@
 	.permission-card div:first-child {
 		display: grid;
 		gap: 4px;
+	}
+	.target-fields {
+		display: grid;
+		grid-template-columns: minmax(11rem, 1fr) auto minmax(10rem, 0.8fr);
+		gap: 8px;
+		align-items: center;
+		min-width: 0;
+	}
+	.target-fields > span {
+		color: var(--wa-muted);
+		font-size: 11px;
+		text-transform: uppercase;
+	}
+	.permission-result {
+		display: flex;
+		justify-content: space-between;
+		gap: 16px;
+		align-items: center;
+		padding: 12px 14px;
+		border: 1px solid color-mix(in srgb, var(--wa-success, #087f5b) 35%, var(--wa-border));
+		border-radius: 12px;
+		background: color-mix(in srgb, var(--wa-success, #087f5b) 8%, transparent);
+	}
+	.permission-result > div {
+		display: grid;
+		gap: 2px;
+	}
+	.permission-result small,
+	.permission-result span {
+		color: var(--wa-muted);
+		font-size: 11px;
 	}
 	.permission-card small,
 	.help {
@@ -588,6 +731,22 @@
 		display: grid;
 		gap: 6px;
 		font-size: 12px;
+	}
+	.compact-form {
+		margin-top: 12px;
+	}
+	.advanced {
+		padding: 12px;
+		border: 1px solid var(--wa-border);
+		border-radius: 12px;
+	}
+	.advanced summary {
+		cursor: pointer;
+		font-size: 13px;
+		font-weight: 650;
+	}
+	.advanced .help {
+		margin: 10px 0;
 	}
 	.consent-grid {
 		display: grid;
@@ -657,6 +816,9 @@
 		.permission-card > textarea {
 			grid-column: 1/-1;
 		}
+		.permission-card > .target-fields {
+			grid-column: auto;
+		}
 	}
 	@media (max-width: 600px) {
 		.toolbar,
@@ -666,6 +828,16 @@
 		}
 		.permission-card > * {
 			grid-column: 1 !important;
+		}
+		.target-fields {
+			grid-template-columns: 1fr;
+		}
+		.target-fields > span {
+			display: none;
+		}
+		.permission-result {
+			align-items: flex-start;
+			flex-direction: column;
 		}
 		.consent-grid {
 			grid-template-columns: 1fr;

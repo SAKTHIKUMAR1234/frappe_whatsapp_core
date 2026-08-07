@@ -6,8 +6,23 @@ from pathlib import Path
 
 import frappe
 
+from frappe_whatsapp_core.identity import contact_options
 from frappe_whatsapp_core.meta_flows import _accounts, _call, _resolve_account_name, _workspace_failure
+from frappe_whatsapp_core.outbound import resolve_recipient_phone
 from frappe_whatsapp_core.permissions import require_core_access
+
+
+def _contact_target(identity=None, to_number=None, recipient=None, operation=None):
+	"""Resolve a Core contact at send time while retaining advanced raw targets."""
+	if identity:
+		return (
+			resolve_recipient_phone(
+				identity,
+				context={"operation": operation or "whatsapp_calling"},
+			),
+			None,
+		)
+	return to_number, recipient
 
 
 @frappe.whitelist()
@@ -35,6 +50,7 @@ def calling_workspace(account_name=None, include_sip_credentials=0):
 	)
 	accounts = []
 	selected = None
+	contacts = contact_options(limit=50)
 	try:
 		accounts = _accounts()
 		selected = _resolve_account_name(account_name)
@@ -50,6 +66,7 @@ def calling_workspace(account_name=None, include_sip_credentials=0):
 			"settings": settings,
 			"calls": calls,
 			"templates": templates,
+			"contacts": contacts,
 		}
 	except Exception as error:
 		return _workspace_failure(
@@ -59,6 +76,7 @@ def calling_workspace(account_name=None, include_sip_credentials=0):
 			settings={},
 			calls=calls,
 			templates=templates,
+			contacts=contacts,
 		)
 
 
@@ -72,7 +90,10 @@ def update_call_settings(account_name, calling):
 
 @frappe.whitelist()
 @require_core_access(manage=True)
-def get_call_permission(account_name, user_wa_id=None, recipient=None):
+def get_call_permission(account_name, user_wa_id=None, recipient=None, identity=None):
+	user_wa_id, recipient = _contact_target(
+		identity, user_wa_id, recipient, "get_call_permission"
+	)
 	return _call("calling", "get_call_permission", {
 		"account_name": _resolve_account_name(account_name), "user_wa_id": user_wa_id, "recipient": recipient,
 	})
@@ -80,7 +101,17 @@ def get_call_permission(account_name, user_wa_id=None, recipient=None):
 
 @frappe.whitelist()
 @require_core_access(manage=True)
-def request_call_permission(account_name, body_text, to_number=None, recipient=None, idempotency_key=None):
+def request_call_permission(
+	account_name,
+	body_text,
+	to_number=None,
+	recipient=None,
+	identity=None,
+	idempotency_key=None,
+):
+	to_number, recipient = _contact_target(
+		identity, to_number, recipient, "request_call_permission"
+	)
 	return _call("calling", "request_call_permission", {
 		"account_name": _resolve_account_name(account_name), "body_text": body_text,
 		"to_number": to_number, "recipient": recipient, "idempotency_key": idempotency_key,
@@ -94,11 +125,15 @@ def send_call_button(
 	body_text,
 	to_number=None,
 	recipient=None,
+	identity=None,
 	display_text="Call Now",
 	ttl_minutes=10080,
 	payload=None,
 	idempotency_key=None,
 ):
+	to_number, recipient = _contact_target(
+		identity, to_number, recipient, "send_call_button"
+	)
 	return _call("calling", "send_call_button", {
 		"account_name": _resolve_account_name(account_name),
 		"body_text": body_text,
@@ -119,10 +154,14 @@ def send_call_button_template(
 	language_code="en",
 	to_number=None,
 	recipient=None,
+	identity=None,
 	ttl_minutes=None,
 	payload=None,
 	idempotency_key=None,
 ):
+	to_number, recipient = _contact_target(
+		identity, to_number, recipient, "send_call_button_template"
+	)
 	return _call("calling", "send_call_button_template", {
 		"account_name": _resolve_account_name(account_name),
 		"template_name": template_name,
@@ -233,12 +272,16 @@ def call_action(
 	call_id=None,
 	to_number=None,
 	recipient=None,
+	identity=None,
 	sdp_type=None,
 	sdp=None,
 	biz_opaque_callback_data=None,
 	recording=None,
 	transcription=None,
 ):
+	to_number, recipient = _contact_target(
+		identity, to_number, recipient, "call_action"
+	)
 	return _call("calling", "call_action", {
 		"account_name": _resolve_account_name(account_name), "action": action,
 		"call_id": call_id, "to_number": to_number, "recipient": recipient,

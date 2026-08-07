@@ -5,7 +5,6 @@
 	import DataTable from 'primevue/datatable'
 	import Dialog from 'primevue/dialog'
 	import InputText from 'primevue/inputtext'
-	import MultiSelect from 'primevue/multiselect'
 	import Select from 'primevue/select'
 	import Skeleton from 'primevue/skeleton'
 	import Tag from 'primevue/tag'
@@ -23,6 +22,7 @@
 	} from 'lucide-vue-next'
 
 	import AsyncState from '@/components/AsyncState.vue'
+	import ContactMultiSelect from '@/features/contacts/components/ContactMultiSelect.vue'
 	import { call, errorMessage } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
@@ -467,23 +467,11 @@
 				current unauthorized audience and does not send anything.
 			</div>
 			<label>Recipients</label>
-			<MultiSelect
+			<ContactMultiSelect
 				v-model="selectedAudience"
 				:options="workspace.identities"
-				option-value="name"
-				filter
-				display="chip"
-				placeholder="Search active identities"
-				:max-selected-labels="8"
-				fluid
-			>
-				<template #option="{ option }">
-					<div class="identity-option">
-						<strong>{{ option.display_value || option.normalized_value }}</strong>
-						<small>{{ option.normalized_value }} · {{ option.name }}</small>
-					</div>
-				</template>
-			</MultiSelect>
+				placeholder="Search active Core contacts"
+			/>
 			<small class="selection-count">{{ selectedAudience.length }} selected</small>
 			<template #footer>
 				<Button label="Cancel" text @click="prepareDialog = false" />

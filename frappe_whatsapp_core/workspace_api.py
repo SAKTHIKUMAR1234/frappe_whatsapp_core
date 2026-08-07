@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import frappe
+from frappe.utils import cint
 
 from frappe_whatsapp_core.conversation_reads import mark_conversation_read
 from frappe_whatsapp_core.message_media import add_media_url
@@ -282,14 +283,65 @@ def list_teams() -> list[dict]:
 		order_by="team_name asc",
 		limit_page_length=500,
 	)
-	for team in teams:
-		team["members"] = frappe.get_all(
+	members_by_team = {team.name: [] for team in teams}
+	if teams:
+		members = frappe.get_all(
 			"WhatsApp Core Team Member",
-			filters={"parent": team.name},
-			fields=["user", "team_role", "enabled"],
-			order_by="idx asc",
+			filters={"parent": ["in", list(members_by_team)]},
+			fields=["parent", "user", "team_role", "enabled"],
+			order_by="parent asc, idx asc",
+			limit_page_length=10000,
 		)
+		for member in members:
+			members_by_team.setdefault(member.parent, []).append(member)
+	for team in teams:
+		team["members"] = members_by_team.get(team.name, [])
 	return teams
+
+
+def _user_options(search=None, limit=50, include=None) -> list[dict]:
+	limit = max(1, min(cint(limit or 50), 100))
+	filters = {"enabled": 1, "name": ["!=", "Guest"]}
+	query = str(search or "").strip()
+	users = frappe.get_all(
+		"User",
+		filters=filters,
+		or_filters=(
+			{
+				"name": ["like", f"%{query}%"],
+				"full_name": ["like", f"%{query}%"],
+			}
+			if query
+			else None
+		),
+		fields=["name", "full_name", "user_image", "user_type"],
+		order_by="full_name asc, name asc",
+		limit_page_length=limit,
+	)
+	known = {user.name for user in users}
+	missing = [name for name in dict.fromkeys(include or []) if name and name not in known]
+	if missing:
+		users.extend(
+			frappe.get_all(
+				"User",
+				filters={"enabled": 1, "name": ["in", missing]},
+				fields=["name", "full_name", "user_image", "user_type"],
+				limit_page_length=len(missing),
+			)
+		)
+	for user in users:
+		user["label"] = (
+			f"{user.full_name} ({user.name})"
+			if user.full_name and user.full_name != user.name
+			else user.name
+		)
+	return users
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def search_team_users(search=None, limit=50) -> list[dict]:
+	return _user_options(search=search, limit=limit)
 
 
 @frappe.whitelist()
@@ -298,24 +350,12 @@ def team_workspace() -> dict:
 	"""Return the team editor data in one request.
 
 	The UI must select real Frappe users instead of accepting unchecked email
-	text.  Keeping the candidate list beside the team rows also avoids one API
-	request per team while editing.
+	text. The initial options include every assigned member; remote search keeps
+	the response bounded even on sites with thousands of users.
 	"""
-	users = frappe.get_all(
-		"User",
-		filters={"enabled": 1},
-		fields=["name", "full_name", "user_image", "user_type"],
-		order_by="full_name asc, name asc",
-		limit_page_length=5000,
-	)
-	users = [user for user in users if user.name != "Guest"]
-	for user in users:
-		user["label"] = (
-			f"{user.full_name} ({user.name})"
-			if user.full_name and user.full_name != user.name
-			else user.name
-		)
-	return {"teams": list_teams(), "users": users}
+	teams = list_teams()
+	members = [member.user for team in teams for member in team.members]
+	return {"teams": teams, "users": _user_options(include=members)}
 
 
 @frappe.whitelist()

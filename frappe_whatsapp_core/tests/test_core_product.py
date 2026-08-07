@@ -46,6 +46,15 @@ class TestCoreProduct(FrappeTestCase):
 		self.assertEqual(settings.get_account_name(self.channel.name), f"account-{self.suffix}")
 		self.assertEqual(settings.get_password("api_key"), f"key-{self.suffix}")
 
+	def test_new_chat_can_use_an_existing_core_contact(self):
+		started = start_conversation(
+			self.channel.name,
+			identity=self.identity.name,
+		)
+		self.assertEqual(started["conversation"], self.thread.name)
+		self.assertEqual(started["identity"], self.identity.name)
+		self.assertEqual(started["phone_number"], self.identity.normalized_value)
+
 	def test_optimistic_inbox_and_template_window_gate(self):
 		self.thread.last_inbound_at = now_datetime()
 		self.thread.save(ignore_permissions=True)

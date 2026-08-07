@@ -17,6 +17,7 @@ from frappe_whatsapp_core.campaigns import (
 )
 from frappe_whatsapp_core.flow_actions import registered_actions
 from frappe_whatsapp_core.hub_client import connection_status
+from frappe_whatsapp_core.identity import contact_options
 from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS
 from frappe_whatsapp_core.permissions import (
 	CORE_ACCESS_ROLES,
@@ -79,6 +80,13 @@ def dashboard():
 			"failed_messages": frappe.db.count("WhatsApp Core Message", {"delivery_status": "Failed"}),
 		},
 	}
+
+
+@frappe.whitelist()
+@require_core_access()
+def search_contact_options(search=None, limit=50):
+	"""Frappe-style remote contact lookup without loading the whole address book."""
+	return contact_options(limit=limit, search=search)
 
 
 @frappe.whitelist()
@@ -146,13 +154,7 @@ def campaign_workspace():
 			order_by="display_name asc",
 			limit_page_length=100,
 		),
-		"identities": frappe.get_all(
-			"WhatsApp Core Identity",
-			filters={"status": "Active"},
-			fields=["name", "display_value", "normalized_value"],
-			order_by="display_value asc",
-			limit_page_length=1000,
-		),
+		"identities": contact_options(limit=50),
 		"metrics": {
 			"drafts": sum(
 				campaign["status"] in {"Draft", "Prepared"}

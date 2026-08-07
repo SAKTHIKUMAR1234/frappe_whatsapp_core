@@ -2,6 +2,7 @@
 
 import frappe
 
+from frappe_whatsapp_core.identity import contact_options
 from frappe_whatsapp_core.materializer import get_or_create_conversation, get_or_create_group_identity
 from frappe_whatsapp_core.meta_flows import _accounts, _call, _resolve_account_name, _workspace_failure
 from frappe_whatsapp_core.outbound import (
@@ -18,44 +19,6 @@ def _account(account_name=None):
 	return _resolve_account_name(account_name)
 
 
-def _contact_options() -> list[dict]:
-	identities = frappe.get_all(
-		"WhatsApp Core Identity",
-		filters={"identity_type": "WhatsApp", "status": "Active"},
-		fields=["name", "normalized_value", "display_value", "primary_link"],
-		order_by="display_value asc, normalized_value asc",
-		limit_page_length=1000,
-	)
-	link_names = [row.primary_link for row in identities if row.primary_link]
-	links = {
-		row.name: row
-		for row in frappe.get_all(
-			"WhatsApp Core Identity Link",
-			filters={"name": ["in", link_names], "status": "Active"},
-			fields=["name", "display_name", "reference_doctype", "reference_name"],
-			limit_page_length=max(1, len(link_names)),
-		)
-	} if link_names else {}
-	return [
-		{
-			"identity": row.name,
-			"phone_number": row.normalized_value,
-			"label": (
-				links[row.primary_link].display_name
-				or links[row.primary_link].reference_name
-				if row.primary_link in links
-				else row.display_value or row.normalized_value
-			),
-			"reference": (
-				f"{links[row.primary_link].reference_doctype} · {links[row.primary_link].reference_name}"
-				if row.primary_link in links
-				else "WhatsApp contact"
-			),
-		}
-		for row in identities
-	]
-
-
 @frappe.whitelist()
 @require_core_access(manage=True)
 def group_workspace(account_name=None, limit=100, after=None, before=None):
@@ -68,7 +31,7 @@ def group_workspace(account_name=None, limit=100, after=None, before=None):
 		order_by="template_name asc, language_code asc",
 		limit_page_length=500,
 	)
-	contacts = _contact_options()
+	contacts = contact_options(limit=50)
 	try:
 		accounts = _accounts()
 		selected = _account(account_name)

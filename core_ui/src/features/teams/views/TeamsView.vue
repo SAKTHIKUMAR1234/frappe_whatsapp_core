@@ -4,13 +4,13 @@
 	import Dialog from 'primevue/dialog'
 	import InputText from 'primevue/inputtext'
 	import Message from 'primevue/message'
-	import MultiSelect from 'primevue/multiselect'
 	import Textarea from 'primevue/textarea'
 	import ToggleSwitch from 'primevue/toggleswitch'
 	import Tag from 'primevue/tag'
 	import { Plus, UsersRound } from 'lucide-vue-next'
 	import { useToast } from 'primevue/usetoast'
 	import AsyncState from '@/components/AsyncState.vue'
+	import UserMultiSelect from '@/features/teams/components/UserMultiSelect.vue'
 	import { call, errorMessage } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
@@ -28,6 +28,8 @@
 	const form = reactive({ team_name: '', description: '', enabled: true, members: [] })
 	const canManage = computed(() => Boolean(session.boot?.can_manage))
 	let unsubscribe = () => {}
+	let refreshTimer = null
+	let loadSequence = 0
 	const userByName = computed(() =>
 		Object.fromEntries(userOptions.value.map((user) => [user.name, user])),
 	)
@@ -36,18 +38,25 @@
 		return userByName.value[user]?.full_name || user
 	}
 
-	async function load() {
-		loading.value = true
+	async function load({ silent = false } = {}) {
+		const request = ++loadSequence
+		if (!silent) loading.value = true
 		loadError.value = ''
 		try {
 			const workspace = await call('frappe_whatsapp_core.workspace_api.team_workspace')
+			if (request !== loadSequence) return
 			teams.value = workspace.teams || []
 			userOptions.value = workspace.users || []
 		} catch (error) {
-			loadError.value = errorMessage(error, 'Unable to load teams.')
+			if (request === loadSequence)
+				loadError.value = errorMessage(error, 'Unable to load teams.')
 		} finally {
-			loading.value = false
+			if (!silent && request === loadSequence) loading.value = false
 		}
+	}
+	function refreshFromRealtime() {
+		window.clearTimeout(refreshTimer)
+		refreshTimer = window.setTimeout(() => load({ silent: true }), 180)
 	}
 
 	function open(team = null) {
@@ -90,9 +99,12 @@
 
 	onMounted(async () => {
 		await load()
-		unsubscribe = subscribe(session.boot?.site, 'whatsapp_core_team', load)
+		unsubscribe = subscribe(session.boot?.site, 'whatsapp_core_team', refreshFromRealtime)
 	})
-	onUnmounted(() => unsubscribe())
+	onUnmounted(() => {
+		window.clearTimeout(refreshTimer)
+		unsubscribe()
+	})
 </script>
 
 <template>
@@ -174,25 +186,7 @@
 		>
 		<label>Description</label><Textarea v-model="form.description" rows="3" fluid />
 		<label>Members</label>
-		<MultiSelect
-			v-model="form.members"
-			:options="userOptions"
-			option-label="label"
-			option-value="name"
-			filter
-			display="chip"
-			:show-toggle-all="false"
-			:max-selected-labels="4"
-			fluid
-			placeholder="Search and select Frappe users"
-		>
-			<template #option="{ option }">
-				<div class="user-option">
-					<strong>{{ option.full_name || option.name }}</strong>
-					<small>{{ option.name }}</small>
-				</div>
-			</template>
-		</MultiSelect>
+		<UserMultiSelect v-model="form.members" :options="userOptions" />
 		<div class="enabled"><ToggleSwitch v-model="form.enabled" /><span>Team enabled</span></div>
 		<template #footer>
 			<Button label="Cancel" text @click="visible = false" />
@@ -334,19 +328,6 @@
 		align-items: center;
 		gap: 9px;
 		font-size: 12px;
-	}
-	.user-option {
-		display: grid;
-		gap: 2px;
-		min-width: 0;
-	}
-	.user-option strong,
-	.user-option small {
-		overflow-wrap: anywhere;
-	}
-	.user-option small {
-		color: var(--wa-muted);
-		font-size: 11px;
 	}
 	@media (max-width: 1000px) {
 		.team-grid {

@@ -3,7 +3,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import now_datetime
+from frappe.utils import cint, now_datetime
 
 from frappe_whatsapp_core.frappe_whatsapp_core.doctype.whatsapp_core_identity_link.whatsapp_core_identity_link import (
 	make_identity_link_key,
@@ -90,15 +90,19 @@ def resolve_identity(identity):
 			"identity": identity.name,
 			"status": "Active",
 		},
-		fields=["name", "identity_source"],
+		fields=["name", "identity_source", "reference_doctype", "reference_name"],
 		order_by="creation asc",
 	)
 	_set_primary_link(identity, active_links, sources)
+	unique_references = {
+		(link.reference_doctype, link.reference_name)
+		for link in active_links
+	}
 	identity.resolution_status = (
 		"Unresolved"
-		if not active_links
+		if not unique_references
 		else "Resolved"
-		if len(active_links) == 1
+		if len(unique_references) == 1
 		else "Ambiguous"
 	)
 	identity.last_resolved_at = now_datetime()
@@ -171,6 +175,98 @@ def phone_candidates(value):
 			}
 		)
 	return sorted(candidates)
+
+
+def contact_options(limit: int = 50, search: str | None = None) -> list[dict]:
+	"""Return active Core contacts as stable options for every user-facing workflow."""
+	limit = max(1, min(cint(limit or 50), 100))
+	search = str(search or "").strip()
+	identity_fields = ["name", "normalized_value", "display_value", "primary_link"]
+	identity_filters = {"identity_type": "WhatsApp", "status": "Active"}
+	if search:
+		pattern = f"%{search}%"
+		identities = frappe.get_all(
+			"WhatsApp Core Identity",
+			filters=identity_filters,
+			or_filters={
+				"name": ["like", pattern],
+				"display_value": ["like", pattern],
+				"normalized_value": ["like", pattern],
+			},
+			fields=identity_fields,
+			order_by="display_value asc, normalized_value asc",
+			limit_page_length=limit,
+		)
+		linked_identities = frappe.get_all(
+			"WhatsApp Core Identity Link",
+			filters={"status": "Active"},
+			or_filters={
+				"display_name": ["like", pattern],
+				"reference_name": ["like", pattern],
+			},
+			pluck="identity",
+			limit_page_length=limit,
+		)
+		known = {row.name for row in identities}
+		missing = [name for name in dict.fromkeys(linked_identities) if name not in known]
+		if missing:
+			identities.extend(
+				frappe.get_all(
+					"WhatsApp Core Identity",
+					filters={**identity_filters, "name": ["in", missing]},
+					fields=identity_fields,
+					limit_page_length=limit,
+				)
+			)
+	else:
+		identities = frappe.get_all(
+			"WhatsApp Core Identity",
+			filters=identity_filters,
+			fields=identity_fields,
+			order_by="display_value asc, normalized_value asc",
+			limit_page_length=limit,
+		)
+	link_names = [row.primary_link for row in identities if row.primary_link]
+	links = (
+		{
+			row.name: row
+			for row in frappe.get_all(
+				"WhatsApp Core Identity Link",
+				filters={"name": ["in", link_names], "status": "Active"},
+				fields=["name", "display_name", "reference_doctype", "reference_name"],
+				limit_page_length=max(1, len(link_names)),
+			)
+		}
+		if link_names
+		else {}
+	)
+	options = []
+	for row in identities:
+		link = links.get(row.primary_link)
+		label = (
+			(link.display_name or link.reference_name)
+			if link
+			else (row.display_value or row.normalized_value)
+		)
+		options.append(
+			{
+				"identity": row.name,
+				"phone_number": row.normalized_value,
+				"label": label,
+				"reference": (
+					f"{link.reference_doctype} · {link.reference_name}"
+					if link
+					else "WhatsApp contact"
+				),
+			}
+		)
+	return sorted(
+		options,
+		key=lambda option: (
+			str(option["label"] or "").casefold(),
+			option["phone_number"],
+		),
+	)[:limit]
 
 
 def _resolve_source(identity, source):

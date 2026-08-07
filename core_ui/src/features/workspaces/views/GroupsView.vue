@@ -9,6 +9,7 @@
 	import Select from 'primevue/select'
 	import Tag from 'primevue/tag'
 	import Textarea from 'primevue/textarea'
+	import ContactSelect from '@/features/contacts/components/ContactSelect.vue'
 	import { MessageCircleMore, Settings2, ShieldCheck, UsersRound } from 'lucide-vue-next'
 	import { call, errorMessage, uploadFile } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
@@ -544,23 +545,10 @@
 				<div class="form invite-form">
 					<label>
 						Recipient contact
-						<Select
+						<ContactSelect
 							v-model="invite.identity"
 							:options="workspace.contacts || []"
-							option-label="label"
-							option-value="identity"
-							filter
-							placeholder="Select a Core contact"
-						>
-							<template #option="{ option }">
-								<div class="contact-option">
-									<strong>{{ option.label }}</strong>
-									<small
-										>{{ option.phone_number }} · {{ option.reference }}</small
-									>
-								</div>
-							</template>
-						</Select>
+						/>
 					</label>
 					<label
 						>Approved invite template<Select
@@ -845,18 +833,6 @@
 	}
 	.file-ready {
 		color: var(--wa-success, #087f5b);
-	}
-	.contact-option strong,
-	.contact-option small {
-		display: block;
-	}
-	.contact-option strong {
-		font-size: 12px;
-	}
-	.contact-option small {
-		margin-top: 2px;
-		color: var(--wa-muted);
-		font-size: 10px;
 	}
 	.activity-list > div {
 		display: flex;

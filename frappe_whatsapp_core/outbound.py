@@ -210,35 +210,46 @@ def outbound_state(conversation: str | None = None) -> dict:
 @require_core_access(manage=True)
 def start_conversation(
 	channel: str,
-	phone_number: str,
+	phone_number: str | None = None,
 	display_name: str = "",
+	identity: str | None = None,
 ) -> dict:
 	channel_doc = frappe.get_doc("WhatsApp Core Channel", channel)
 	if not channel_doc.enabled:
 		frappe.throw("The selected WhatsApp channel is disabled")
-	default_country_code = (
-		frappe.db.get_single_value(
-			"WhatsApp Core Settings",
-			"default_country_calling_code",
+	if identity:
+		identity_doc = frappe.get_doc("WhatsApp Core Identity", identity)
+		if identity_doc.identity_type != "WhatsApp" or identity_doc.status != "Active":
+			frappe.throw("Select an active WhatsApp Core contact", frappe.ValidationError)
+		resolved_phone = resolve_recipient_phone(
+			identity_doc,
+			context={"operation": "start_conversation"},
 		)
-		or "91"
-	)
-	normalized = normalize_phone(
-		phone_number,
-		assume_local=True,
-		country_code=default_country_code,
-	)
-	if not 7 <= len(normalized) <= 15:
-		frappe.throw("Enter a valid international phone number")
-	identity = get_or_create_identity(normalized)
-	if display_name and identity.display_value in {"", identity.normalized_value}:
-		identity.display_value = display_name.strip()[:140]
-		identity.save(ignore_permissions=True)
-	conversation = get_or_create_conversation(channel_doc, identity)
+	else:
+		default_country_code = (
+			frappe.db.get_single_value(
+				"WhatsApp Core Settings",
+				"default_country_calling_code",
+			)
+			or "91"
+		)
+		normalized = normalize_phone(
+			phone_number,
+			assume_local=True,
+			country_code=default_country_code,
+		)
+		if not 7 <= len(normalized) <= 15:
+			frappe.throw("Enter a valid international phone number")
+		identity_doc = get_or_create_identity(normalized)
+		resolved_phone = identity_doc.normalized_value
+		if display_name and identity_doc.display_value in {"", identity_doc.normalized_value}:
+			identity_doc.display_value = display_name.strip()[:140]
+			identity_doc.save(ignore_permissions=True)
+	conversation = get_or_create_conversation(channel_doc, identity_doc)
 	return {
 		"conversation": conversation.name,
-		"identity": identity.name,
-		"phone_number": identity.normalized_value,
+		"identity": identity_doc.name,
+		"phone_number": resolved_phone,
 	}
 
 

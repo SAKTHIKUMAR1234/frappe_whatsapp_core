@@ -20,8 +20,10 @@
 	} from 'lucide-vue-next'
 
 	import ConversationContext from '@/features/inbox/components/ConversationContext.vue'
+	import ContactMessageEditor from '@/features/inbox/components/ContactMessageEditor.vue'
 	import ConversationList from '@/features/inbox/components/ConversationList.vue'
 	import MessageBubble from '@/features/inbox/components/MessageBubble.vue'
+	import ContactSelect from '@/features/contacts/components/ContactSelect.vue'
 	import { call, errorMessage, uploadFile } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
@@ -50,6 +52,17 @@
 	const replyTo = ref(null)
 	const richDialog = ref(false)
 	const uploadingMedia = ref(false)
+	const blankContact = () => ({
+		formatted_name: '',
+		first_name: '',
+		last_name: '',
+		phone: '',
+		phone_type: 'CELL',
+		email: '',
+		email_type: 'WORK',
+		company: '',
+		title: '',
+	})
 	const richForm = ref({
 		type: 'image',
 		media: '',
@@ -59,7 +72,7 @@
 		longitude: '',
 		name: '',
 		address: '',
-		contacts: '[{"name":{"formatted_name":""},"phones":[{"phone":""}]}]',
+		contacts: [blankContact()],
 		flow_id: '',
 		flow_token: '',
 		flow_cta: 'Open',
@@ -84,7 +97,14 @@
 	const starting = ref(false)
 	const catalog = ref({ templates: [] })
 	const settings = ref({ channels: [] })
-	const newChat = ref({ channel: '', phone_number: '', display_name: '', template: '' })
+	const newChatContacts = ref([])
+	const newChat = ref({
+		channel: '',
+		identity: '',
+		phone_number: '',
+		display_name: '',
+		template: '',
+	})
 	const unsubscribers = []
 	let detailRequest = 0
 
@@ -404,7 +424,35 @@
 			}
 		}
 		if (type === 'contacts') {
-			return { contacts: JSON.parse(richForm.value.contacts), context_message_id }
+			const contacts = richForm.value.contacts.map((contact, index) => {
+				const formattedName = contact.formatted_name.trim()
+				const phone = contact.phone.trim()
+				if (!formattedName || !phone) {
+					throw new Error(
+						`Contact ${index + 1} requires a display name and phone number.`,
+					)
+				}
+				const name = { formatted_name: formattedName }
+				if (contact.first_name.trim()) name.first_name = contact.first_name.trim()
+				if (contact.last_name.trim()) name.last_name = contact.last_name.trim()
+				const value = {
+					name,
+					phones: [{ phone, type: contact.phone_type || 'CELL' }],
+				}
+				if (contact.email.trim()) {
+					value.emails = [
+						{ email: contact.email.trim(), type: contact.email_type || 'WORK' },
+					]
+				}
+				if (contact.company.trim() || contact.title.trim()) {
+					value.org = {
+						company: contact.company.trim(),
+						title: contact.title.trim(),
+					}
+				}
+				return value
+			})
+			return { contacts, context_message_id }
 		}
 		return {
 			type: 'flow',
@@ -527,6 +575,7 @@
 		try {
 			const started = await call('frappe_whatsapp_core.outbound.start_conversation', {
 				channel: newChat.value.channel,
+				identity: newChat.value.identity || null,
 				phone_number: newChat.value.phone_number,
 				display_name: newChat.value.display_name,
 			})
@@ -535,7 +584,13 @@
 				template: newChat.value.template,
 			})
 			newDialog.value = false
-			newChat.value = { channel: '', phone_number: '', display_name: '', template: '' }
+			newChat.value = {
+				channel: '',
+				identity: '',
+				phone_number: '',
+				display_name: '',
+				template: '',
+			}
 			await loadRows()
 			selectConversation(started.conversation)
 		} catch (error) {
@@ -553,12 +608,14 @@
 	async function openNewChat() {
 		if (!canManage.value) return
 		try {
-			const [templateData, settingsData] = await Promise.all([
+			const [templateData, settingsData, contacts] = await Promise.all([
 				call('frappe_whatsapp_core.frontend_api.template_catalog'),
 				call('frappe_whatsapp_core.frontend_api.settings_workspace'),
+				call('frappe_whatsapp_core.frontend_api.search_contact_options', { limit: 50 }),
 			])
 			catalog.value = templateData
 			settings.value = settingsData
+			newChatContacts.value = contacts
 			newChat.value.channel =
 				settingsData.channels.find((channel) => channel.enabled)?.name || ''
 			newChat.value.template =
@@ -900,11 +957,18 @@
 						option-value="name"
 				/></label>
 				<label
-					>International phone<InputText
-						v-model="newChat.phone_number"
-						placeholder="919876543210"
+					>Contact<ContactSelect
+						v-model="newChat.identity"
+						:options="newChatContacts"
+						@update:model-value="newChat.phone_number = ''"
 				/></label>
 				<label
+					>Or enter a WhatsApp number<InputText
+						v-model="newChat.phone_number"
+						placeholder="Country code and number"
+						@input="newChat.identity = ''"
+				/></label>
+				<label v-if="!newChat.identity"
 					>Display name<InputText v-model="newChat.display_name" placeholder="Optional"
 				/></label>
 				<label
@@ -924,7 +988,11 @@
 				<Button
 					label="Start and queue"
 					:loading="starting"
-					:disabled="!newChat.channel || !newChat.phone_number || !newChat.template"
+					:disabled="
+						!newChat.channel ||
+						(!newChat.identity && !newChat.phone_number.trim()) ||
+						!newChat.template
+					"
 					@click="startConversation"
 				/>
 			</template>
@@ -983,9 +1051,10 @@
 					<label>Name<InputText v-model="richForm.name" /></label>
 					<label>Address<InputText v-model="richForm.address" /></label>
 				</template>
-				<label v-else-if="richForm.type === 'contacts'"
-					>Meta contacts JSON<Textarea v-model="richForm.contacts" rows="7"
-				/></label>
+				<ContactMessageEditor
+					v-else-if="richForm.type === 'contacts'"
+					v-model="richForm.contacts"
+				/>
 				<template v-else>
 					<label>Published Meta Flow ID<InputText v-model="richForm.flow_id" /></label>
 					<label>Flow token<InputText v-model="richForm.flow_token" /></label>

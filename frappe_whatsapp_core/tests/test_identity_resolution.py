@@ -1,3 +1,4 @@
+import json
 import uuid
 from unittest.mock import patch
 
@@ -5,6 +6,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from frappe_whatsapp_core.identity import (
+	contact_options,
 	get_or_create_identity,
 	resolve_identity,
 )
@@ -12,6 +14,35 @@ from frappe_whatsapp_core.outbound import resolve_recipient_phone
 
 
 class TestIdentityResolution(FrappeTestCase):
+	def test_contact_lookup_searches_business_link_without_loading_all_identities(self):
+		suffix = f"7{str(uuid.uuid4().int)[-9:]}"
+		full_name = f"Searchable Contact {suffix}"
+		user = frappe.get_doc({
+			"doctype": "User",
+			"email": f"whatsapp.search.{suffix}@example.com",
+			"first_name": full_name,
+			"mobile_no": f"+91{suffix}",
+			"enabled": 1,
+			"send_welcome_email": 0,
+		}).insert(ignore_permissions=True)
+		frappe.get_doc({
+			"doctype": "WhatsApp Core Identity Source",
+			"source_key": f"test.search.{suffix}",
+			"display_name": "Searchable Users",
+			"source_doctype": "User",
+			"enabled": 1,
+			"auto_resolve": 1,
+			"priority": 1,
+			"phone_field": "mobile_no",
+			"display_name_field": "full_name",
+			"filters": json.dumps({"name": user.name}),
+		}).insert(ignore_permissions=True)
+		identity = get_or_create_identity(suffix)
+
+		results = contact_options(search=f"Contact {suffix}", limit=10)
+		self.assertEqual([row["identity"] for row in results], [identity.name])
+		self.assertEqual(results[0]["label"], user.full_name)
+
 	def test_outbound_uses_current_phone_from_linked_document(self):
 		suffix = f"7{str(uuid.uuid4().int)[-9:]}"
 		replacement = f"8{str(uuid.uuid4().int)[-9:]}"

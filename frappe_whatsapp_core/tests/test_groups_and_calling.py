@@ -4,7 +4,7 @@ from unittest.mock import patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from frappe_whatsapp_core.calling import calling_workspace, get_call_permission
+from frappe_whatsapp_core.calling import calling_workspace, get_call_permission, send_call_button
 from frappe_whatsapp_core.groups import (
 	group_workspace,
 	send_group_invite_template,
@@ -64,15 +64,20 @@ class TestGroupsAndCalling(FrappeTestCase):
 	@patch("frappe_whatsapp_core.calling._workspace_failure")
 	@patch("frappe_whatsapp_core.calling._accounts", side_effect=frappe.ValidationError("Hub unavailable"))
 	@patch("frappe_whatsapp_core.calling.frappe.get_all", return_value=[{"call_id": "CALL-LOCAL"}])
-	def test_calling_workspace_keeps_local_history_without_hub(self, get_all, accounts, failure):
+	@patch("frappe_whatsapp_core.calling.contact_options", return_value=[{"identity": "CONTACT-1"}])
+	def test_calling_workspace_keeps_local_history_without_hub(
+		self, contacts, get_all, accounts, failure
+	):
 		failure.return_value = {
 			"available": False,
 			"calls": [{"call_id": "CALL-LOCAL"}],
+			"contacts": [{"identity": "CONTACT-1"}],
 			"error": "Hub unavailable",
 		}
 		result = calling_workspace()
 		self.assertFalse(result["available"])
 		self.assertEqual(result["calls"][0]["call_id"], "CALL-LOCAL")
+		self.assertEqual(result["contacts"][0]["identity"], "CONTACT-1")
 
 	@patch("frappe_whatsapp_core.groups._accounts")
 	@patch("frappe_whatsapp_core.groups._account", return_value="Hub Account")
@@ -132,6 +137,26 @@ class TestGroupsAndCalling(FrappeTestCase):
 		result = get_call_permission("Hub Account", user_wa_id="919876543210")
 		self.assertEqual(result["data"][0]["permission"], "granted")
 		self.assertEqual(call.call_args.args[0:2], ("calling", "get_call_permission"))
+
+	@patch("frappe_whatsapp_core.calling.resolve_recipient_phone", return_value="919876543219")
+	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
+	@patch("frappe_whatsapp_core.calling._call", return_value={"data": []})
+	def test_call_permission_resolves_selected_core_contact(self, call, resolve, phone):
+		get_call_permission("Hub Account", identity="CONTACT-1")
+		phone.assert_called_once_with(
+			"CONTACT-1", context={"operation": "get_call_permission"}
+		)
+		self.assertEqual(call.call_args.args[2]["user_wa_id"], "919876543219")
+		self.assertIsNone(call.call_args.args[2]["recipient"])
+
+	@patch("frappe_whatsapp_core.calling.resolve_recipient_phone", return_value="919876543219")
+	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
+	@patch("frappe_whatsapp_core.calling._call", return_value={"success": True})
+	def test_call_invitation_resolves_selected_core_contact(self, call, resolve, phone):
+		send_call_button("Hub Account", "Call us", identity="CONTACT-1")
+		payload = call.call_args.args[2]
+		self.assertEqual(payload["to_number"], "919876543219")
+		self.assertIsNone(payload["recipient"])
 
 	def test_group_identity_and_call_are_first_class(self):
 		one = get_or_create_group_identity("GROUP-1")
