@@ -1,4 +1,6 @@
+import base64
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import frappe
@@ -14,6 +16,7 @@ from frappe_whatsapp_core.workspace_api import (
 	send_text,
 	upsert_team,
 )
+from frappe_whatsapp_core.message_media import download_message_media
 
 
 class TestCoreRoleBoundary(FrappeTestCase):
@@ -124,6 +127,68 @@ class TestWorkspaceAPI(FrappeTestCase):
 		inbox_page = conversation(self.conversation.name, message_limit=1)
 		self.assertEqual(inbox_page["messages"][0].body, "Message 1")
 		self.assertTrue(inbox_page["message_page"]["has_more"])
+
+	def test_inbound_media_is_exposed_through_authenticated_core_url(self):
+		media = frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": f"workspace-media-{frappe.generate_hash(length=8)}",
+			"conversation": self.conversation.name,
+			"channel": self.channel.name,
+			"provider_message_id": f"wamid.media.{frappe.generate_hash(length=8)}",
+			"direction": "Inbound",
+			"message_type": "image",
+			"body": "Photo",
+			"content": json.dumps({"type": "image", "image": {"id": "MEDIA-1"}}),
+			"provider_timestamp": now_datetime(),
+			"delivery_status": "Received",
+		}).insert(ignore_permissions=True)
+
+		page = list_messages(self.conversation.name, limit=20)
+		row = next(item for item in page["rows"] if item.name == media.name)
+		self.assertIn("message_media.download_message_media", row.media_url)
+		self.assertIn(media.name, row.media_url)
+
+	@patch("frappe_whatsapp_core.message_media.save_file")
+	@patch("frappe_whatsapp_core.message_media.call_management")
+	@patch("frappe_whatsapp_core.message_media.get_settings")
+	def test_message_media_download_uses_channel_mapping_and_private_cache(
+		self, get_settings, call_management, save_file
+	):
+		media = frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": f"workspace-download-{frappe.generate_hash(length=8)}",
+			"conversation": self.conversation.name,
+			"channel": self.channel.name,
+			"provider_message_id": f"wamid.download.{frappe.generate_hash(length=8)}",
+			"direction": "Inbound",
+			"message_type": "document",
+			"body": "Invoice",
+			"content": json.dumps({
+				"type": "document",
+				"document": {"id": "MEDIA-DOC", "filename": "invoice.pdf"},
+			}),
+			"provider_timestamp": now_datetime(),
+			"delivery_status": "Received",
+		}).insert(ignore_permissions=True)
+		settings = SimpleNamespace(get_account_name=lambda channel: "ACCOUNT-1")
+		get_settings.return_value = settings
+		call_management.return_value = {
+			"success": True,
+			"content_b64": base64.b64encode(b"pdf-content").decode(),
+			"mime_type": "application/pdf",
+		}
+		save_file.return_value = SimpleNamespace(
+			file_name="invoice.pdf", content_type="application/pdf"
+		)
+
+		download_message_media(media.name)
+
+		self.assertEqual(call_management.call_args.args[1]["account_name"], "ACCOUNT-1")
+		self.assertEqual(call_management.call_args.args[1]["media_id"], "MEDIA-DOC")
+		self.assertEqual(frappe.local.response.filecontent, b"pdf-content")
+		self.assertEqual(frappe.local.response.display_content_as, "attachment")
+		save_file.assert_called_once()
+		self.assertEqual(save_file.call_args.kwargs["is_private"], 1)
 
 	def test_team_and_outbound_hook_contracts(self):
 		team = upsert_team(

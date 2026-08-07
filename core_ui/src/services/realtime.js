@@ -3,12 +3,20 @@ import { io } from 'socket.io-client'
 let socket = null
 let activeSite = null
 
+export function socketEndpoint(site, boot = window.core_boot || {}) {
+	const origin = new URL(window.location.origin)
+	if (boot.developer_mode && boot.socketio_port) {
+		origin.port = String(boot.socketio_port)
+	}
+	return `${origin.origin}/${site}`
+}
+
 function connection(site) {
 	if (socket && activeSite === site) return socket
 	if (socket) socket.disconnect()
 
 	activeSite = site
-	socket = io(`${window.location.origin}/${site}`, {
+	socket = io(socketEndpoint(site), {
 		secure: window.location.protocol === 'https:',
 		withCredentials: true,
 		reconnection: true,

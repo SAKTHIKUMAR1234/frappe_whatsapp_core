@@ -35,8 +35,8 @@
 		return content.value.payload || content.value[type] || {}
 	})
 	const mediaUrl = computed(() => {
-		const value = String(richContent.value?.link || '')
-		return /^https?:\/\//i.test(value) ? value : ''
+		const value = String(props.message.media_url || richContent.value?.link || '')
+		return /^(https?:\/\/|\/)/i.test(value) ? value : ''
 	})
 	const quotedMessageId = computed(
 		() =>

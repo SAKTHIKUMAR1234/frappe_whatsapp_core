@@ -7,6 +7,7 @@ import hashlib
 import frappe
 
 from frappe_whatsapp_core.conversation_reads import mark_conversation_read
+from frappe_whatsapp_core.message_media import add_media_url
 from frappe_whatsapp_core.outbound import outbound_state
 from frappe_whatsapp_core.permissions import require_core_access
 from frappe_whatsapp_core.topics import list_topics
@@ -140,6 +141,7 @@ def conversation(name: str, message_limit: int = 500) -> dict:
 	)) if messages else set()
 	for row in messages:
 		row.bookmarked = row.name in bookmarks
+		add_media_url(row)
 	return {
 		"conversation": doc.as_dict(),
 		"identity": identity.as_dict(),

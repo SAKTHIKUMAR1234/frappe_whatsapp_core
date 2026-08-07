@@ -1,6 +1,7 @@
 import json
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
@@ -140,3 +141,21 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		).read_text()
 		self.assertIn("window.location.pathname.startsWith('/whatsapp_core')", router)
 		self.assertIn(": '/whatsapp/'", router)
+
+	def test_realtime_uses_the_dev_socketio_port(self):
+		realtime = (
+			Path(__file__).resolve().parents[2]
+			/ "core_ui"
+			/ "src"
+			/ "services"
+			/ "realtime.js"
+		).read_text()
+		self.assertIn("boot.developer_mode && boot.socketio_port", realtime)
+		self.assertIn("origin.port = String(boot.socketio_port)", realtime)
+
+		from frappe_whatsapp_core.www.whatsapp_core import get_context
+
+		context = frappe._dict()
+		with patch.object(frappe.sessions, "get_csrf_token", return_value="csrf-test"):
+			get_context(context)
+		self.assertEqual(context.boot["socketio_port"], frappe.conf.get("socketio_port") or 9000)

@@ -7,6 +7,7 @@ import json
 import frappe
 
 from frappe_whatsapp_core.conversation_reads import mark_conversation_read
+from frappe_whatsapp_core.message_media import add_media_url
 from frappe_whatsapp_core.permissions import (
 	CORE_MANAGEMENT_ROLES,
 	require_core_access,
@@ -181,6 +182,7 @@ def list_messages(
 		row.content = _json_dict(row.content)
 		row.failure = _json_dict(row.failure)
 		row.bookmarked = bool(row.bookmarked)
+		add_media_url(row)
 	return {
 		"rows": rows,
 		"has_more": has_more,
