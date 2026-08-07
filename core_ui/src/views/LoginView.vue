@@ -75,6 +75,7 @@
 				<InputText
 					v-model="email"
 					type="email"
+					autocomplete="username"
 					placeholder="you@company.com"
 					fluid
 					autofocus
@@ -86,6 +87,7 @@
 				<label>Password</label>
 				<Password
 					v-model="password"
+					autocomplete="current-password"
 					:feedback="false"
 					toggle-mask
 					fluid

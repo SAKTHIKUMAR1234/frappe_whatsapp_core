@@ -18,7 +18,13 @@ export const navigation = [
 	{
 		label: 'Workspace',
 		items: [
-			{ label: 'Shared Inbox', route: 'inbox', module: 'inbox', icon: MessageCircleMore, badge: 'Live' },
+			{
+				label: 'Shared Inbox',
+				route: 'inbox',
+				module: 'inbox',
+				icon: MessageCircleMore,
+				badge: 'Live',
+			},
 			{ label: 'Overview', route: 'dashboard', module: 'dashboard', icon: LayoutDashboard },
 		],
 	},
