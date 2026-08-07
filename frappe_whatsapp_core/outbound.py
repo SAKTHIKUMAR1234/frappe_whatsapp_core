@@ -16,15 +16,17 @@ from frappe_whatsapp_core.hub_client import (
 	call_management,
 	connection_status,
 	get_settings,
-	send_batch as send_hub_batch,
 	send_raw,
+)
+from frappe_whatsapp_core.hub_client import (
+	send_batch as send_hub_batch,
 )
 from frappe_whatsapp_core.materializer import (
 	get_or_create_conversation,
 	get_or_create_identity,
 	normalize_phone,
 )
-from frappe_whatsapp_core.permissions import require_core_access
+from frappe_whatsapp_core.permissions import assert_conversation_access, require_core_access
 
 
 def outbound_ready() -> bool:
@@ -235,6 +237,7 @@ def queue_rich(
 @require_core_access()
 def upload_media(conversation_name: str, file_url: str) -> dict:
 	"""Upload a private Core file to the mapped Meta account and return its ID."""
+	assert_conversation_access(conversation_name)
 	conversation = frappe.get_doc("WhatsApp Core Conversation", conversation_name)
 	frappe.has_permission(
 		"WhatsApp Core Conversation",
@@ -576,6 +579,7 @@ def _queue_message(
 	enqueue_delivery: bool = True,
 	client_message_id: str | None = None,
 ) -> dict:
+	assert_conversation_access(conversation_name)
 	if not outbound_ready():
 		frappe.throw(
 			"WhatsApp outbound is not fully configured and enabled",

@@ -14,8 +14,15 @@
 	--wa-green: #075e54;
 	--wa-green-bright: #18a879;
 	--wa-mint: #e8f8f1;
+	--wa-primary: #087f68;
+	--wa-bg: #f5f7f6;
+	--wa-surface: #ffffff;
+	--wa-text: #17211d;
 	--wa-border: #e2e9e5;
 	--wa-muted: #6c7a73;
+	--wa-danger: #c0392b;
+	--wa-danger-soft: #fff0ee;
+	--wa-shadow-lg: 0 24px 60px rgb(23 33 29 / 12%);
 	--wa-sidebar: #10231d;
 }
 

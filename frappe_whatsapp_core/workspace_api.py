@@ -10,6 +10,8 @@ from frappe_whatsapp_core.conversation_reads import mark_conversation_read
 from frappe_whatsapp_core.message_media import add_media_url
 from frappe_whatsapp_core.permissions import (
 	CORE_MANAGEMENT_ROLES,
+	assert_conversation_access,
+	conversation_conditions,
 	require_core_access,
 )
 
@@ -358,61 +360,11 @@ def _outbound_handler(hook_name: str):
 
 
 def _assert_conversation_access(conversation: str) -> None:
-	if not frappe.db.exists("WhatsApp Core Conversation", conversation):
-		frappe.throw("Conversation not found", frappe.DoesNotExistError)
-	roles = set(frappe.get_roles())
-	if roles & CORE_MANAGEMENT_ROLES:
-		return
-	assigned_team, assigned_user = frappe.db.get_value(
-		"WhatsApp Core Conversation",
-		conversation,
-		["assigned_team", "assigned_user"],
-	)
-	if assigned_user == frappe.session.user:
-		return
-	if not assigned_team:
-		return
-	if frappe.db.exists(
-		"WhatsApp Core Team Member",
-		{
-			"parent": assigned_team,
-			"user": frappe.session.user,
-			"enabled": 1,
-		},
-	):
-		return
-	frappe.throw("You are not assigned to this conversation", frappe.PermissionError)
+	assert_conversation_access(conversation)
 
 
 def _conversation_conditions(alias: str) -> tuple[list[str], dict]:
-	conditions = ["1 = 1"]
-	values = {}
-	roles = set(frappe.get_roles())
-	if roles & CORE_MANAGEMENT_ROLES:
-		return conditions, values
-	teams = frappe.get_all(
-		"WhatsApp Core Team Member",
-		filters={"user": frappe.session.user, "enabled": 1},
-		pluck="parent",
-	)
-	values["current_user"] = frappe.session.user
-	if teams:
-		values["teams"] = tuple(teams)
-		conditions.append(
-			f"""(
-				COALESCE({alias}.assigned_team, '') = ''
-				OR {alias}.assigned_team IN %(teams)s
-				OR {alias}.assigned_user = %(current_user)s
-			)"""
-		)
-	else:
-		conditions.append(
-			f"""(
-				COALESCE({alias}.assigned_team, '') = ''
-				OR {alias}.assigned_user = %(current_user)s
-			)"""
-		)
-	return conditions, values
+	return conversation_conditions(alias)
 
 
 def _json_dict(value) -> dict:

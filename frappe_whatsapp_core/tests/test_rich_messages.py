@@ -74,6 +74,7 @@ class TestRichMessages(FrappeTestCase):
 
 	@patch("frappe_whatsapp_core.outbound.call_management")
 	@patch("frappe_whatsapp_core.outbound.get_settings")
+	@patch("frappe_whatsapp_core.outbound.assert_conversation_access")
 	@patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["WhatsApp User"])
 	@patch("frappe_whatsapp_core.outbound.frappe.has_permission")
 	@patch("frappe_whatsapp_core.outbound.frappe.db.get_value", return_value="FILE-1")
@@ -84,6 +85,7 @@ class TestRichMessages(FrappeTestCase):
 		_get_value,
 		_has_permission,
 		_get_roles,
+		_assert_access,
 		get_settings,
 		call_management,
 	):

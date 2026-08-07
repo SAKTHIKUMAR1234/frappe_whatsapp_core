@@ -6,9 +6,11 @@ from frappe.utils import now_datetime
 
 from frappe_whatsapp_core.delivery import advance_delivery_status
 from frappe_whatsapp_core.dispatcher import enqueue_event, enqueue_event_batch
+from frappe_whatsapp_core.permissions import require_core_access
 
 
 @frappe.whitelist()
+@require_core_access(manage=True)
 def receive():
 	"""Persist one event or a relay-provided batch before business processing."""
 	payload = frappe.request.get_json()
@@ -20,6 +22,7 @@ def receive():
 
 
 @frappe.whitelist()
+@require_core_access(manage=True)
 def receive_outbound_result(
 	idempotency_key,
 	status,

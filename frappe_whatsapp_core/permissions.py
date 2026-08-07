@@ -72,3 +72,63 @@ def require_document_permission(
 		return guarded
 
 	return decorator
+
+
+def assert_conversation_access(conversation: str) -> None:
+	"""Restrict operators to unassigned, directly assigned, or team-assigned chats."""
+	if not frappe.db.exists("WhatsApp Core Conversation", conversation):
+		frappe.throw("Conversation not found", frappe.DoesNotExistError)
+	roles = set(frappe.get_roles())
+	if roles & CORE_MANAGEMENT_ROLES:
+		return
+	assigned_team, assigned_user = frappe.db.get_value(
+		"WhatsApp Core Conversation",
+		conversation,
+		["assigned_team", "assigned_user"],
+	)
+	if assigned_user == frappe.session.user or not assigned_team:
+		return
+	if frappe.db.exists(
+		"WhatsApp Core Team Member",
+		{
+			"parent": assigned_team,
+			"user": frappe.session.user,
+			"enabled": 1,
+		},
+	):
+		return
+	frappe.throw("You are not assigned to this conversation", frappe.PermissionError)
+
+
+def conversation_conditions(alias: str = "conversation") -> tuple[list[str], dict]:
+	"""Return parameterized SQL scope conditions matching ``assert_conversation_access``."""
+	if not alias.replace("_", "").isalnum():
+		frappe.throw("Invalid conversation table alias", frappe.ValidationError)
+	conditions = ["1 = 1"]
+	values = {}
+	roles = set(frappe.get_roles())
+	if roles & CORE_MANAGEMENT_ROLES:
+		return conditions, values
+	teams = frappe.get_all(
+		"WhatsApp Core Team Member",
+		filters={"user": frappe.session.user, "enabled": 1},
+		pluck="parent",
+	)
+	values["current_user"] = frappe.session.user
+	if teams:
+		values["teams"] = tuple(teams)
+		conditions.append(
+			f"""(
+				COALESCE({alias}.assigned_team, '') = ''
+				OR {alias}.assigned_team IN %(teams)s
+				OR {alias}.assigned_user = %(current_user)s
+			)"""
+		)
+	else:
+		conditions.append(
+			f"""(
+				COALESCE({alias}.assigned_team, '') = ''
+				OR {alias}.assigned_user = %(current_user)s
+			)"""
+		)
+	return conditions, values

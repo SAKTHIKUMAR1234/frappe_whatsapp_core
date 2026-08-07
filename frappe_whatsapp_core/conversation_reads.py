@@ -12,12 +12,13 @@ import hashlib
 import frappe
 from frappe.utils import now
 
-from frappe_whatsapp_core.permissions import require_core_access
+from frappe_whatsapp_core.permissions import assert_conversation_access, require_core_access
 
 
 @frappe.whitelist()
 @require_core_access()
 def mark_conversation_read(conversation: str, message: str | None = None) -> dict:
+	assert_conversation_access(conversation)
 	frappe.has_permission(
 		"WhatsApp Core Conversation",
 		"read",
@@ -66,6 +67,7 @@ def mark_conversation_read(conversation: str, message: str | None = None) -> dic
 @frappe.whitelist()
 @require_core_access()
 def show_typing(conversation: str) -> dict:
+	assert_conversation_access(conversation)
 	frappe.has_permission(
 		"WhatsApp Core Conversation",
 		"read",
@@ -109,6 +111,7 @@ def _latest_inbound_provider_message(conversation: str):
 @frappe.whitelist()
 @require_core_access()
 def conversation_readers(conversation: str) -> list[dict]:
+	assert_conversation_access(conversation)
 	frappe.has_permission(
 		"WhatsApp Core Conversation",
 		"read",

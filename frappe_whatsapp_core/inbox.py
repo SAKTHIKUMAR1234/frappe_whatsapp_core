@@ -9,7 +9,12 @@ import frappe
 from frappe_whatsapp_core.conversation_reads import mark_conversation_read
 from frappe_whatsapp_core.message_media import add_media_url
 from frappe_whatsapp_core.outbound import outbound_state
-from frappe_whatsapp_core.permissions import require_core_access
+from frappe_whatsapp_core.permissions import (
+	CORE_MANAGEMENT_ROLES,
+	assert_conversation_access,
+	conversation_conditions,
+	require_core_access,
+)
 from frappe_whatsapp_core.topics import list_topics
 
 
@@ -17,21 +22,28 @@ from frappe_whatsapp_core.topics import list_topics
 @require_core_access()
 def conversations(limit: int = 250) -> list[dict]:
 	limit = max(1, min(int(limit), 500))
-	rows = frappe.get_all(
-		"WhatsApp Core Conversation",
-		fields=[
-			"name",
-			"conversation_key",
-			"channel",
-			"remote_identity",
-			"status",
-			"workspace_key",
-			"assigned_user",
-			"last_inbound_at",
-			"last_message_at",
-		],
-		order_by="last_message_at desc",
-		limit_page_length=limit,
+	conditions, values = conversation_conditions("conversation")
+	values["limit"] = limit
+	rows = frappe.db.sql(
+		f"""
+		SELECT
+			conversation.name,
+			conversation.conversation_key,
+			conversation.channel,
+			conversation.remote_identity,
+			conversation.status,
+			conversation.workspace_key,
+			conversation.assigned_team,
+			conversation.assigned_user,
+			conversation.last_inbound_at,
+			conversation.last_message_at
+		FROM `tabWhatsApp Core Conversation` AS conversation
+		WHERE {" AND ".join(conditions)}
+		ORDER BY conversation.last_message_at DESC
+		LIMIT %(limit)s
+		""",
+		values,
+		as_dict=True,
 	)
 	if not rows:
 		return []
@@ -82,6 +94,7 @@ def conversations(limit: int = 250) -> list[dict]:
 @require_core_access()
 def conversation(name: str, message_limit: int = 500) -> dict:
 	message_limit = max(1, min(int(message_limit), 1000))
+	assert_conversation_access(name)
 	doc = frappe.get_doc("WhatsApp Core Conversation", name)
 	frappe.has_permission(
 		"WhatsApp Core Conversation",
@@ -193,6 +206,7 @@ def conversation(name: str, message_limit: int = 500) -> dict:
 @frappe.whitelist()
 @require_core_access()
 def read_conversation(name: str, message: str | None = None) -> dict:
+	assert_conversation_access(name)
 	return mark_conversation_read(name, message)
 
 
@@ -202,6 +216,7 @@ def toggle_message_bookmark(message: str) -> dict:
 	conversation_name = frappe.db.get_value("WhatsApp Core Message", message, "conversation")
 	if not conversation_name:
 		frappe.throw("Message not found", frappe.DoesNotExistError)
+	assert_conversation_access(conversation_name)
 	frappe.has_permission("WhatsApp Core Conversation", "read", conversation_name, throw=True)
 	key = hashlib.sha256(f"{message}:{frappe.session.user}".encode()).hexdigest()
 	if frappe.db.exists("WhatsApp Core Message Bookmark", key):
@@ -224,6 +239,7 @@ def update_conversation(
 	status: str | None = None,
 	assigned_user: str | None = None,
 ) -> dict:
+	assert_conversation_access(name)
 	doc = frappe.get_doc("WhatsApp Core Conversation", name)
 	frappe.has_permission(
 		"WhatsApp Core Conversation",
@@ -236,6 +252,11 @@ def update_conversation(
 			frappe.throw("Unsupported conversation status")
 		doc.status = status
 	if assigned_user is not None:
+		if not (set(frappe.get_roles()) & CORE_MANAGEMENT_ROLES):
+			frappe.throw(
+				"WhatsApp Core management access is required for assignment",
+				frappe.PermissionError,
+			)
 		if assigned_user and not frappe.db.exists(
 			"User",
 			{"name": assigned_user, "enabled": 1},

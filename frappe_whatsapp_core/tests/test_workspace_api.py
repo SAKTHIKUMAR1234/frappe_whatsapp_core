@@ -8,6 +8,7 @@ from frappe.tests.utils import FrappeTestCase
 from frappe.utils import now_datetime
 
 from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS
+from frappe_whatsapp_core.message_media import download_message_media
 from frappe_whatsapp_core.workspace_api import (
 	_outbound_handler,
 	get_conversation,
@@ -16,7 +17,6 @@ from frappe_whatsapp_core.workspace_api import (
 	send_text,
 	upsert_team,
 )
-from frappe_whatsapp_core.message_media import download_message_media
 
 
 class TestCoreRoleBoundary(FrappeTestCase):
@@ -39,6 +39,16 @@ class TestCoreRoleBoundary(FrappeTestCase):
 		self.assertIn("campaigns", boot["modules"])
 		self.assertIn("flows", boot["modules"])
 		self.assertIn("ai-queue", boot["modules"])
+
+	def test_authenticated_user_without_core_role_gets_no_modules(self):
+		from frappe_whatsapp_core import frontend_api
+
+		with patch.object(frontend_api.frappe, "get_roles", return_value=["Desk User"]):
+			boot = frontend_api.bootstrap()
+		self.assertTrue(boot["authenticated"])
+		self.assertFalse(boot["authorized"])
+		self.assertEqual(boot["default_module"], "access-denied")
+		self.assertEqual(boot["modules"], [])
 
 	def test_user_cannot_enter_management_api(self):
 		from frappe_whatsapp_core import permissions
@@ -205,6 +215,37 @@ class TestWorkspaceAPI(FrappeTestCase):
 			result = send_text(self.conversation.name, "Hello")
 			self.assertEqual(result["name"], "queued-message")
 			sender.assert_called_once_with(self.conversation.name, "Hello")
+
+	def test_inbox_and_outbound_enforce_team_scope(self):
+		from frappe_whatsapp_core.inbox import conversation, conversations
+		from frappe_whatsapp_core.outbound import queue_text
+
+		team = upsert_team(
+			team_name=f"Restricted Team {frappe.generate_hash(length=6)}",
+			members=[{"user": "Administrator", "team_role": "Agent"}],
+		)
+		frappe.db.set_value(
+			"WhatsApp Core Conversation",
+			self.conversation.name,
+			{"assigned_team": team["name"], "assigned_user": None},
+		)
+		original_user = frappe.session.user
+		frappe.local.session.user = "unassigned@example.com"
+		try:
+			with patch(
+				"frappe_whatsapp_core.permissions.frappe.get_roles",
+				return_value=["WhatsApp User"],
+			):
+				self.assertNotIn(
+					self.conversation.name,
+					[row["name"] for row in conversations(limit=500)],
+				)
+				with self.assertRaises(frappe.PermissionError):
+					conversation(self.conversation.name)
+				with self.assertRaises(frappe.PermissionError):
+					queue_text(self.conversation.name, "Not allowed")
+		finally:
+			frappe.local.session.user = original_user
 
 	def test_outbound_handler_uses_core_defaults_without_adapter_hooks(self):
 		from frappe_whatsapp_core.outbound import queue_template, queue_text

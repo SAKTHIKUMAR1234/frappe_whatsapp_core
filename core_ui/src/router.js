@@ -9,6 +9,11 @@ const routes = [
 		meta: { public: true },
 	},
 	{
+		path: '/access-denied',
+		name: 'access-denied',
+		component: () => import('@/views/AccessDeniedView.vue'),
+	},
+	{
 		path: '/',
 		component: () => import('@/layouts/AppShell.vue'),
 		children: [
@@ -117,7 +122,8 @@ router.beforeEach(async (to) => {
 	if (!to.meta.public && !session.authenticated) {
 		return { name: 'login', query: { redirect: to.fullPath } }
 	}
-	if (to.name === 'login' && session.authenticated) return { name: session.boot?.default_module || 'inbox' }
+	if (to.name === 'login' && session.authenticated)
+		return { name: session.boot?.default_module || 'inbox' }
 	if (to.meta.module && !session.boot?.modules?.includes(to.meta.module)) {
 		return { name: session.boot?.default_module || 'inbox' }
 	}

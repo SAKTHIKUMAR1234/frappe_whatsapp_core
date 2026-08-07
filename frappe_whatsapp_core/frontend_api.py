@@ -29,11 +29,13 @@ from frappe_whatsapp_core.topics import unclassified_messages, upsert_topic
 def bootstrap():
 	user = frappe.session.user
 	if user == "Guest":
-		return {"authenticated": False, "site": frappe.local.site}
+		return {"authenticated": False, "authorized": False, "site": frappe.local.site}
 	roles = set(frappe.get_roles(user))
+	authorized = bool(roles & CORE_ACCESS_ROLES)
 	can_manage = bool(roles & {"System Manager", "WhatsApp Manager"})
 	return {
 		"authenticated": True,
+		"authorized": authorized,
 		"site": frappe.local.site,
 		"user": {
 			"name": user,
@@ -41,7 +43,9 @@ def bootstrap():
 			"roles": sorted(roles & CORE_ACCESS_ROLES),
 		},
 		"can_manage": can_manage,
-		"default_module": "dashboard" if can_manage else "inbox",
+		"default_module": (
+			"dashboard" if can_manage else "inbox" if authorized else "access-denied"
+		),
 		"modules": ([
 			"inbox",
 			"dashboard",
@@ -56,7 +60,7 @@ def bootstrap():
 			"health",
 			"settings",
 			"teams",
-		] if can_manage else ["inbox"]),
+		] if can_manage else ["inbox"] if authorized else []),
 	}
 
 
