@@ -116,6 +116,24 @@ const router = createRouter({
 	routes,
 })
 
+// A user can keep the app open while a new hashed frontend build is deployed.
+// In that case Vue's next lazy route import points at a chunk that no longer
+// exists. Recover once with a cache-busted full reload instead of leaving the
+// current screen frozen on a failed navigation.
+router.onError((error) => {
+	const message = String(error?.message || error || '')
+	if (!/dynamically imported module|failed to fetch|importing a module script/i.test(message)) return
+	const reloadKey = 'whatsapp:asset-reload'
+	if (sessionStorage.getItem(reloadKey)) {
+		sessionStorage.removeItem(reloadKey)
+		return
+	}
+	sessionStorage.setItem(reloadKey, '1')
+	const url = new URL(window.location.href)
+	url.searchParams.set('asset-reload', String(Date.now()))
+	window.location.replace(url.toString())
+})
+
 router.beforeEach(async (to) => {
 	const session = useSessionStore()
 	if (!session.boot) {
