@@ -536,7 +536,7 @@
 	}
 	@media (max-width: 600px) {
 		.native-flow-page {
-			margin: -18px;
+			margin: -12px;
 		}
 		.builder-header,
 		.builder-grid {

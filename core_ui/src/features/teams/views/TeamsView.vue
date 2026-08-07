@@ -1,29 +1,50 @@
 <script setup>
-	import { computed, onMounted, reactive, ref } from 'vue'
+	import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 	import Button from 'primevue/button'
 	import Dialog from 'primevue/dialog'
 	import InputText from 'primevue/inputtext'
+	import Message from 'primevue/message'
+	import MultiSelect from 'primevue/multiselect'
 	import Textarea from 'primevue/textarea'
 	import ToggleSwitch from 'primevue/toggleswitch'
 	import Tag from 'primevue/tag'
 	import { Plus, UsersRound } from 'lucide-vue-next'
 	import { useToast } from 'primevue/usetoast'
-	import { call } from '@/services/frappe'
+	import AsyncState from '@/components/AsyncState.vue'
+	import { call, errorMessage } from '@/services/frappe'
+	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
 
 	const toast = useToast()
 	const session = useSessionStore()
 	const teams = ref([])
+	const userOptions = ref([])
 	const loading = ref(false)
 	const saving = ref(false)
+	const loadError = ref('')
+	const submitError = ref('')
+	const attempted = ref(false)
 	const visible = ref(false)
-	const form = reactive({ team_name: '', description: '', enabled: true, members: '' })
+	const form = reactive({ team_name: '', description: '', enabled: true, members: [] })
 	const canManage = computed(() => Boolean(session.boot?.can_manage))
+	let unsubscribe = () => {}
+	const userByName = computed(() =>
+		Object.fromEntries(userOptions.value.map((user) => [user.name, user])),
+	)
+
+	function memberLabel(user) {
+		return userByName.value[user]?.full_name || user
+	}
 
 	async function load() {
 		loading.value = true
+		loadError.value = ''
 		try {
-			teams.value = await call('frappe_whatsapp_core.workspace_api.list_teams')
+			const workspace = await call('frappe_whatsapp_core.workspace_api.team_workspace')
+			teams.value = workspace.teams || []
+			userOptions.value = workspace.users || []
+		} catch (error) {
+			loadError.value = errorMessage(error, 'Unable to load teams.')
 		} finally {
 			loading.value = false
 		}
@@ -33,31 +54,33 @@
 		form.team_name = team?.team_name || ''
 		form.description = team?.description || ''
 		form.enabled = team ? Boolean(team.enabled) : true
-		form.members = (team?.members || []).map((member) => member.user).join('\n')
+		form.members = (team?.members || []).map((member) => member.user)
+		attempted.value = false
+		submitError.value = ''
 		visible.value = true
 	}
 
 	async function save() {
+		attempted.value = true
+		submitError.value = ''
+		if (!form.team_name.trim()) return
 		saving.value = true
 		try {
 			await call('frappe_whatsapp_core.workspace_api.upsert_team', {
 				team_name: form.team_name,
 				description: form.description,
 				enabled: form.enabled ? 1 : 0,
-				members: form.members
-					.split('\n')
-					.map((user) => user.trim())
-					.filter(Boolean)
-					.map((user) => ({ user, team_role: 'Agent', enabled: 1 })),
+				members: form.members.map((user) => ({ user, team_role: 'Agent', enabled: 1 })),
 			})
 			visible.value = false
 			await load()
 			toast.add({ severity: 'success', summary: 'Team saved', life: 2500 })
 		} catch (error) {
+			submitError.value = errorMessage(error, 'Unable to save this team.')
 			toast.add({
 				severity: 'error',
 				summary: 'Could not save team',
-				detail: error?.response?.data?.message || error?.message,
+				detail: submitError.value,
 				life: 4500,
 			})
 		} finally {
@@ -65,7 +88,11 @@
 		}
 	}
 
-	onMounted(load)
+	onMounted(async () => {
+		await load()
+		unsubscribe = subscribe(session.boot?.site, 'whatsapp_core_team', load)
+	})
+	onUnmounted(() => unsubscribe())
 </script>
 
 <template>
@@ -79,10 +106,19 @@
 			<template #icon><Plus :size="16" /></template>
 		</Button>
 	</div>
-	<section class="team-grid">
+	<AsyncState
+		:loading="loading"
+		:error="loadError"
+		:empty="!teams.length"
+		loading-label="Loading teams…"
+		empty-title="No teams yet"
+		empty-message="Create a team to route shared conversations to the right people."
+		@retry="load"
+	/>
+	<section v-if="!loading && !loadError && teams.length" class="team-grid">
 		<article v-for="team in teams" :key="team.name" class="surface-card team-card">
 			<header>
-				<span><UsersRound :size="20" /></span>
+				<span class="team-icon"><UsersRound :size="20" /></span>
 				<Tag
 					:value="team.enabled ? 'Enabled' : 'Disabled'"
 					:severity="team.enabled ? 'success' : 'secondary'"
@@ -92,18 +128,30 @@
 			<h2>{{ team.team_name }}</h2>
 			<p>{{ team.description || 'No description' }}</p>
 			<div class="members">
-				<strong>{{ team.members.length }} members</strong>
-				<span v-for="member in team.members.slice(0, 4)" :key="member.user">{{
-					member.user
-				}}</span>
-				<small v-if="team.members.length > 4">+{{ team.members.length - 4 }} more</small>
+				<strong
+					>{{ team.members.length }}
+					{{ team.members.length === 1 ? 'member' : 'members' }}</strong
+				>
+				<div class="member-list">
+					<span v-for="member in team.members.slice(0, 5)" :key="member.user">
+						<i>{{ memberLabel(member.user).slice(0, 1).toUpperCase() }}</i>
+						{{ memberLabel(member.user) }}
+					</span>
+					<small v-if="team.members.length > 5"
+						>+{{ team.members.length - 5 }} more</small
+					>
+				</div>
 			</div>
-			<Button v-if="canManage" label="Edit team" outlined size="small" @click="open(team)" />
+			<footer>
+				<Button
+					v-if="canManage"
+					label="Manage team"
+					outlined
+					size="small"
+					@click="open(team)"
+				/>
+			</footer>
 		</article>
-		<div v-if="!loading && !teams.length" class="surface-card empty">
-			<UsersRound :size="32" /><strong>No teams yet</strong
-			><span>Create a team to route shared conversations.</span>
-		</div>
 	</section>
 	<Dialog
 		v-model:visible="visible"
@@ -111,15 +159,40 @@
 		header="WhatsApp team"
 		:style="{ width: '440px', maxWidth: '94vw' }"
 	>
-		<label>Team name</label><InputText v-model="form.team_name" fluid />
+		<Message v-if="submitError" severity="error" :closable="false">{{ submitError }}</Message>
+		<label for="team-name">Team name <span>*</span></label>
+		<InputText
+			id="team-name"
+			v-model="form.team_name"
+			fluid
+			:invalid="attempted && !form.team_name.trim()"
+			autofocus
+			@keyup.enter="save"
+		/>
+		<small v-if="attempted && !form.team_name.trim()" class="field-error"
+			>Enter a team name.</small
+		>
 		<label>Description</label><Textarea v-model="form.description" rows="3" fluid />
 		<label>Members</label>
-		<Textarea
+		<MultiSelect
 			v-model="form.members"
-			rows="7"
+			:options="userOptions"
+			option-label="label"
+			option-value="name"
+			filter
+			display="chip"
+			:show-toggle-all="false"
+			:max-selected-labels="4"
 			fluid
-			placeholder="One Frappe user email per line"
-		/>
+			placeholder="Search and select Frappe users"
+		>
+			<template #option="{ option }">
+				<div class="user-option">
+					<strong>{{ option.full_name || option.name }}</strong>
+					<small>{{ option.name }}</small>
+				</div>
+			</template>
+		</MultiSelect>
 		<div class="enabled"><ToggleSwitch v-model="form.enabled" /><span>Team enabled</span></div>
 		<template #footer>
 			<Button label="Cancel" text @click="visible = false" />
@@ -136,20 +209,34 @@
 <style scoped>
 	.team-grid {
 		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 15px;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+		gap: 18px;
+	}
+	:deep(.p-message) {
+		margin: 0 0 16px;
+	}
+	label span,
+	.field-error {
+		color: var(--wa-danger);
+	}
+	.field-error {
+		display: block;
+		margin: -8px 0 12px;
+		font-size: 12px;
 	}
 	.team-card {
-		padding: 18px;
+		padding: 20px;
+		display: flex;
+		flex-direction: column;
 	}
 	.team-card header {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 	}
-	.team-card header > span {
-		width: 40px;
-		height: 40px;
+	.team-icon {
+		width: 42px;
+		height: 42px;
 		display: grid;
 		place-items: center;
 		border-radius: 12px;
@@ -157,36 +244,68 @@
 		background: #ddf8eb;
 	}
 	.team-card h2 {
-		margin: 17px 0 5px;
-		font-size: 16px;
+		margin: 18px 0 6px;
+		font-size: 18px;
+		letter-spacing: -0.015em;
 	}
 	.team-card > p {
-		min-height: 34px;
-		margin: 0 0 16px;
+		min-height: 42px;
+		margin: 0 0 18px;
 		color: #77857e;
-		font-size: 10px;
-		line-height: 1.6;
+		font-size: 13px;
+		line-height: 1.55;
 	}
 	.members {
-		min-height: 100px;
-		padding: 12px;
-		margin-bottom: 15px;
-		display: flex;
-		flex-direction: column;
-		gap: 5px;
+		padding: 14px;
+		margin-bottom: 16px;
 		border-radius: 11px;
 		background: #f6f9f7;
 	}
 	.members strong {
-		margin-bottom: 3px;
-		font-size: 9px;
+		display: block;
+		margin-bottom: 10px;
+		font-size: 11px;
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 	}
-	.members span,
-	.members small {
+	.member-list {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 7px;
+	}
+	.member-list span {
+		max-width: 100%;
+		padding: 5px 9px 5px 5px;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		border: 1px solid #dfe9e4;
+		border-radius: 999px;
+		background: white;
 		color: #5f6f67;
-		font-size: 9px;
+		font-size: 12px;
+		overflow-wrap: anywhere;
+	}
+	.member-list i {
+		width: 22px;
+		height: 22px;
+		display: grid;
+		place-items: center;
+		flex: 0 0 22px;
+		border-radius: 50%;
+		background: var(--wa-mint);
+		color: var(--wa-primary);
+		font-size: 10px;
+		font-style: normal;
+		font-weight: 800;
+	}
+	.member-list small {
+		align-self: center;
+		color: var(--wa-muted);
+		font-size: 12px;
+	}
+	.team-card footer {
+		margin-top: auto;
 	}
 	.empty {
 		min-height: 270px;
@@ -196,17 +315,17 @@
 		justify-content: center;
 		gap: 8px;
 		color: #829088;
-		font-size: 11px;
+		font-size: 13px;
 		text-align: center;
 	}
 	.empty strong {
 		color: #26352e;
-		font-size: 14px;
+		font-size: 16px;
 	}
 	label {
 		display: block;
 		margin: 15px 0 6px;
-		font-size: 10px;
+		font-size: 12px;
 		font-weight: 700;
 	}
 	.enabled {
@@ -214,7 +333,20 @@
 		display: flex;
 		align-items: center;
 		gap: 9px;
-		font-size: 10px;
+		font-size: 12px;
+	}
+	.user-option {
+		display: grid;
+		gap: 2px;
+		min-width: 0;
+	}
+	.user-option strong,
+	.user-option small {
+		overflow-wrap: anywhere;
+	}
+	.user-option small {
+		color: var(--wa-muted);
+		font-size: 11px;
 	}
 	@media (max-width: 1000px) {
 		.team-grid {

@@ -3,9 +3,37 @@ import axios from 'axios'
 const client = axios.create({
 	headers: {
 		Accept: 'application/json',
-		'X-Frappe-CSRF-Token': window.csrf_token || '',
 	},
 })
+
+const AUTH_EXPIRED_EVENT = 'whatsapp-core:auth-expired'
+const API_FAILURE_EVENT = 'whatsapp-core:api-failure'
+
+function currentCsrfToken() {
+	return window.csrf_token || window.frappe?.csrf_token || ''
+}
+
+client.interceptors.request.use((config) => {
+	const token = currentCsrfToken()
+	if (token) config.headers['X-Frappe-CSRF-Token'] = token
+	return config
+})
+
+client.interceptors.response.use(
+	(response) => response,
+	(error) => {
+		const status = error?.response?.status
+		if (status === 401 || (status === 403 && /login/i.test(errorMessage(error)))) {
+			window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail: error }))
+		}
+		if (!error?.response) {
+			window.dispatchEvent(
+				new CustomEvent(API_FAILURE_EVENT, { detail: errorDetails(error) }),
+			)
+		}
+		return Promise.reject(error)
+	},
+)
 
 export async function call(method, args = {}) {
 	const { data } = await client.post(`/api/method/${method}`, args)
@@ -44,9 +72,64 @@ export function errorMessage(error, fallback = 'Unexpected server error') {
 			// Fall through to the standard Frappe/HTTP error fields.
 		}
 	}
+	if (payload.message && typeof payload.message === 'string')
+		return cleanMessage(payload.message)
+
 	const exception = payload.exception
-	if (exception) return String(exception).split(':').at(-1).trim()
-	return payload.message || error?.message || fallback
+	if (exception) return cleanMessage(String(exception).split(':').at(-1).trim())
+
+	if (!error?.response) {
+		if (error?.code === 'ERR_NETWORK')
+			return 'Cannot reach the server. Check your connection and try again.'
+		if (error?.code === 'ECONNABORTED') return 'The request took too long. Please try again.'
+	}
+
+	const status = error?.response?.status
+	const statusMessages = {
+		400: 'The request contains invalid information.',
+		401: 'Your session has expired. Sign in again to continue.',
+		403: 'You do not have permission to perform this action.',
+		404: 'The requested record could not be found.',
+		409: 'This record changed in another session. Reload it and try again.',
+		413: 'The selected file is too large.',
+		417: 'The server rejected this operation. Review the entered information and try again.',
+		429: 'Too many requests were sent. Wait a moment and try again.',
+		502: 'The integration service is temporarily unavailable.',
+		503: 'The service is temporarily unavailable.',
+		504: 'The integration service did not respond in time.',
+	}
+	return statusMessages[status] || cleanMessage(error?.message) || fallback
+}
+
+export function errorDetails(error, fallback) {
+	const response = error?.response
+	return {
+		message: errorMessage(error, fallback),
+		status: response?.status || 0,
+		requestId:
+			response?.headers?.['x-request-id'] ||
+			response?.data?.request_id ||
+			response?.data?._request_id ||
+			'',
+		retryable: !response || [408, 409, 425, 429, 502, 503, 504].includes(response.status),
+	}
+}
+
+function cleanMessage(value) {
+	if (!value) return ''
+	const container = document.createElement('div')
+	container.innerHTML = String(value)
+	return (container.textContent || container.innerText || '').replace(/\s+/g, ' ').trim()
+}
+
+export function onAuthExpired(callback) {
+	window.addEventListener(AUTH_EXPIRED_EVENT, callback)
+	return () => window.removeEventListener(AUTH_EXPIRED_EVENT, callback)
+}
+
+export function onApiFailure(callback) {
+	window.addEventListener(API_FAILURE_EVENT, callback)
+	return () => window.removeEventListener(API_FAILURE_EVENT, callback)
 }
 
 export default client

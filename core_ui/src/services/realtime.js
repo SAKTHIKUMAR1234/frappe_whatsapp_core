@@ -20,8 +20,10 @@ function connection(site) {
 		secure: window.location.protocol === 'https:',
 		withCredentials: true,
 		reconnection: true,
-		reconnectionAttempts: 10,
+		reconnectionAttempts: Infinity,
 		reconnectionDelay: 750,
+		reconnectionDelayMax: 8000,
+		randomizationFactor: 0.4,
 		timeout: 8000,
 	})
 	return socket
@@ -32,4 +34,21 @@ export function subscribe(site, event, callback) {
 	const client = connection(site)
 	client.on(event, callback)
 	return () => client.off(event, callback)
+}
+
+export function subscribeConnection(site, callback) {
+	if (!site) return () => {}
+	const client = connection(site)
+	const connected = () => callback('connected')
+	const disconnected = () => callback('disconnected')
+	const failed = () => callback('reconnecting')
+	client.on('connect', connected)
+	client.on('disconnect', disconnected)
+	client.on('connect_error', failed)
+	callback(client.connected ? 'connected' : 'connecting')
+	return () => {
+		client.off('connect', connected)
+		client.off('disconnect', disconnected)
+		client.off('connect_error', failed)
+	}
 }

@@ -15,6 +15,7 @@ from frappe_whatsapp_core.workspace_api import (
 	list_conversations,
 	list_messages,
 	send_text,
+	team_workspace,
 	upsert_team,
 )
 
@@ -206,6 +207,10 @@ class TestWorkspaceAPI(FrappeTestCase):
 			members=[{"user": "Administrator", "team_role": "Manager"}],
 		)
 		self.assertEqual(team["members"][0]["user"], "Administrator")
+		workspace = team_workspace()
+		self.assertTrue(any(row["name"] == team["name"] for row in workspace["teams"]))
+		administrator = next(row for row in workspace["users"] if row["name"] == "Administrator")
+		self.assertTrue(administrator["label"])
 
 		with patch(
 			"frappe_whatsapp_core.workspace_api._outbound_handler"

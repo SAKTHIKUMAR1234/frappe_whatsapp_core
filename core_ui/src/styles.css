@@ -37,6 +37,7 @@ body,
 }
 body {
 	background: #f5f7f6;
+	overflow-x: hidden;
 }
 button,
 input,
@@ -46,6 +47,50 @@ textarea {
 a {
 	color: inherit;
 	text-decoration: none;
+}
+
+#app .content {
+	font-size: 14px;
+	line-height: 1.45;
+}
+#app .content small {
+	font-size: 11px;
+	line-height: 1.45;
+}
+#app .content label,
+.p-dialog label {
+	display: block;
+	margin: 14px 0 7px;
+	color: #39483f;
+	font-size: 12px;
+	font-weight: 700;
+}
+#app .p-inputtext,
+#app .p-select-label,
+#app .p-multiselect-label,
+.p-dialog .p-inputtext,
+.p-dialog .p-select-label,
+.p-dialog .p-multiselect-label {
+	font-size: 13px;
+}
+#app .p-button-label,
+.p-dialog .p-button-label {
+	font-size: 13px;
+	font-weight: 650;
+}
+#app .p-datatable-thead > tr > th {
+	color: #44534b;
+	font-size: 11px;
+	font-weight: 750;
+}
+#app .p-datatable-tbody > tr > td {
+	color: #26342d;
+	font-size: 12px;
+	line-height: 1.45;
+}
+#app .p-tag-label {
+	font-size: 11px;
+	font-weight: 700;
 }
 
 .page-heading {
@@ -70,6 +115,10 @@ a {
 	border: 1px solid var(--wa-border);
 	border-radius: 18px;
 	box-shadow: 0 6px 25px rgba(16, 35, 29, 0.045);
+	transition:
+		border-color 160ms ease,
+		box-shadow 160ms ease,
+		transform 160ms ease;
 }
 .eyebrow {
 	color: #17805f;
@@ -92,8 +141,67 @@ a {
 	line-height: 1.6;
 }
 
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[role='button']:focus-visible {
+	outline: 3px solid rgb(24 168 121 / 22%);
+	outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		scroll-behavior: auto !important;
+		transition-duration: 0.01ms !important;
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+	}
+}
+
 @media (max-width: 980px) {
 	.page-heading {
 		flex-direction: column;
+		gap: 14px;
+	}
+	.page-heading > .p-button,
+	.page-heading > .actions {
+		max-width: 100%;
+	}
+}
+
+@media (max-width: 600px) {
+	.page-heading {
+		margin-bottom: 16px;
+	}
+	.page-heading h1 {
+		font-size: 23px;
+	}
+	.page-heading p {
+		font-size: 13px;
+	}
+	.surface-card {
+		border-radius: 14px;
+	}
+	.p-dialog {
+		width: calc(100vw - 16px) !important;
+		max-width: calc(100vw - 16px) !important;
+		max-height: calc(100dvh - 16px);
+		margin: 8px;
+	}
+	.p-dialog-content {
+		overflow-x: hidden;
+	}
+	.p-datatable-table-container {
+		-webkit-overflow-scrolling: touch;
+	}
+	.p-inputtext,
+	.p-textarea,
+	.p-select,
+	.p-multiselect,
+	.p-autocomplete {
+		max-width: 100%;
 	}
 }

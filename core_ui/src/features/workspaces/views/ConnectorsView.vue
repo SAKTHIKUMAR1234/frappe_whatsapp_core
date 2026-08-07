@@ -7,9 +7,11 @@
 	import Tag from 'primevue/tag'
 	import { Bot, Braces, PlugZap, RefreshCw, ShieldCheck } from 'lucide-vue-next'
 
-	import { call } from '@/services/frappe'
+	import AsyncState from '@/components/AsyncState.vue'
+	import { call, errorMessage } from '@/services/frappe'
 
 	const loading = ref(true)
+	const loadError = ref('')
 	const workspace = ref({
 		mcp_tools: [],
 		flow_actions: [],
@@ -19,8 +21,11 @@
 
 	async function load() {
 		loading.value = true
+		loadError.value = ''
 		try {
 			workspace.value = await call('frappe_whatsapp_core.frontend_api.connectors_workspace')
+		} catch (error) {
+			loadError.value = errorMessage(error, 'Unable to load connector capabilities.')
 		} finally {
 			loading.value = false
 		}
@@ -40,109 +45,111 @@
 			<template #icon><RefreshCw :size="16" /></template>
 		</Button>
 	</div>
+	<AsyncState v-if="loadError" :error="loadError" @retry="load" />
+	<template v-else>
+		<section class="summary-grid">
+			<article class="surface-card">
+				<Bot :size="19" />
+				<div>
+					<small>MCP tools</small><strong>{{ workspace.metrics.mcp_tools || 0 }}</strong>
+				</div>
+			</article>
+			<article class="surface-card">
+				<Braces :size="19" />
+				<div>
+					<small>Flow actions</small
+					><strong>{{ workspace.metrics.flow_actions || 0 }}</strong>
+				</div>
+			</article>
+			<article class="surface-card">
+				<PlugZap :size="19" />
+				<div>
+					<small>Configured extensions</small
+					><strong>{{ workspace.metrics.configured_extensions || 0 }}</strong>
+				</div>
+			</article>
+		</section>
 
-	<section class="summary-grid">
-		<article class="surface-card">
-			<Bot :size="19" />
+		<div class="endpoint-card">
+			<ShieldCheck :size="18" />
 			<div>
-				<small>MCP tools</small><strong>{{ workspace.metrics.mcp_tools || 0 }}</strong>
+				<strong>Authenticated MCP endpoint</strong>
+				<code>{{ workspace.mcp_endpoint }}</code>
 			</div>
-		</article>
-		<article class="surface-card">
-			<Braces :size="19" />
-			<div>
-				<small>Flow actions</small
-				><strong>{{ workspace.metrics.flow_actions || 0 }}</strong>
-			</div>
-		</article>
-		<article class="surface-card">
-			<PlugZap :size="19" />
-			<div>
-				<small>Configured extensions</small
-				><strong>{{ workspace.metrics.configured_extensions || 0 }}</strong>
-			</div>
-		</article>
-	</section>
-
-	<div class="endpoint-card">
-		<ShieldCheck :size="18" />
-		<div>
-			<strong>Authenticated MCP endpoint</strong>
-			<code>{{ workspace.mcp_endpoint }}</code>
+			<span>Stateless · audited · no arbitrary code</span>
 		</div>
-		<span>Stateless · audited · no arbitrary code</span>
-	</div>
 
-	<section class="surface-card registry-card">
-		<header>
-			<div>
-				<div class="eyebrow">Company layer</div>
-				<h2>Extension points</h2>
+		<section class="surface-card registry-card">
+			<header>
+				<div>
+					<div class="eyebrow">Company layer</div>
+					<h2>Extension points</h2>
+				</div>
+			</header>
+			<div v-if="loading" class="loading">
+				<Skeleton v-for="index in 5" :key="index" height="58px" />
 			</div>
-		</header>
-		<div v-if="loading" class="loading">
-			<Skeleton v-for="index in 5" :key="index" height="58px" />
-		</div>
-		<DataTable v-else :value="workspace.extension_points" striped-rows>
-			<Column field="label" header="Capability" />
-			<Column field="description" header="Purpose" />
-			<Column field="requirement" header="Contract" />
-			<Column field="configured" header="Installed" />
-			<Column field="status" header="Status">
-				<template #body="{ data }">
+			<DataTable v-else :value="workspace.extension_points" striped-rows>
+				<Column field="label" header="Capability" />
+				<Column field="description" header="Purpose" />
+				<Column field="requirement" header="Contract" />
+				<Column field="configured" header="Installed" />
+				<Column field="status" header="Status">
+					<template #body="{ data }">
+						<Tag
+							:value="data.status"
+							:severity="data.status === 'Healthy' ? 'success' : 'warn'"
+							rounded
+						/>
+					</template>
+				</Column>
+			</DataTable>
+		</section>
+
+		<div class="connector-grid">
+			<section class="surface-card registry-card">
+				<header>
+					<div>
+						<div class="eyebrow">External AI</div>
+						<h2>MCP tool allowlist</h2>
+					</div>
+					<Tag :value="`${workspace.mcp_tools.length} tools`" severity="info" rounded />
+				</header>
+				<div class="capability-list">
+					<div v-for="tool in workspace.mcp_tools" :key="tool.name">
+						<Bot :size="15" />
+						<span
+							><strong>{{ tool.name }}</strong
+							><small>{{ tool.description }}</small></span
+						>
+					</div>
+				</div>
+			</section>
+
+			<section class="surface-card registry-card">
+				<header>
+					<div>
+						<div class="eyebrow">Flow engine</div>
+						<h2>Registered actions</h2>
+					</div>
 					<Tag
-						:value="data.status"
-						:severity="data.status === 'Healthy' ? 'success' : 'warn'"
+						:value="`${workspace.flow_actions.length} actions`"
+						severity="success"
 						rounded
 					/>
-				</template>
-			</Column>
-		</DataTable>
-	</section>
-
-	<div class="connector-grid">
-		<section class="surface-card registry-card">
-			<header>
-				<div>
-					<div class="eyebrow">External AI</div>
-					<h2>MCP tool allowlist</h2>
+				</header>
+				<div class="capability-list compact">
+					<div v-for="action in workspace.flow_actions" :key="action">
+						<Braces :size="15" />
+						<span
+							><strong>{{ action }}</strong
+							><small>Typed and explicitly registered</small></span
+						>
+					</div>
 				</div>
-				<Tag :value="`${workspace.mcp_tools.length} tools`" severity="info" rounded />
-			</header>
-			<div class="capability-list">
-				<div v-for="tool in workspace.mcp_tools" :key="tool.name">
-					<Bot :size="15" />
-					<span
-						><strong>{{ tool.name }}</strong
-						><small>{{ tool.description }}</small></span
-					>
-				</div>
-			</div>
-		</section>
-
-		<section class="surface-card registry-card">
-			<header>
-				<div>
-					<div class="eyebrow">Flow engine</div>
-					<h2>Registered actions</h2>
-				</div>
-				<Tag
-					:value="`${workspace.flow_actions.length} actions`"
-					severity="success"
-					rounded
-				/>
-			</header>
-			<div class="capability-list compact">
-				<div v-for="action in workspace.flow_actions" :key="action">
-					<Braces :size="15" />
-					<span
-						><strong>{{ action }}</strong
-						><small>Typed and explicitly registered</small></span
-					>
-				</div>
-			</div>
-		</section>
-	</div>
+			</section>
+		</div>
+	</template>
 </template>
 
 <style scoped>

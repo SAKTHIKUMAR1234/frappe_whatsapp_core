@@ -23,6 +23,13 @@ def _account(account_name=None):
 def group_workspace(account_name=None, limit=100, after=None, before=None):
 	accounts = []
 	selected = None
+	templates = frappe.get_all(
+		"WhatsApp Core Template",
+		filters={"approval_status": "APPROVED", "enabled": 1},
+		fields=["name", "template_name", "language_code", "body_text"],
+		order_by="template_name asc, language_code asc",
+		limit_page_length=500,
+	)
 	try:
 		accounts = _accounts()
 		selected = _account(account_name)
@@ -35,6 +42,7 @@ def group_workspace(account_name=None, limit=100, after=None, before=None):
 			"error": "",
 			"accounts": accounts,
 			"selected_account": selected,
+			"templates": templates,
 			**result,
 		}
 	except Exception as error:
@@ -42,6 +50,7 @@ def group_workspace(account_name=None, limit=100, after=None, before=None):
 			error,
 			accounts=accounts,
 			selected_account=selected,
+			templates=templates,
 			data=[],
 		)
 

@@ -294,6 +294,32 @@ def list_teams() -> list[dict]:
 
 @frappe.whitelist()
 @require_core_access(manage=True)
+def team_workspace() -> dict:
+	"""Return the team editor data in one request.
+
+	The UI must select real Frappe users instead of accepting unchecked email
+	text.  Keeping the candidate list beside the team rows also avoids one API
+	request per team while editing.
+	"""
+	users = frappe.get_all(
+		"User",
+		filters={"enabled": 1},
+		fields=["name", "full_name", "user_image", "user_type"],
+		order_by="full_name asc, name asc",
+		limit_page_length=5000,
+	)
+	users = [user for user in users if user.name != "Guest"]
+	for user in users:
+		user["label"] = (
+			f"{user.full_name} ({user.name})"
+			if user.full_name and user.full_name != user.name
+			else user.name
+		)
+	return {"teams": list_teams(), "users": users}
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
 def upsert_team(
 	team_name: str,
 	description: str = "",
@@ -332,6 +358,11 @@ def upsert_team(
 			"enabled": 1 if member.get("enabled", True) else 0,
 		})
 	doc.save(ignore_permissions=True)
+	frappe.publish_realtime(
+		"whatsapp_core_team",
+		{"team": doc.name, "operation": "updated"},
+		after_commit=True,
+	)
 	return doc.as_dict()
 
 

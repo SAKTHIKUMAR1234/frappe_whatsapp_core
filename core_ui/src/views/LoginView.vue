@@ -1,11 +1,13 @@
 <script setup>
-	import { ref } from 'vue'
+	import { computed, ref } from 'vue'
 	import { useRoute, useRouter } from 'vue-router'
 	import Button from 'primevue/button'
 	import InputText from 'primevue/inputtext'
 	import Password from 'primevue/password'
+	import Message from 'primevue/message'
 	import { MessageCircleMore } from 'lucide-vue-next'
 	import { useSessionStore } from '@/stores/session'
+	import { errorMessage } from '@/services/frappe'
 
 	const session = useSessionStore()
 	const route = useRoute()
@@ -14,15 +16,21 @@
 	const password = ref('')
 	const error = ref('')
 	const submitting = ref(false)
+	const attempted = ref(false)
+	const sessionNotice = computed(() =>
+		route.query.expired ? 'Your session expired. Sign in again to continue.' : '',
+	)
 
 	async function submit() {
+		attempted.value = true
 		error.value = ''
+		if (!email.value.trim() || !password.value) return
 		submitting.value = true
 		try {
 			await session.login(email.value, password.value)
 			router.push(route.query.redirect || '/')
 		} catch (exception) {
-			error.value = exception.response?.data?.message || 'Unable to sign in'
+			error.value = errorMessage(exception, 'Unable to sign in with those credentials.')
 		} finally {
 			submitting.value = false
 		}
@@ -56,6 +64,9 @@
 				<div class="eyebrow">Company workspace</div>
 				<h2>Welcome back</h2>
 				<p>Sign in with your Frappe account.</p>
+				<Message v-if="sessionNotice" severity="warn" :closable="false">{{
+					sessionNotice
+				}}</Message>
 				<label>Email</label>
 				<InputText
 					v-model="email"
@@ -63,7 +74,11 @@
 					placeholder="you@company.com"
 					fluid
 					autofocus
+					:invalid="attempted && !email.trim()"
 				/>
+				<small v-if="attempted && !email.trim()" class="field-error"
+					>Enter your email address.</small
+				>
 				<label>Password</label>
 				<Password
 					v-model="password"
@@ -71,8 +86,12 @@
 					toggle-mask
 					fluid
 					placeholder="Your password"
+					:invalid="attempted && !password"
 				/>
-				<div v-if="error" class="error">{{ error }}</div>
+				<small v-if="attempted && !password" class="field-error"
+					>Enter your password.</small
+				>
+				<Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 				<Button
 					type="submit"
 					label="Sign in to WhatsApp Core"
@@ -203,6 +222,15 @@
 		background: #fff0f0;
 		color: #b42318;
 		font-size: 11px;
+	}
+	.field-error {
+		display: block;
+		margin-top: 6px;
+		color: #b42318;
+		font-size: 11px;
+	}
+	form :deep(.p-message) {
+		margin: 14px 0;
 	}
 	form > .p-button {
 		margin-top: 22px;

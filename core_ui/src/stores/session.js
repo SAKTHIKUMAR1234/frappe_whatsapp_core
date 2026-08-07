@@ -28,5 +28,9 @@ export const useSessionStore = defineStore('core-session', () => {
 		boot.value = { authenticated: false }
 	}
 
-	return { boot, loading, authenticated, user, fetchBoot, login, logout }
+	function expire() {
+		boot.value = { authenticated: false }
+	}
+
+	return { boot, loading, authenticated, user, fetchBoot, login, logout, expire }
 })

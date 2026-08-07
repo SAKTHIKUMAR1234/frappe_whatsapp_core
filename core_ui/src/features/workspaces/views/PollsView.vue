@@ -7,10 +7,13 @@
 	import Select from 'primevue/select'
 	import Tag from 'primevue/tag'
 	import { GitBranch, MessageCircleQuestion } from 'lucide-vue-next'
+	import AsyncState from '@/components/AsyncState.vue'
 	import { flowWorkspace } from '@/features/flows/services/flowService'
+	import { errorMessage } from '@/services/frappe'
 
 	const router = useRouter()
 	const loading = ref(true)
+	const loadError = ref('')
 	const workspace = ref({ accounts: [], flows: [], selected_account: '' })
 	const selectedAccount = ref('')
 	const forms = computed(() =>
@@ -24,9 +27,12 @@
 	)
 	async function load(account = selectedAccount.value) {
 		loading.value = true
+		loadError.value = ''
 		try {
 			workspace.value = await flowWorkspace(account)
 			selectedAccount.value = workspace.value.selected_account
+		} catch (error) {
+			loadError.value = errorMessage(error, 'Unable to load Meta forms and surveys.')
 		} finally {
 			loading.value = false
 		}
@@ -55,53 +61,57 @@
 			><template #icon><GitBranch :size="16" /></template
 		></Button>
 	</div>
-	<div class="engine-note">
-		<MessageCircleQuestion :size="18" />
-		<div>
-			<strong>No message-by-message form emulation</strong
-			><span
-				>Core launches the published Meta Flow and stores only WhatsApp events and
-				operational logs.</span
-			>
+	<AsyncState v-if="loadError" :error="loadError" @retry="() => load(selectedAccount)" />
+	<template v-else>
+		<div class="engine-note">
+			<MessageCircleQuestion :size="18" />
+			<div>
+				<strong>No message-by-message form emulation</strong
+				><span
+					>Core launches the published Meta Flow and stores only WhatsApp events and
+					operational logs.</span
+				>
+			</div>
+			<Select
+				v-model="selectedAccount"
+				:options="workspace.accounts"
+				option-label="display_name"
+				option-value="account_name"
+				@change="load($event.value)"
+			/>
 		</div>
-		<Select
-			v-model="selectedAccount"
-			:options="workspace.accounts"
-			option-label="display_name"
-			option-value="account_name"
-			@change="load($event.value)"
-		/>
-	</div>
-	<section class="surface-card poll-table">
-		<DataTable :value="forms" :loading="loading" striped-rows
-			><Column header="Native Flow"
-				><template #body="{ data }"
-					><button class="flow-name" @click="open(data)">
-						<span><MessageCircleQuestion :size="17" /></span>
-						<div>
-							<strong>{{ data.name }}</strong
-							><small>Meta ID {{ data.id }}</small>
-						</div>
-					</button></template
-				></Column
-			><Column header="Category"
-				><template #body="{ data }">{{
-					(data.categories || []).join(', ')
-				}}</template></Column
-			><Column field="status" header="Status"
-				><template #body="{ data }"
-					><Tag
-						:value="data.status"
-						:severity="data.status === 'PUBLISHED' ? 'success' : 'warn'"
-						rounded /></template></Column
-			><template #empty
-				><div class="empty">
-					<MessageCircleQuestion :size="30" /><strong>No form-oriented Meta Flows</strong
-					><span>Create a SURVEY, LEAD_GENERATION or CONTACT_US Flow.</span>
-				</div></template
-			></DataTable
-		>
-	</section>
+		<section class="surface-card poll-table">
+			<DataTable :value="forms" :loading="loading" striped-rows
+				><Column header="Native Flow"
+					><template #body="{ data }"
+						><button class="flow-name" @click="open(data)">
+							<span><MessageCircleQuestion :size="17" /></span>
+							<div>
+								<strong>{{ data.name }}</strong
+								><small>Meta ID {{ data.id }}</small>
+							</div>
+						</button></template
+					></Column
+				><Column header="Category"
+					><template #body="{ data }">{{
+						(data.categories || []).join(', ')
+					}}</template></Column
+				><Column field="status" header="Status"
+					><template #body="{ data }"
+						><Tag
+							:value="data.status"
+							:severity="data.status === 'PUBLISHED' ? 'success' : 'warn'"
+							rounded /></template></Column
+				><template #empty
+					><div class="empty">
+						<MessageCircleQuestion :size="30" /><strong
+							>No form-oriented Meta Flows</strong
+						><span>Create a SURVEY, LEAD_GENERATION or CONTACT_US Flow.</span>
+					</div></template
+				></DataTable
+			>
+		</section>
+	</template>
 </template>
 
 <style scoped>

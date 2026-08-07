@@ -22,11 +22,13 @@
 		Users,
 	} from 'lucide-vue-next'
 
-	import { call } from '@/services/frappe'
+	import AsyncState from '@/components/AsyncState.vue'
+	import { call, errorMessage } from '@/services/frappe'
 
 	const toast = useToast()
 	const loading = ref(true)
 	const saving = ref(false)
+	const loadError = ref('')
 	const workspace = ref({
 		campaigns: [],
 		templates: [],
@@ -73,8 +75,11 @@
 
 	async function load() {
 		loading.value = true
+		loadError.value = ''
 		try {
 			workspace.value = await call('frappe_whatsapp_core.frontend_api.campaign_workspace')
+		} catch (error) {
+			loadError.value = errorMessage(error, 'Unable to load campaigns.')
 		} finally {
 			loading.value = false
 		}
@@ -191,14 +196,10 @@
 	}
 
 	function showError(error) {
-		const payload = error?.response?.data
-		const detail = payload?.exception
-			? payload.exception.split(':').at(-1)
-			: payload?.message || error.message || 'Request failed'
 		toast.add({
 			severity: 'error',
 			summary: 'Campaign action blocked',
-			detail,
+			detail: errorMessage(error, 'Campaign action failed.'),
 			life: 5000,
 		})
 	}
@@ -217,281 +218,294 @@
 			<template #icon><Plus :size="16" /></template>
 		</Button>
 	</div>
+	<AsyncState v-if="loadError" :error="loadError" @retry="load" />
+	<template v-else>
+		<section class="metric-grid">
+			<article class="surface-card metric-card">
+				<span class="metric-icon draft"><CircleDashed :size="18" /></span>
+				<div>
+					<small>Draft / prepared</small
+					><strong>{{ workspace.metrics.drafts || 0 }}</strong>
+				</div>
+			</article>
+			<article class="surface-card metric-card">
+				<span class="metric-icon scheduled"><Clock3 :size="18" /></span>
+				<div>
+					<small>Scheduled</small><strong>{{ workspace.metrics.scheduled || 0 }}</strong>
+				</div>
+			</article>
+			<article class="surface-card metric-card">
+				<span class="metric-icon delivered"><BadgeCheck :size="18" /></span>
+				<div>
+					<small>Delivered / read</small
+					><strong>{{ workspace.metrics.delivered || 0 }}</strong>
+				</div>
+			</article>
+		</section>
 
-	<section class="metric-grid">
-		<article class="surface-card metric-card">
-			<span class="metric-icon draft"><CircleDashed :size="18" /></span>
+		<section class="surface-card safety-pipeline">
 			<div>
-				<small>Draft / prepared</small><strong>{{ workspace.metrics.drafts || 0 }}</strong>
+				<Users :size="18" /><span
+					><strong>1. Audience</strong><small>Exact Core identities</small></span
+				>
 			</div>
-		</article>
-		<article class="surface-card metric-card">
-			<span class="metric-icon scheduled"><Clock3 :size="18" /></span>
+			<i></i>
 			<div>
-				<small>Scheduled</small><strong>{{ workspace.metrics.scheduled || 0 }}</strong>
+				<BadgeCheck :size="18" /><span
+					><strong>2. Meta approval</strong><small>Owned by Integration</small></span
+				>
 			</div>
-		</article>
-		<article class="surface-card metric-card">
-			<span class="metric-icon delivered"><BadgeCheck :size="18" /></span>
+			<i></i>
 			<div>
-				<small>Delivered / read</small
-				><strong>{{ workspace.metrics.delivered || 0 }}</strong>
+				<ShieldCheck :size="18" /><span
+					><strong>3. SEND gate</strong><small>Named human approval</small></span
+				>
 			</div>
-		</article>
-	</section>
+			<i></i>
+			<div>
+				<Send :size="18" /><span
+					><strong>4. Durable queue</strong><small>One Meta send at a time</small></span
+				>
+			</div>
+		</section>
 
-	<section class="surface-card safety-pipeline">
-		<div>
-			<Users :size="18" /><span
-				><strong>1. Audience</strong><small>Exact Core identities</small></span
-			>
-		</div>
-		<i></i>
-		<div>
-			<BadgeCheck :size="18" /><span
-				><strong>2. Meta approval</strong><small>Owned by Integration</small></span
-			>
-		</div>
-		<i></i>
-		<div>
-			<ShieldCheck :size="18" /><span
-				><strong>3. SEND gate</strong><small>Named human approval</small></span
-			>
-		</div>
-		<i></i>
-		<div>
-			<Send :size="18" /><span
-				><strong>4. Durable queue</strong><small>One Meta send at a time</small></span
-			>
-		</div>
-	</section>
-
-	<section class="surface-card campaign-list">
-		<div class="list-heading">
-			<div>
-				<div class="eyebrow">Site-local records</div>
-				<h2>Campaigns</h2>
+		<section class="surface-card campaign-list">
+			<div class="list-heading">
+				<div>
+					<div class="eyebrow">Site-local records</div>
+					<h2>Campaigns</h2>
+				</div>
+				<span>{{ workspace.campaigns.length }} total</span>
 			</div>
-			<span>{{ workspace.campaigns.length }} total</span>
-		</div>
 
-		<div v-if="loading" class="loading">
-			<Skeleton v-for="index in 5" :key="index" height="58px" />
-		</div>
-		<DataTable v-else :value="workspace.campaigns" striped-rows>
-			<Column header="Campaign">
-				<template #body="{ data }">
-					<div class="campaign-name">
-						<span><Megaphone :size="17" /></span>
-						<div>
-							<strong>{{ data.title }}</strong
-							><small>{{ data.campaign_key }}</small>
+			<div v-if="loading" class="loading">
+				<Skeleton v-for="index in 5" :key="index" height="58px" />
+			</div>
+			<DataTable v-else :value="workspace.campaigns" striped-rows>
+				<Column header="Campaign">
+					<template #body="{ data }">
+						<div class="campaign-name">
+							<span><Megaphone :size="17" /></span>
+							<div>
+								<strong>{{ data.title }}</strong
+								><small>{{ data.campaign_key }}</small>
+							</div>
 						</div>
-					</div>
-				</template>
-			</Column>
-			<Column header="Audience">
-				<template #body="{ data }">
-					<div class="count-cell">
-						<strong>{{ data.recipient_count }}</strong
-						><small>recipients</small>
-					</div>
-				</template>
-			</Column>
-			<Column header="Safety gates">
-				<template #body="{ data }">
-					<div class="gate-stack">
-						<span :class="{ passed: data.template_approval_status === 'APPROVED' }">
-							<i></i>Meta {{ data.template_approval_status.toLowerCase() }}
-						</span>
-						<span :class="{ passed: data.send_authorized }">
-							<i></i
-							>{{
-								data.send_authorized
-									? `SEND · ${data.authorized_by}`
-									: 'SEND locked'
-							}}
-						</span>
-					</div>
-				</template>
-			</Column>
-			<Column header="Progress">
-				<template #body="{ data }">
-					<div class="progress-copy">
-						<span>{{ data.queued_count }} queued</span>
-						<span>{{ data.delivered_count + data.read_count }} delivered</span>
-						<span v-if="data.failed_count" class="failure"
-							>{{ data.failed_count }} failed</span
+					</template>
+				</Column>
+				<Column header="Audience">
+					<template #body="{ data }">
+						<div class="count-cell">
+							<strong>{{ data.recipient_count }}</strong
+							><small>recipients</small>
+						</div>
+					</template>
+				</Column>
+				<Column header="Safety gates">
+					<template #body="{ data }">
+						<div class="gate-stack">
+							<span
+								:class="{ passed: data.template_approval_status === 'APPROVED' }"
+							>
+								<i></i>Meta {{ data.template_approval_status.toLowerCase() }}
+							</span>
+							<span :class="{ passed: data.send_authorized }">
+								<i></i
+								>{{
+									data.send_authorized
+										? `SEND · ${data.authorized_by}`
+										: 'SEND locked'
+								}}
+							</span>
+						</div>
+					</template>
+				</Column>
+				<Column header="Progress">
+					<template #body="{ data }">
+						<div class="progress-copy">
+							<span>{{ data.queued_count }} queued</span>
+							<span>{{ data.delivered_count + data.read_count }} delivered</span>
+							<span v-if="data.failed_count" class="failure"
+								>{{ data.failed_count }} failed</span
+							>
+						</div>
+					</template>
+				</Column>
+				<Column field="status" header="Status">
+					<template #body="{ data }">
+						<Tag
+							:value="data.status"
+							:severity="statusSeverity(data.status)"
+							rounded
+						/>
+					</template>
+				</Column>
+				<Column>
+					<template #body="{ data }">
+						<Button
+							v-if="
+								['Draft', 'Prepared'].includes(data.status) &&
+								!data.send_authorized &&
+								!data.recipient_count
+							"
+							label="Prepare audience"
+							size="small"
+							outlined
+							@click="openPrepare(data)"
+						/>
+						<Button
+							v-else-if="data.status === 'Prepared' && !data.send_authorized"
+							label="Authorize"
+							size="small"
+							outlined
+							@click="openAuthorization(data)"
+						/>
+						<Button
+							v-else-if="data.status === 'Prepared' && data.send_authorized"
+							label="Start"
+							size="small"
+							:loading="saving"
+							@click="launch(data)"
+						/>
+					</template>
+				</Column>
+				<template #empty>
+					<div class="empty">
+						<Megaphone :size="30" />
+						<strong>No campaigns yet</strong>
+						<span
+							>Create a draft; the business layer supplies its exact audience.</span
 						>
 					</div>
 				</template>
-			</Column>
-			<Column field="status" header="Status">
-				<template #body="{ data }">
-					<Tag :value="data.status" :severity="statusSeverity(data.status)" rounded />
-				</template>
-			</Column>
-			<Column>
-				<template #body="{ data }">
-					<Button
-						v-if="
-							['Draft', 'Prepared'].includes(data.status) &&
-							!data.send_authorized &&
-							!data.recipient_count
-						"
-						label="Prepare audience"
-						size="small"
-						outlined
-						@click="openPrepare(data)"
-					/>
-					<Button
-						v-else-if="data.status === 'Prepared' && !data.send_authorized"
-						label="Authorize"
-						size="small"
-						outlined
-						@click="openAuthorization(data)"
-					/>
-					<Button
-						v-else-if="data.status === 'Prepared' && data.send_authorized"
-						label="Start"
-						size="small"
-						:loading="saving"
-						@click="launch(data)"
-					/>
-				</template>
-			</Column>
-			<template #empty>
-				<div class="empty">
-					<Megaphone :size="30" />
-					<strong>No campaigns yet</strong>
-					<span>Create a draft; the business layer supplies its exact audience.</span>
-				</div>
-			</template>
-		</DataTable>
-	</section>
+			</DataTable>
+		</section>
 
-	<Dialog
-		v-model:visible="createDialog"
-		modal
-		header="Create campaign draft"
-		:style="{ width: '470px' }"
-	>
-		<div class="dialog-note">
-			This creates only a draft. It cannot send until an exact audience, Meta-approved
-			template and separate SEND authorization are present.
-		</div>
-		<label>Campaign title</label>
-		<InputText v-model="form.title" fluid placeholder="August retailer follow-up" />
-		<label>Unique key</label>
-		<InputText v-model="form.campaign_key" fluid placeholder="campaign.august_follow_up" />
-		<label>Channel</label>
-		<Select
-			v-model="form.channel"
-			:options="workspace.channels"
-			option-label="display_name"
-			option-value="name"
-			placeholder="Select assigned number"
-			fluid
-		/>
-		<label>Template</label>
-		<Select
-			v-model="form.template"
-			:options="approvedTemplates"
-			option-label="label"
-			option-value="name"
-			option-disabled="disabled"
-			placeholder="Select an approved template"
-			fluid
-		/>
-		<label>Description</label>
-		<Textarea
-			v-model="form.description"
-			rows="3"
-			fluid
-			placeholder="Purpose and audience notes"
-		/>
-		<template #footer>
-			<Button label="Cancel" text @click="createDialog = false" />
-			<Button
-				label="Create draft"
-				:disabled="!form.title || !form.campaign_key || !form.channel || !form.template"
-				:loading="saving"
-				@click="createCampaign"
-			/>
-		</template>
-	</Dialog>
-
-	<Dialog
-		v-model:visible="prepareDialog"
-		modal
-		header="Prepare exact audience"
-		:style="{ width: '620px', maxWidth: '94vw' }"
-	>
-		<div class="dialog-note">
-			Select the exact active Core identities for this campaign. Preparing replaces the
-			current unauthorized audience and does not send anything.
-		</div>
-		<label>Recipients</label>
-		<MultiSelect
-			v-model="selectedAudience"
-			:options="workspace.identities"
-			option-value="name"
-			filter
-			display="chip"
-			placeholder="Search active identities"
-			:max-selected-labels="8"
-			fluid
+		<Dialog
+			v-model:visible="createDialog"
+			modal
+			header="Create campaign draft"
+			:style="{ width: '470px' }"
 		>
-			<template #option="{ option }">
-				<div class="identity-option">
-					<strong>{{ option.display_value || option.normalized_value }}</strong>
-					<small>{{ option.normalized_value }} · {{ option.name }}</small>
-				</div>
-			</template>
-		</MultiSelect>
-		<small class="selection-count">{{ selectedAudience.length }} selected</small>
-		<template #footer>
-			<Button label="Cancel" text @click="prepareDialog = false" />
-			<Button
-				label="Prepare audience"
-				:disabled="!selectedAudience.length"
-				:loading="saving"
-				@click="prepare"
-			/>
-		</template>
-	</Dialog>
-
-	<Dialog
-		v-model:visible="authorizationDialog"
-		modal
-		header="Authorize SEND"
-		:style="{ width: '470px' }"
-	>
-		<div class="authorization-warning">
-			<ShieldCheck :size="22" />
-			<div>
-				<strong>This is independent of Meta template approval.</strong>
-				<p>
-					{{ selectedCampaign?.recipient_count || 0 }} prepared recipients will become
-					eligible to queue.
-				</p>
+			<div class="dialog-note">
+				This creates only a draft. It cannot send until an exact audience, Meta-approved
+				template and separate SEND authorization are present.
 			</div>
-		</div>
-		<label
-			>Type exactly: <code>{{ expectedAuthorization }}</code></label
-		>
-		<InputText v-model="authorizationText" fluid />
-		<template #footer>
-			<Button label="Cancel" text @click="authorizationDialog = false" />
-			<Button
-				label="Authorize SEND"
-				severity="danger"
-				:disabled="authorizationText !== expectedAuthorization"
-				:loading="saving"
-				@click="authorize"
+			<label>Campaign title</label>
+			<InputText v-model="form.title" fluid placeholder="August retailer follow-up" />
+			<label>Unique key</label>
+			<InputText v-model="form.campaign_key" fluid placeholder="campaign.august_follow_up" />
+			<label>Channel</label>
+			<Select
+				v-model="form.channel"
+				:options="workspace.channels"
+				option-label="display_name"
+				option-value="name"
+				placeholder="Select assigned number"
+				fluid
 			/>
-		</template>
-	</Dialog>
+			<label>Template</label>
+			<Select
+				v-model="form.template"
+				:options="approvedTemplates"
+				option-label="label"
+				option-value="name"
+				option-disabled="disabled"
+				placeholder="Select an approved template"
+				fluid
+			/>
+			<label>Description</label>
+			<Textarea
+				v-model="form.description"
+				rows="3"
+				fluid
+				placeholder="Purpose and audience notes"
+			/>
+			<template #footer>
+				<Button label="Cancel" text @click="createDialog = false" />
+				<Button
+					label="Create draft"
+					:disabled="
+						!form.title || !form.campaign_key || !form.channel || !form.template
+					"
+					:loading="saving"
+					@click="createCampaign"
+				/>
+			</template>
+		</Dialog>
+
+		<Dialog
+			v-model:visible="prepareDialog"
+			modal
+			header="Prepare exact audience"
+			:style="{ width: '620px', maxWidth: '94vw' }"
+		>
+			<div class="dialog-note">
+				Select the exact active Core identities for this campaign. Preparing replaces the
+				current unauthorized audience and does not send anything.
+			</div>
+			<label>Recipients</label>
+			<MultiSelect
+				v-model="selectedAudience"
+				:options="workspace.identities"
+				option-value="name"
+				filter
+				display="chip"
+				placeholder="Search active identities"
+				:max-selected-labels="8"
+				fluid
+			>
+				<template #option="{ option }">
+					<div class="identity-option">
+						<strong>{{ option.display_value || option.normalized_value }}</strong>
+						<small>{{ option.normalized_value }} · {{ option.name }}</small>
+					</div>
+				</template>
+			</MultiSelect>
+			<small class="selection-count">{{ selectedAudience.length }} selected</small>
+			<template #footer>
+				<Button label="Cancel" text @click="prepareDialog = false" />
+				<Button
+					label="Prepare audience"
+					:disabled="!selectedAudience.length"
+					:loading="saving"
+					@click="prepare"
+				/>
+			</template>
+		</Dialog>
+
+		<Dialog
+			v-model:visible="authorizationDialog"
+			modal
+			header="Authorize SEND"
+			:style="{ width: '470px' }"
+		>
+			<div class="authorization-warning">
+				<ShieldCheck :size="22" />
+				<div>
+					<strong>This is independent of Meta template approval.</strong>
+					<p>
+						{{ selectedCampaign?.recipient_count || 0 }} prepared recipients will
+						become eligible to queue.
+					</p>
+				</div>
+			</div>
+			<label
+				>Type exactly: <code>{{ expectedAuthorization }}</code></label
+			>
+			<InputText v-model="authorizationText" fluid />
+			<template #footer>
+				<Button label="Cancel" text @click="authorizationDialog = false" />
+				<Button
+					label="Authorize SEND"
+					severity="danger"
+					:disabled="authorizationText !== expectedAuthorization"
+					:loading="saving"
+					@click="authorize"
+				/>
+			</template>
+		</Dialog>
+	</template>
 </template>
 
 <style scoped>

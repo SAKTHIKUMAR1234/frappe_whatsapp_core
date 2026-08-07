@@ -22,7 +22,13 @@
 		showSettings = ref(false),
 		showAction = ref(false),
 		showOutreach = ref(false)
-	const workspace = ref({ accounts: [], calls: [], settings: {}, selected_account: '' })
+	const workspace = ref({
+		accounts: [],
+		calls: [],
+		templates: [],
+		settings: {},
+		selected_account: '',
+	})
 	const settingsJson = ref('{}')
 	const form = ref({
 		action: 'connect',
@@ -53,6 +59,7 @@
 		recipient: '',
 		body_text: 'May we call you on WhatsApp?',
 	})
+	const ACTION_FAILED = Symbol('action-failed')
 	let unsubscribe = () => {}
 	async function run(name, task, success = '') {
 		action.value = name
@@ -64,7 +71,7 @@
 			return result
 		} catch (e) {
 			error.value = errorMessage(e)
-			throw e
+			return ACTION_FAILED
 		} finally {
 			action.value = ''
 		}
@@ -97,7 +104,7 @@
 			error.value = 'Calling settings must be valid JSON.'
 			return
 		}
-		await run(
+		const result = await run(
 			'settings',
 			() =>
 				call('frappe_whatsapp_core.calling.update_call_settings', {
@@ -106,6 +113,7 @@
 				}),
 			'Calling settings saved.',
 		)
+		if (result === ACTION_FAILED) return
 		showSettings.value = false
 		await load()
 	}
@@ -117,6 +125,7 @@
 				recipient: permission.value.recipient || null,
 			}),
 		)
+		if (result === ACTION_FAILED) return
 		notice.value = JSON.stringify(result)
 	}
 	async function requestPermission() {
@@ -164,7 +173,7 @@
 			values.recording = { status: 'ENABLED', purpose, announcement_language }
 		if (['connect', 'accept'].includes(values.action) && transcription_enabled)
 			values.transcription = { status: 'ENABLED', purpose, announcement_language }
-		await run(
+		const result = await run(
 			'call',
 			() =>
 				call('frappe_whatsapp_core.calling.call_action', {
@@ -173,6 +182,7 @@
 				}),
 			`Call action “${values.action}” sent.`,
 		)
+		if (result === ACTION_FAILED) return
 		showAction.value = false
 		await load()
 	}
@@ -185,11 +195,12 @@
 					biz_payload: values.payload || null,
 				}),
 			)
+			if (result === ACTION_FAILED) return
 			notice.value = result?.url || 'Call deep link generated.'
 		} else {
 			const method =
 				values.operation === 'template' ? 'send_call_button_template' : 'send_call_button'
-			await run(
+			const result = await run(
 				'outreach',
 				() =>
 					call(`frappe_whatsapp_core.calling.${method}`, {
@@ -205,13 +216,14 @@
 					}),
 				'Call invitation queued.',
 			)
+			if (result === ACTION_FAILED) return
 		}
 		showOutreach.value = false
 	}
 	async function uploadVoicemail(event) {
 		const file = event.target.files?.[0]
 		if (!file) return
-		await run('voicemail', async () => {
+		const result = await run('voicemail', async () => {
 			const stored = await uploadFile(file, true)
 			const result = await call(
 				'frappe_whatsapp_core.calling.upload_voicemail_announcement',
@@ -220,6 +232,7 @@
 			notice.value = `Voicemail media uploaded: ${result.media_id || ''}`
 			return result
 		})
+		if (result === ACTION_FAILED) return
 		event.target.value = ''
 	}
 	async function openArtifact(mediaId) {
@@ -230,6 +243,7 @@
 				download: 1,
 			}),
 		)
+		if (result === ACTION_FAILED) return
 		if (result?.file_url) window.open(result.file_url, '_blank', 'noopener')
 	}
 	onMounted(() => {
@@ -492,7 +506,13 @@
 				>Button label<InputText v-model="outreach.display_text" maxlength="20"
 			/></label>
 			<label v-if="outreach.operation === 'template'"
-				>Template name<InputText v-model="outreach.template_name"
+				>Approved template<Select
+					v-model="outreach.template_name"
+					:options="workspace.templates || []"
+					option-label="template_name"
+					option-value="template_name"
+					filter
+					placeholder="Select a synced Meta template"
 			/></label>
 			<label v-if="outreach.operation === 'template'"
 				>Language code<InputText v-model="outreach.language_code"

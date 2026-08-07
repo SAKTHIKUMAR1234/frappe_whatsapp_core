@@ -11,11 +11,13 @@
 	import Textarea from 'primevue/textarea'
 	import { Bot, CircleCheck, Layers3, RefreshCw, TriangleAlert } from 'lucide-vue-next'
 
-	import { call } from '@/services/frappe'
+	import AsyncState from '@/components/AsyncState.vue'
+	import { call, errorMessage } from '@/services/frappe'
 
 	const toast = useToast()
 	const loading = ref(true)
 	const saving = ref(false)
+	const loadError = ref('')
 	const dialogVisible = ref(false)
 	const selected = ref([])
 	const workspace = ref({
@@ -38,9 +40,12 @@
 
 	async function load() {
 		loading.value = true
+		loadError.value = ''
 		try {
 			workspace.value = await call('frappe_whatsapp_core.frontend_api.ai_queue_workspace')
 			selected.value = []
+		} catch (error) {
+			loadError.value = errorMessage(error, 'Unable to load the AI review queue.')
 		} finally {
 			loading.value = false
 		}
@@ -67,6 +72,13 @@
 				summary: 'Topic created',
 				detail: 'The selected messages are no longer in the unclassified queue.',
 				life: 3500,
+			})
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Could not create topic',
+				detail: errorMessage(error),
+				life: 5000,
 			})
 		} finally {
 			saving.value = false
@@ -99,144 +111,148 @@
 			</Button>
 		</div>
 	</div>
-
-	<section class="summary-grid">
-		<article class="surface-card attention">
-			<TriangleAlert :size="19" />
-			<div>
-				<small>Needs review</small
-				><strong>{{ workspace.metrics.needs_review || 0 }}</strong>
-			</div>
-		</article>
-		<article class="surface-card">
-			<CircleCheck :size="19" />
-			<div>
-				<small>MCP completed</small
-				><strong>{{ workspace.metrics.mcp_completed || 0 }}</strong>
-			</div>
-		</article>
-		<article class="surface-card">
-			<Layers3 :size="19" />
-			<div>
-				<small>Open topics</small><strong>{{ workspace.metrics.open_topics || 0 }}</strong>
-			</div>
-		</article>
-		<article class="surface-card danger">
-			<Bot :size="19" />
-			<div>
-				<small>MCP failures</small><strong>{{ workspace.metrics.mcp_failed || 0 }}</strong>
-			</div>
-		</article>
-	</section>
-
-	<section class="surface-card queue-card">
-		<header>
-			<div>
-				<div class="eyebrow">Permanent queue</div>
-				<h2>Unclassified messages</h2>
-			</div>
-			<small v-if="selectedConversations.size > 1"
-				>Select messages from one conversation at a time.</small
-			>
-			<small v-else>{{ selected.length }} selected</small>
-		</header>
-		<div v-if="loading" class="loading">
-			<Skeleton v-for="index in 5" :key="index" height="58px" />
-		</div>
-		<DataTable
-			v-else
-			v-model:selection="selected"
-			:value="workspace.messages"
-			data-key="name"
-			striped-rows
-		>
-			<Column selection-mode="multiple" header-style="width: 3rem" />
-			<Column field="conversation" header="Conversation">
-				<template #body="{ data }">
-					<code>{{ data.conversation }}</code>
-				</template>
-			</Column>
-			<Column field="body" header="Message">
-				<template #body="{ data }">
-					<p class="message-preview">{{ data.body || `(${data.message_type})` }}</p>
-				</template>
-			</Column>
-			<Column field="direction" header="Direction">
-				<template #body="{ data }">
-					<Tag :value="data.direction" severity="secondary" rounded />
-				</template>
-			</Column>
-			<Column field="provider_timestamp" header="Received" />
-			<template #empty>
-				<div class="empty">
-					<CircleCheck :size="30" />
-					<strong>Queue is clear</strong>
-					<span>Every materialized message belongs to a topic.</span>
+	<AsyncState v-if="loadError" :error="loadError" @retry="load" />
+	<template v-else>
+		<section class="summary-grid">
+			<article class="surface-card attention">
+				<TriangleAlert :size="19" />
+				<div>
+					<small>Needs review</small
+					><strong>{{ workspace.metrics.needs_review || 0 }}</strong>
 				</div>
-			</template>
-		</DataTable>
-	</section>
+			</article>
+			<article class="surface-card">
+				<CircleCheck :size="19" />
+				<div>
+					<small>MCP completed</small
+					><strong>{{ workspace.metrics.mcp_completed || 0 }}</strong>
+				</div>
+			</article>
+			<article class="surface-card">
+				<Layers3 :size="19" />
+				<div>
+					<small>Open topics</small
+					><strong>{{ workspace.metrics.open_topics || 0 }}</strong>
+				</div>
+			</article>
+			<article class="surface-card danger">
+				<Bot :size="19" />
+				<div>
+					<small>MCP failures</small
+					><strong>{{ workspace.metrics.mcp_failed || 0 }}</strong>
+				</div>
+			</article>
+		</section>
 
-	<section class="surface-card invocation-card">
-		<header>
-			<div>
-				<div class="eyebrow">Audited automation</div>
-				<h2>Recent MCP activity</h2>
+		<section class="surface-card queue-card">
+			<header>
+				<div>
+					<div class="eyebrow">Permanent queue</div>
+					<h2>Unclassified messages</h2>
+				</div>
+				<small v-if="selectedConversations.size > 1"
+					>Select messages from one conversation at a time.</small
+				>
+				<small v-else>{{ selected.length }} selected</small>
+			</header>
+			<div v-if="loading" class="loading">
+				<Skeleton v-for="index in 5" :key="index" height="58px" />
 			</div>
-		</header>
-		<DataTable :value="workspace.invocations" striped-rows>
-			<Column field="tool_name" header="Tool" />
-			<Column field="user" header="User" />
-			<Column field="duration_ms" header="Duration">
-				<template #body="{ data }">{{ data.duration_ms }} ms</template>
-			</Column>
-			<Column field="status" header="Status">
-				<template #body="{ data }">
-					<Tag
-						:value="data.status"
-						:severity="invocationSeverity(data.status)"
-						rounded
-					/>
-				</template>
-			</Column>
-			<Column field="creation" header="Time" />
-		</DataTable>
-	</section>
-
-	<Dialog
-		v-model:visible="dialogVisible"
-		modal
-		header="Create conversation topic"
-		:style="{ width: '470px' }"
-	>
-		<div class="dialog-copy">
-			<strong>{{ selected.length }} messages</strong>
-			<span
-				>Grouping is auditable and exclusive; a message cannot silently belong to two
-				topics.</span
+			<DataTable
+				v-else
+				v-model:selection="selected"
+				:value="workspace.messages"
+				data-key="name"
+				striped-rows
 			>
-		</div>
-		<label>Topic title</label>
-		<InputText v-model="form.title" fluid placeholder="Credit note request" />
-		<label>Category</label>
-		<InputText v-model="form.category" fluid placeholder="Complaint" />
-		<label>Summary</label>
-		<Textarea
-			v-model="form.summary"
-			rows="4"
-			fluid
-			placeholder="Short operator-approved summary"
-		/>
-		<template #footer>
-			<Button label="Cancel" text @click="dialogVisible = false" />
-			<Button
-				label="Create topic"
-				:disabled="!form.title.trim()"
-				:loading="saving"
-				@click="classify"
+				<Column selection-mode="multiple" header-style="width: 3rem" />
+				<Column field="conversation" header="Conversation">
+					<template #body="{ data }">
+						<code>{{ data.conversation }}</code>
+					</template>
+				</Column>
+				<Column field="body" header="Message">
+					<template #body="{ data }">
+						<p class="message-preview">{{ data.body || `(${data.message_type})` }}</p>
+					</template>
+				</Column>
+				<Column field="direction" header="Direction">
+					<template #body="{ data }">
+						<Tag :value="data.direction" severity="secondary" rounded />
+					</template>
+				</Column>
+				<Column field="provider_timestamp" header="Received" />
+				<template #empty>
+					<div class="empty">
+						<CircleCheck :size="30" />
+						<strong>Queue is clear</strong>
+						<span>Every materialized message belongs to a topic.</span>
+					</div>
+				</template>
+			</DataTable>
+		</section>
+
+		<section class="surface-card invocation-card">
+			<header>
+				<div>
+					<div class="eyebrow">Audited automation</div>
+					<h2>Recent MCP activity</h2>
+				</div>
+			</header>
+			<DataTable :value="workspace.invocations" striped-rows>
+				<Column field="tool_name" header="Tool" />
+				<Column field="user" header="User" />
+				<Column field="duration_ms" header="Duration">
+					<template #body="{ data }">{{ data.duration_ms }} ms</template>
+				</Column>
+				<Column field="status" header="Status">
+					<template #body="{ data }">
+						<Tag
+							:value="data.status"
+							:severity="invocationSeverity(data.status)"
+							rounded
+						/>
+					</template>
+				</Column>
+				<Column field="creation" header="Time" />
+			</DataTable>
+		</section>
+
+		<Dialog
+			v-model:visible="dialogVisible"
+			modal
+			header="Create conversation topic"
+			:style="{ width: '470px' }"
+		>
+			<div class="dialog-copy">
+				<strong>{{ selected.length }} messages</strong>
+				<span
+					>Grouping is auditable and exclusive; a message cannot silently belong to two
+					topics.</span
+				>
+			</div>
+			<label>Topic title</label>
+			<InputText v-model="form.title" fluid placeholder="Credit note request" />
+			<label>Category</label>
+			<InputText v-model="form.category" fluid placeholder="Complaint" />
+			<label>Summary</label>
+			<Textarea
+				v-model="form.summary"
+				rows="4"
+				fluid
+				placeholder="Short operator-approved summary"
 			/>
-		</template>
-	</Dialog>
+			<template #footer>
+				<Button label="Cancel" text @click="dialogVisible = false" />
+				<Button
+					label="Create topic"
+					:disabled="!form.title.trim()"
+					:loading="saving"
+					@click="classify"
+				/>
+			</template>
+		</Dialog>
+	</template>
 </template>
 
 <style scoped>

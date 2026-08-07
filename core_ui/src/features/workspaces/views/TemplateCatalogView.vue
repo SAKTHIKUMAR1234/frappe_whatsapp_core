@@ -7,9 +7,11 @@
 	import Tag from 'primevue/tag'
 	import { BadgeCheck, Ban, MessageSquareText, RefreshCw, ShieldCheck } from 'lucide-vue-next'
 
-	import { call } from '@/services/frappe'
+	import AsyncState from '@/components/AsyncState.vue'
+	import { call, errorMessage } from '@/services/frappe'
 
 	const loading = ref(true)
+	const loadError = ref('')
 	const catalog = ref({
 		templates: [],
 		metrics: {},
@@ -17,8 +19,11 @@
 
 	async function load() {
 		loading.value = true
+		loadError.value = ''
 		try {
 			catalog.value = await call('frappe_whatsapp_core.frontend_api.template_catalog')
+		} catch (error) {
+			loadError.value = errorMessage(error, 'Unable to load the template catalog.')
 		} finally {
 			loading.value = false
 		}
@@ -45,92 +50,94 @@
 			<template #icon><RefreshCw :size="16" /></template>
 		</Button>
 	</div>
-
-	<div class="ownership-note">
-		<ShieldCheck :size="18" />
-		<div>
-			<strong>Read-only in Core</strong>
-			<span
-				>Create, edit, submit to Meta, assign and disable templates in Integration
-				Desk.</span
-			>
+	<AsyncState v-if="loadError" :error="loadError" @retry="load" />
+	<template v-else>
+		<div class="ownership-note">
+			<ShieldCheck :size="18" />
+			<div>
+				<strong>Read-only in Core</strong>
+				<span
+					>Create, edit, submit to Meta, assign and disable templates in Integration
+					Desk.</span
+				>
+			</div>
 		</div>
-	</div>
 
-	<section class="summary-grid">
-		<article class="surface-card">
-			<BadgeCheck :size="19" />
-			<div>
-				<small>Approved</small><strong>{{ catalog.metrics.approved || 0 }}</strong>
-			</div>
-		</article>
-		<article class="surface-card">
-			<MessageSquareText :size="19" />
-			<div>
-				<small>Available to this site</small
-				><strong>{{ catalog.metrics.available || 0 }}</strong>
-			</div>
-		</article>
-		<article class="surface-card">
-			<Ban :size="19" />
-			<div>
-				<small>Disabled</small><strong>{{ catalog.metrics.disabled || 0 }}</strong>
-			</div>
-		</article>
-	</section>
+		<section class="summary-grid">
+			<article class="surface-card">
+				<BadgeCheck :size="19" />
+				<div>
+					<small>Approved</small><strong>{{ catalog.metrics.approved || 0 }}</strong>
+				</div>
+			</article>
+			<article class="surface-card">
+				<MessageSquareText :size="19" />
+				<div>
+					<small>Available to this site</small
+					><strong>{{ catalog.metrics.available || 0 }}</strong>
+				</div>
+			</article>
+			<article class="surface-card">
+				<Ban :size="19" />
+				<div>
+					<small>Disabled</small><strong>{{ catalog.metrics.disabled || 0 }}</strong>
+				</div>
+			</article>
+		</section>
 
-	<section class="surface-card catalog-table">
-		<div v-if="loading" class="loading">
-			<Skeleton v-for="index in 5" :key="index" height="58px" />
-		</div>
-		<DataTable v-else :value="catalog.templates" striped-rows>
-			<Column header="Template">
-				<template #body="{ data }">
-					<div class="template-name">
-						<span><MessageSquareText :size="17" /></span>
-						<div>
-							<strong>{{ data.template_name }}</strong
-							><small>{{ data.name }}</small>
+		<section class="surface-card catalog-table">
+			<div v-if="loading" class="loading">
+				<Skeleton v-for="index in 5" :key="index" height="58px" />
+			</div>
+			<DataTable v-else :value="catalog.templates" striped-rows>
+				<Column header="Template">
+					<template #body="{ data }">
+						<div class="template-name">
+							<span><MessageSquareText :size="17" /></span>
+							<div>
+								<strong>{{ data.template_name }}</strong
+								><small>{{ data.name }}</small>
+							</div>
 						</div>
+					</template>
+				</Column>
+				<Column field="language_code" header="Language" />
+				<Column field="category" header="Category">
+					<template #body="{ data }">{{ data.category || '—' }}</template>
+				</Column>
+				<Column header="Preview">
+					<template #body="{ data }">
+						<p class="preview">{{ data.body_text || 'No text preview' }}</p>
+					</template>
+				</Column>
+				<Column header="Meta status">
+					<template #body="{ data }">
+						<Tag
+							:value="data.approval_status"
+							:severity="severity(data.approval_status)"
+							rounded
+						/>
+					</template>
+				</Column>
+				<Column header="Site">
+					<template #body="{ data }">
+						<Tag
+							:value="data.enabled ? 'Enabled' : 'Disabled'"
+							:severity="data.enabled ? 'success' : 'secondary'"
+							rounded
+						/>
+					</template>
+				</Column>
+				<template #empty>
+					<div class="empty">
+						<MessageSquareText :size="30" />
+						<strong>No template assignments received</strong>
+						<span>Assign a Meta template to this site in Integration Desk.</span>
 					</div>
 				</template>
-			</Column>
-			<Column field="language_code" header="Language" />
-			<Column field="category" header="Category">
-				<template #body="{ data }">{{ data.category || '—' }}</template>
-			</Column>
-			<Column header="Preview">
-				<template #body="{ data }">
-					<p class="preview">{{ data.body_text || 'No text preview' }}</p>
-				</template>
-			</Column>
-			<Column header="Meta status">
-				<template #body="{ data }">
-					<Tag
-						:value="data.approval_status"
-						:severity="severity(data.approval_status)"
-						rounded
-					/>
-				</template>
-			</Column>
-			<Column header="Site">
-				<template #body="{ data }">
-					<Tag
-						:value="data.enabled ? 'Enabled' : 'Disabled'"
-						:severity="data.enabled ? 'success' : 'secondary'"
-						rounded
-					/>
-				</template>
-			</Column>
-			<template #empty>
-				<div class="empty">
-					<MessageSquareText :size="30" />
-					<strong>No template assignments received</strong>
-					<span>Assign a Meta template to this site in Integration Desk.</span>
-				</div>
-			</template>
-		</DataTable>
-	</section>
+			</DataTable>
+		</section>
+	</template>
 </template>
 
 <style scoped>

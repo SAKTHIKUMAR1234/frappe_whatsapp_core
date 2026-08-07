@@ -15,14 +15,16 @@
 		Sparkles,
 	} from 'lucide-vue-next'
 	import MetricCard from '@/components/MetricCard.vue'
+	import AsyncState from '@/components/AsyncState.vue'
 	import { flowWorkspace } from '@/features/flows/services/flowService'
-	import { call } from '@/services/frappe'
+	import { call, errorMessage } from '@/services/frappe'
 
 	const router = useRouter()
 	const loading = ref(true)
 	const data = ref({ metrics: {} })
 	const meta = ref({ flows: [] })
 	const metaError = ref('')
+	const loadError = ref('')
 	const metrics = computed(() => [
 		{
 			label: 'Open conversations',
@@ -95,6 +97,8 @@
 				metaError.value =
 					error?.response?.data?.message || 'Meta Flow connection is not configured.'
 			}
+		} catch (error) {
+			loadError.value = errorMessage(error, 'Unable to load WhatsApp operations.')
 		} finally {
 			loading.value = false
 		}
@@ -120,103 +124,112 @@
 			></Button>
 		</div>
 	</div>
-	<section class="metric-grid">
-		<template v-if="loading"
-			><Skeleton
-				v-for="item in 4"
-				:key="item"
-				height="128px"
-				border-radius="17px" /></template
-		><MetricCard v-for="metric in metrics" v-else :key="metric.label" v-bind="metric" />
-	</section>
-	<section class="main-grid">
-		<article class="surface-card lifecycle-card">
-			<header>
-				<div>
-					<div class="eyebrow">Meta source of truth</div>
-					<h2>Native Flow lifecycle</h2>
+	<AsyncState v-if="loadError" :error="loadError" @retry="() => window.location.reload()" />
+	<template v-else>
+		<section class="metric-grid">
+			<template v-if="loading"
+				><Skeleton
+					v-for="item in 4"
+					:key="item"
+					height="128px"
+					border-radius="17px" /></template
+			><MetricCard v-for="metric in metrics" v-else :key="metric.label" v-bind="metric" />
+		</section>
+		<section class="main-grid">
+			<article class="surface-card lifecycle-card">
+				<header>
+					<div>
+						<div class="eyebrow">Meta source of truth</div>
+						<h2>Native Flow lifecycle</h2>
+					</div>
+					<Button
+						label="Open Meta Flows"
+						text
+						size="small"
+						@click="router.push({ name: 'flows' })"
+					/>
+				</header>
+				<div v-if="metaError" class="meta-error">{{ metaError }}</div>
+				<div v-else class="lifecycle-list">
+					<div v-for="row in flowLifecycle" :key="row.label" class="lifecycle-row">
+						<div>
+							<span>{{ row.label }}</span
+							><strong>{{ row.value }}</strong>
+						</div>
+						<div class="lifecycle-track">
+							<i
+								:class="row.tone"
+								:style="{
+									width: `${Math.max((row.value / maximum) * 100, row.value ? 8 : 0)}%`,
+								}"
+							></i>
+						</div>
+					</div>
+				</div>
+			</article>
+			<article class="surface-card boundary-card">
+				<header>
+					<div>
+						<div class="eyebrow">Architecture boundary</div>
+						<h2>Service ownership</h2>
+					</div>
+					<Sparkles :size="19" />
+				</header>
+				<div class="health-row">
+					<span class="status-dot"></span>
+					<div>
+						<strong>WhatsApp Flows</strong><small>Hosted and validated by Meta</small>
+					</div>
+					<em>Meta</em>
+				</div>
+				<div class="health-row neutral">
+					<span class="status-dot"></span>
+					<div>
+						<strong>Message relay</strong
+						><small>Durable batches through JetStream</small>
+					</div>
+					<em>Integration</em>
+				</div>
+				<div class="health-row neutral">
+					<span class="status-dot"></span>
+					<div>
+						<strong>Inbox and teams</strong
+						><small>Company access and operations</small>
+					</div>
+					<em>Core</em>
 				</div>
 				<Button
-					label="Open Meta Flows"
+					label="Open audit & health"
 					text
-					size="small"
-					@click="router.push({ name: 'flows' })"
-				/>
-			</header>
-			<div v-if="metaError" class="meta-error">{{ metaError }}</div>
-			<div v-else class="lifecycle-list">
-				<div v-for="row in flowLifecycle" :key="row.label" class="lifecycle-row">
+					fluid
+					@click="router.push({ name: 'health' })"
+					><template #icon><ArrowRight :size="15" /></template
+				></Button>
+			</article>
+		</section>
+		<section>
+			<div class="section-title">
+				<div>
+					<div class="eyebrow">Start here</div>
+					<h2>Quick actions</h2>
+				</div>
+			</div>
+			<div class="quick-grid">
+				<RouterLink
+					v-for="action in quickActions"
+					:key="action.title"
+					:to="{ name: action.route }"
+					class="surface-card quick-card"
+					><div class="quick-icon"><component :is="action.icon" :size="20" /></div>
 					<div>
-						<span>{{ row.label }}</span
-						><strong>{{ row.value }}</strong>
+						<strong>{{ action.title }}</strong>
+						<p>{{ action.text }}</p>
 					</div>
-					<div class="lifecycle-track">
-						<i
-							:class="row.tone"
-							:style="{
-								width: `${Math.max((row.value / maximum) * 100, row.value ? 8 : 0)}%`,
-							}"
-						></i>
-					</div>
-				</div>
+					<ArrowRight :size="17"
+				/></RouterLink>
 			</div>
-		</article>
-		<article class="surface-card boundary-card">
-			<header>
-				<div>
-					<div class="eyebrow">Architecture boundary</div>
-					<h2>Service ownership</h2>
-				</div>
-				<Sparkles :size="19" />
-			</header>
-			<div class="health-row">
-				<span class="status-dot"></span>
-				<div>
-					<strong>WhatsApp Flows</strong><small>Hosted and validated by Meta</small>
-				</div>
-				<em>Meta</em>
-			</div>
-			<div class="health-row neutral">
-				<span class="status-dot"></span>
-				<div>
-					<strong>Message relay</strong><small>Durable batches through JetStream</small>
-				</div>
-				<em>Integration</em>
-			</div>
-			<div class="health-row neutral">
-				<span class="status-dot"></span>
-				<div>
-					<strong>Inbox and teams</strong><small>Company access and operations</small>
-				</div>
-				<em>Core</em>
-			</div>
-			<Button label="Open audit & health" text fluid @click="router.push({ name: 'health' })"
-				><template #icon><ArrowRight :size="15" /></template
-			></Button>
-		</article>
-	</section>
-	<section>
-		<div class="section-title">
-			<div>
-				<div class="eyebrow">Start here</div>
-				<h2>Quick actions</h2>
-			</div>
-		</div>
-		<div class="quick-grid">
-			<RouterLink
-				v-for="action in quickActions"
-				:key="action.title"
-				:to="{ name: action.route }"
-				class="surface-card quick-card"
-				><div class="quick-icon"><component :is="action.icon" :size="20" /></div>
-				<div>
-					<strong>{{ action.title }}</strong>
-					<p>{{ action.text }}</p>
-				</div>
-				<ArrowRight :size="17"
-			/></RouterLink>
-		</div>
-	</section>
+		</section>
+	</template>
 </template>
 
 <style scoped>

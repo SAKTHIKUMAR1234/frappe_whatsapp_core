@@ -26,6 +26,13 @@ def calling_workspace(account_name=None, include_sip_credentials=0):
 		fields=call_fields,
 		order_by="modified desc", limit_page_length=100,
 	)
+	templates = frappe.get_all(
+		"WhatsApp Core Template",
+		filters={"approval_status": "APPROVED", "enabled": 1},
+		fields=["name", "template_name", "language_code", "body_text"],
+		order_by="template_name asc, language_code asc",
+		limit_page_length=500,
+	)
 	accounts = []
 	selected = None
 	try:
@@ -42,6 +49,7 @@ def calling_workspace(account_name=None, include_sip_credentials=0):
 			"selected_account": selected,
 			"settings": settings,
 			"calls": calls,
+			"templates": templates,
 		}
 	except Exception as error:
 		return _workspace_failure(
@@ -50,6 +58,7 @@ def calling_workspace(account_name=None, include_sip_credentials=0):
 			selected_account=selected,
 			settings={},
 			calls=calls,
+			templates=templates,
 		)
 
 

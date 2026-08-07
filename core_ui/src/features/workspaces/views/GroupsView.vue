@@ -19,7 +19,7 @@
 		showManage = ref(false),
 		error = ref(''),
 		notice = ref('')
-	const workspace = ref({ accounts: [], data: [], selected_account: '' })
+	const workspace = ref({ accounts: [], data: [], templates: [], selected_account: '' })
 	const account = ref(''),
 		selected = ref(null),
 		inviteLink = ref(''),
@@ -40,6 +40,7 @@
 	const edit = ref({ subject: '', description: '' })
 	const invite = ref({ to_number: '', template_name: '', language_code: 'en' })
 	const rows = computed(() => workspace.value.data || [])
+	const ACTION_FAILED = Symbol('action-failed')
 	let unsubscribe = () => {}
 
 	async function run(name, task, success = '') {
@@ -52,7 +53,7 @@
 			return result
 		} catch (e) {
 			error.value = errorMessage(e)
-			throw e
+			return ACTION_FAILED
 		} finally {
 			action.value = ''
 		}
@@ -75,7 +76,7 @@
 	async function create() {
 		saving.value = true
 		try {
-			await run(
+			const result = await run(
 				'create',
 				() =>
 					call('frappe_whatsapp_core.groups.create_group', {
@@ -84,6 +85,7 @@
 					}),
 				'Group created.',
 			)
+			if (result === ACTION_FAILED) return
 			showCreate.value = false
 			form.value = { subject: '', description: '', join_approval_mode: 'auto_approve' }
 			await load()
@@ -104,6 +106,7 @@
 				group_id: group.id,
 			}),
 		)
+		if (detail === ACTION_FAILED) return
 		selected.value = detail?.data?.[0] || detail || group
 		edit.value = {
 			subject: selected.value.subject || '',
@@ -112,14 +115,15 @@
 		await loadActivity()
 	}
 	async function loadActivity() {
-		activity.value = await run('activity', () =>
+		const result = await run('activity', () =>
 			call('frappe_whatsapp_core.groups.group_activity', {
 				group_id: selected.value.id,
 			}),
 		)
+		if (result !== ACTION_FAILED) activity.value = result
 	}
 	async function saveGroup() {
-		await run(
+		const result = await run(
 			'save',
 			() =>
 				call('frappe_whatsapp_core.groups.update_group', {
@@ -129,6 +133,7 @@
 				}),
 			'Group details updated.',
 		)
+		if (result === ACTION_FAILED) return
 		await load()
 	}
 	async function loadInvite(reset = false) {
@@ -142,6 +147,7 @@
 				}),
 			reset ? 'Invite link reset.' : '',
 		)
+		if (result === ACTION_FAILED) return
 		inviteLink.value =
 			result?.invite_link || result?.data?.[0]?.invite_link || result?.link || ''
 	}
@@ -152,11 +158,12 @@
 				group_id: selected.value.id,
 			}),
 		)
+		if (result === ACTION_FAILED) return
 		joinRequests.value = result?.data || []
 		selectedRequests.value = []
 	}
 	async function decide(approve) {
-		await run(
+		const result = await run(
 			'requests',
 			() =>
 				call('frappe_whatsapp_core.groups.change_join_requests', {
@@ -167,11 +174,12 @@
 				}),
 			approve ? 'Requests approved.' : 'Requests rejected.',
 		)
+		if (result === ACTION_FAILED) return
 		await loadRequests()
 	}
 	async function removeParticipants() {
 		const participants = participantsToRemove.value.split(/[\s,]+/).filter(Boolean)
-		await run(
+		const result = await run(
 			'remove',
 			() =>
 				call('frappe_whatsapp_core.groups.remove_participants', {
@@ -181,6 +189,7 @@
 				}),
 			'Participants removed.',
 		)
+		if (result === ACTION_FAILED) return
 		participantsToRemove.value = ''
 	}
 	async function sendMessage() {
@@ -198,7 +207,7 @@
 			if (messageType.value === 'document' && messageFilename.value)
 				content.filename = messageFilename.value
 		}
-		await run(
+		const result = await run(
 			'send',
 			() =>
 				call('frappe_whatsapp_core.groups.send_group_message', {
@@ -209,6 +218,7 @@
 				}),
 			'Message queued in the shared inbox.',
 		)
+		if (result === ACTION_FAILED) return
 		messageBody.value = ''
 		messageFileUrl.value = ''
 		messageFilename.value = ''
@@ -216,7 +226,7 @@
 	async function selectMessageFile(event) {
 		const file = event.target.files?.[0]
 		if (!file) return
-		await run(
+		const result = await run(
 			'message-upload',
 			async () => {
 				const stored = await uploadFile(file, true)
@@ -226,10 +236,11 @@
 			},
 			'File ready to send.',
 		)
+		if (result === ACTION_FAILED) return
 		event.target.value = ''
 	}
 	async function sendInvite() {
-		await run(
+		const result = await run(
 			'send-invite',
 			() =>
 				call('frappe_whatsapp_core.groups.send_group_invite_template', {
@@ -239,6 +250,7 @@
 				}),
 			'Group invite queued.',
 		)
+		if (result === ACTION_FAILED) return
 		invite.value.to_number = ''
 	}
 	async function pinMessage() {
@@ -278,7 +290,7 @@
 	}
 	async function deleteGroup() {
 		if (!window.confirm(`Delete ${selected.value.subject || selected.value.id}?`)) return
-		await run(
+		const result = await run(
 			'delete',
 			() =>
 				call('frappe_whatsapp_core.groups.delete_group', {
@@ -287,6 +299,7 @@
 				}),
 			'Group deleted.',
 		)
+		if (result === ACTION_FAILED) return
 		showManage.value = false
 		await load()
 	}
@@ -473,9 +486,13 @@
 							placeholder="International WhatsApp number"
 					/></label>
 					<label
-						>Approved invite template<InputText
+						>Approved invite template<Select
 							v-model="invite.template_name"
-							placeholder="Template record or Meta name"
+							:options="workspace.templates || []"
+							option-label="template_name"
+							option-value="template_name"
+							filter
+							placeholder="Select a synced Meta template"
 					/></label>
 					<label>Language<InputText v-model="invite.language_code" /></label>
 					<Button
@@ -517,7 +534,15 @@
 						:options="['text', 'image', 'video', 'audio', 'document', 'template']"
 				/></label>
 				<template v-if="messageType === 'template'">
-					<label>Approved template<InputText v-model="messageTemplate" /></label>
+					<label
+						>Approved template<Select
+							v-model="messageTemplate"
+							:options="workspace.templates || []"
+							option-label="template_name"
+							option-value="template_name"
+							filter
+							placeholder="Select a synced Meta template"
+					/></label>
 					<label>Language code<InputText v-model="messageLanguage" /></label>
 				</template>
 				<template v-else-if="messageType !== 'text'">

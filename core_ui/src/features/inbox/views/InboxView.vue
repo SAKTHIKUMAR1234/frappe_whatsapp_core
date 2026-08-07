@@ -32,7 +32,9 @@
 	const session = useSessionStore()
 	const canManage = computed(() => Boolean(session.boot?.can_manage))
 	const loading = ref(true)
+	const listError = ref('')
 	const detailLoading = ref(false)
+	const detailError = ref('')
 	const loadingOlder = ref(false)
 	const richSending = ref(false)
 	const search = ref('')
@@ -84,6 +86,7 @@
 	const settings = ref({ channels: [] })
 	const newChat = ref({ channel: '', phone_number: '', display_name: '', template: '' })
 	const unsubscribers = []
+	let detailRequest = 0
 
 	const selectedName = computed(() => route.params.conversation || '')
 	const filteredRows = computed(() => {
@@ -125,22 +128,30 @@
 
 	async function loadRows() {
 		loading.value = true
+		listError.value = ''
 		try {
 			rows.value = await call('frappe_whatsapp_core.inbox.conversations', { limit: 500 })
 			if (!selectedName.value && rows.value.length) selectConversation(rows.value[0].name)
+		} catch (error) {
+			listError.value = errorMessage(error, 'Unable to load conversations.')
 		} finally {
 			loading.value = false
 		}
 	}
 
 	async function loadDetail(name) {
+		const request = ++detailRequest
 		if (!name) {
 			detail.value = null
 			return
 		}
 		detailLoading.value = true
+		detailError.value = ''
+		detail.value = null
 		try {
-			detail.value = await call('frappe_whatsapp_core.inbox.conversation', { name })
+			const loaded = await call('frappe_whatsapp_core.inbox.conversation', { name })
+			if (request !== detailRequest) return
+			detail.value = loaded
 			messagePage.value = detail.value.message_page || { has_more: false }
 			const latest = detail.value.messages.at(-1)?.name
 			if (latest) {
@@ -152,8 +163,11 @@
 				if (row) row.unread_count = 0
 			}
 			await scrollToBottom()
+		} catch (error) {
+			if (request === detailRequest)
+				detailError.value = errorMessage(error, 'Unable to load this conversation.')
 		} finally {
-			detailLoading.value = false
+			if (request === detailRequest) detailLoading.value = false
 		}
 	}
 
@@ -175,6 +189,13 @@
 			messagePage.value = page
 			await nextTick()
 			stream.value.scrollTop = stream.value.scrollHeight - previousHeight
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Could not load older messages',
+				detail: errorMessage(error),
+				life: 4500,
+			})
 		} finally {
 			loadingOlder.value = false
 		}
@@ -617,6 +638,12 @@
 					<InputText v-model="search" placeholder="Search people or messages" />
 				</label>
 				<div v-if="loading" class="loading-state">Loading conversations…</div>
+				<div v-else-if="listError" class="panel-error" role="alert">
+					<ShieldAlert :size="22" />
+					<strong>Conversations unavailable</strong>
+					<span>{{ listError }}</span>
+					<Button label="Retry" size="small" outlined @click="loadRows" />
+				</div>
 				<ConversationList
 					v-else
 					:rows="filteredRows"
@@ -629,6 +656,12 @@
 
 			<main class="chat-panel">
 				<div v-if="detailLoading" class="empty-chat">Loading conversation…</div>
+				<div v-else-if="detailError" class="empty-chat error-chat" role="alert">
+					<ShieldAlert :size="38" />
+					<strong>Conversation unavailable</strong>
+					<span>{{ detailError }}</span>
+					<Button label="Try again" outlined @click="loadDetail(selectedName)" />
+				</div>
 				<div v-else-if="!detail" class="empty-chat">
 					<MessageSquarePlus :size="38" />
 					<strong>Select or start a conversation</strong>
@@ -996,6 +1029,31 @@
 		color: #7b8982;
 		font-size: 11px;
 	}
+	.panel-error {
+		min-height: 240px;
+		padding: 22px;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		color: var(--wa-danger);
+		text-align: center;
+	}
+	.panel-error span,
+	.error-chat span {
+		max-width: 320px;
+		color: var(--wa-muted);
+		font-size: 12px;
+		line-height: 1.5;
+	}
+	.panel-error .p-button,
+	.error-chat .p-button {
+		margin-top: 6px;
+	}
+	.error-chat > svg {
+		color: var(--wa-danger);
+	}
 	.empty-chat strong {
 		color: #34443d;
 		font-size: 13px;
@@ -1229,7 +1287,8 @@
 	}
 	@media (max-width: 760px) {
 		.inbox-page {
-			padding: 14px;
+			height: calc(100dvh - 60px);
+			padding: 0;
 		}
 		.inbox-workbench {
 			grid-template-columns: 1fr;
@@ -1252,6 +1311,12 @@
 		}
 		.inbox-heading h1 {
 			font-size: 20px;
+		}
+		.inbox-heading {
+			padding: 4px 2px 0;
+		}
+		.dialog-form {
+			width: 100%;
 		}
 	}
 </style>
