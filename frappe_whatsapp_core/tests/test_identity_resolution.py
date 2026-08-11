@@ -137,7 +137,7 @@ class TestIdentityResolution(FrappeTestCase):
 	def test_multiple_business_matches_are_marked_ambiguous(self):
 		suffix = f"7{str(uuid.uuid4().int)[-9:]}"
 		mobile_no = f"+91{suffix}"
-		for index in range(2):
+		for _ in range(2):
 			frappe.get_doc(
 				{
 					"doctype": "ToDo",

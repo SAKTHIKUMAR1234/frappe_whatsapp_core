@@ -1,4 +1,11 @@
-"""Secure, cached delivery of Meta message media to authenticated Core users."""
+"""Durable Core-owned storage for WhatsApp message media.
+
+The Integration app is only the authenticated Meta mediator.  Bytes are saved
+as a private Frappe ``File`` on the Core site as soon as an inbound event is
+projected.  Keeping the normal File lifecycle is deliberate: sites with the S3
+integration installed can move and serve the same document without WhatsApp
+Core knowing anything about bucket credentials.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +17,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import frappe
+from frappe.utils import cint
 from frappe.utils.file_manager import save_file
 
 from frappe_whatsapp_core.hub_client import call_management, get_settings
@@ -56,7 +64,7 @@ def media_descriptor(message_type: str | None, content) -> dict:
 
 @frappe.whitelist()
 @require_core_access()
-def download_message_media(message: str):
+def download_message_media(message: str, download: int | str = 0):
 	"""Stream message media through Core and cache it as a private attached File."""
 	message = str(message or "").strip()
 	if not message or not frappe.db.exists("WhatsApp Core Message", message):
@@ -70,12 +78,71 @@ def download_message_media(message: str):
 	if not descriptor:
 		frappe.throw("This message does not contain downloadable media", frappe.ValidationError)
 
-	file_doc = _cached_file(doc.name)
-	if file_doc:
-		content = file_doc.get_content()
-		filename = file_doc.file_name or _filename(doc.name, descriptor)
-		content_type = file_doc.content_type or descriptor.get("mime_type") or ""
-	else:
+	file_doc = cache_message_media(doc.name)
+	content = file_doc.get_content()
+	filename = file_doc.file_name or _filename(doc.name, descriptor)
+	content_type = file_doc.get("content_type") or descriptor.get("mime_type") or ""
+
+	frappe.local.response.filename = filename
+	frappe.local.response.filecontent = content
+	frappe.local.response.type = "download"
+	frappe.local.response.content_type = _content_type(content_type, filename)
+	frappe.local.response.display_content_as = (
+		"attachment" if cint(download) or doc.message_type == "document" else "inline"
+	)
+
+
+def enqueue_message_media_cache(message_names, *, enqueue_after_commit=True) -> None:
+	"""Queue one bounded cache job for newly projected media messages."""
+	if isinstance(message_names, str):
+		message_names = [message_names]
+	message_names = list(dict.fromkeys(str(name) for name in (message_names or []) if name))
+	if not message_names:
+		return
+	for offset in range(0, len(message_names), 100):
+		frappe.enqueue(
+			"frappe_whatsapp_core.message_media.cache_message_media_batch",
+			queue="short",
+			enqueue_after_commit=enqueue_after_commit,
+			message_names=message_names[offset : offset + 100],
+		)
+
+
+def cache_message_media_batch(message_names) -> dict:
+	"""Persist each media item independently so one expired object cannot block a batch."""
+	stored = []
+	failed = []
+	for message_name in list(dict.fromkeys(message_names or []))[:100]:
+		try:
+			file_doc = cache_message_media(message_name)
+			stored.append({"message": message_name, "file": file_doc.name})
+		except Exception:
+			failed.append(message_name)
+			frappe.log_error(
+				title=f"WhatsApp media cache failed: {message_name}",
+				message=frappe.get_traceback(),
+			)
+	return {"stored": stored, "failed": failed}
+
+
+def cache_message_media(message: str):
+	"""Return the private local File, downloading it through Integration once."""
+	message = str(message or "").strip()
+	if not message or not frappe.db.exists("WhatsApp Core Message", message):
+		frappe.throw("Message not found", frappe.DoesNotExistError)
+	with frappe.cache.lock(
+		f"whatsapp_core_media:{message}", timeout=90, blocking_timeout=10
+	):
+		cached = _cached_file(message)
+		if cached:
+			return cached
+		doc = frappe.get_doc("WhatsApp Core Message", message)
+		descriptor = media_descriptor(doc.message_type, doc.content)
+		if not descriptor:
+			frappe.throw(
+				"This message does not contain downloadable media",
+				frappe.ValidationError,
+			)
 		settings = get_settings()
 		result = call_management(
 			HUB_DOWNLOAD_METHOD,
@@ -89,27 +156,21 @@ def download_message_media(message: str):
 		try:
 			content = base64.b64decode(result["content_b64"], validate=True)
 		except (binascii.Error, TypeError, ValueError):
-			frappe.throw("WhatsApp Hub returned invalid media content", frappe.ValidationError)
+			frappe.throw(
+				"WhatsApp Hub returned invalid media content",
+				frappe.ValidationError,
+			)
 		content_type = str(
 			result.get("mime_type") or descriptor.get("mime_type") or ""
 		).strip()
-		filename = _filename(doc.name, {**descriptor, "mime_type": content_type})
-		file_doc = save_file(
+		filename = _filename(message, {**descriptor, "mime_type": content_type})
+		return save_file(
 			filename,
 			content,
 			"WhatsApp Core Message",
-			doc.name,
+			message,
 			is_private=1,
 		)
-		filename = file_doc.file_name or filename
-
-	frappe.local.response.filename = filename
-	frappe.local.response.filecontent = content
-	frappe.local.response.type = "download"
-	frappe.local.response.content_type = _content_type(content_type, filename)
-	frappe.local.response.display_content_as = (
-		"attachment" if doc.message_type == "document" else "inline"
-	)
 
 
 def _cached_file(message: str):

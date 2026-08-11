@@ -53,7 +53,7 @@
 <template>
 	<div class="page-heading">
 		<div>
-			<div class="eyebrow">Site-local evidence</div>
+			<div class="eyebrow">Core evidence</div>
 			<h1>Audit & Health</h1>
 			<p>Operational state derived from events, flow runs and message delivery records.</p>
 		</div>
@@ -140,7 +140,7 @@
 					<div class="empty">
 						<CircleCheck :size="30" />
 						<strong>No recorded failures</strong>
-						<span>Core processing is clear on this site.</span>
+						<span>Core processing is clear.</span>
 					</div>
 				</template>
 			</DataTable>
@@ -162,11 +162,11 @@
 		align-items: center;
 		gap: 12px;
 		padding: 17px;
-		color: #17805f;
+		color: var(--wa-success);
 	}
 
 	.summary-grid article.danger {
-		color: #b43c42;
+		color: var(--wa-danger);
 	}
 
 	.summary-grid small,
@@ -179,12 +179,12 @@
 	.summary-grid small,
 	.component-card small {
 		color: var(--wa-muted);
-		font-size: 9px;
+		font-size: 12px;
 	}
 
 	.summary-grid strong {
 		margin-top: 4px;
-		color: #17211d;
+		color: var(--wa-text);
 		font-size: 20px;
 	}
 
@@ -225,8 +225,8 @@
 		max-width: 480px;
 		margin: 0;
 		overflow: hidden;
-		color: #a33d43;
-		font-size: 9px;
+		color: var(--wa-danger);
+		font-size: 12px;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}

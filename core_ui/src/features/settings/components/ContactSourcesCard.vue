@@ -13,6 +13,7 @@
 
 	import AsyncState from '@/components/AsyncState.vue'
 	import { call, errorMessage } from '@/services/frappe'
+	import { focusDialogControl } from '@/utils/focus'
 
 	const props = defineProps({
 		sources: { type: Array, default: () => [] },
@@ -24,6 +25,7 @@
 	const optionError = ref('')
 	const saving = ref(false)
 	const visible = ref(false)
+	const dialogRef = ref(null)
 	const doctypes = ref([])
 	const fieldOptions = ref({ fields: [], phone_fields: [] })
 	const form = reactive({
@@ -132,7 +134,7 @@
 				<div>
 					<div class="eyebrow">Business contact mapping</div>
 					<h2>Contact sources</h2>
-					<p>Link WhatsApp identities to records already owned by this Frappe site.</p>
+					<p>Link WhatsApp identities to existing business records.</p>
 				</div>
 			</div>
 			<Button v-if="canManage" label="Add source" size="small" @click="open()">
@@ -173,7 +175,14 @@
 			>
 		</div>
 
-		<Dialog v-model:visible="visible" modal :header="title" class="contact-source-dialog">
+		<Dialog
+			ref="dialogRef"
+			v-model:visible="visible"
+			modal
+			:header="title"
+			class="contact-source-dialog"
+			@show="focusDialogControl(dialogRef, '[role=combobox]')"
+		>
 			<div class="source-form">
 				<Message v-if="optionError" severity="error" :closable="false">{{
 					optionError
@@ -182,6 +191,7 @@
 					<span>Source DocType *</span>
 					<Select
 						v-model="form.source_doctype"
+						aria-label="Source DocType"
 						:options="doctypes"
 						option-label="name"
 						option-value="name"
@@ -307,8 +317,8 @@
 		place-items: center;
 		flex: none;
 		border-radius: 11px;
-		color: #13795b;
-		background: #e9f8f2;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
 	}
 	header h2 {
 		margin: 3px 0 0;
@@ -334,7 +344,7 @@
 		gap: 12px;
 		border: 1px solid var(--wa-border);
 		border-radius: 12px;
-		background: #fbfcfb;
+		background: var(--wa-surface-muted);
 	}
 	.source-main strong,
 	.source-main span,
@@ -353,18 +363,18 @@
 	.source-state small {
 		margin-top: 3px;
 		color: var(--wa-muted);
-		font-size: 10px;
+		font-size: 12px;
 	}
 	.source-state {
 		text-align: right;
 	}
 	.source-state span {
-		color: #8a5c1f;
-		font-size: 10px;
+		color: var(--wa-muted);
+		font-size: 12px;
 		font-weight: 700;
 	}
 	.source-state span.active {
-		color: #147556;
+		color: var(--wa-success);
 	}
 	.empty-source {
 		padding: 28px 18px;
@@ -419,7 +429,7 @@
 	.switch-row small {
 		margin-top: 2px;
 		color: var(--wa-muted);
-		font-size: 9px;
+		font-size: 12px;
 	}
 	.advanced {
 		padding: 11px 12px;

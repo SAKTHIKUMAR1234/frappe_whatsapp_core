@@ -37,6 +37,32 @@ from frappe_whatsapp_core.calling import (
 	upload_voicemail_announcement as whatsapp_upload_voicemail_announcement,
 )
 from frappe_whatsapp_core.cases import create_case
+from frappe_whatsapp_core.flow_actions import registered_action_catalog
+from frappe_whatsapp_core.flow_api import (
+	create_flow as create_automation_flow,
+)
+from frappe_whatsapp_core.flow_api import (
+	get_builder as get_automation_flow,
+)
+from frappe_whatsapp_core.flow_api import (
+	list_flows as list_automation_flows,
+)
+from frappe_whatsapp_core.flow_api import (
+	publish as publish_automation_flow,
+)
+from frappe_whatsapp_core.flow_api import (
+	request_approval as request_automation_flow_approval,
+)
+from frappe_whatsapp_core.flow_api import (
+	save_draft as save_automation_flow,
+)
+from frappe_whatsapp_core.flow_api import (
+	start as start_automation_flow,
+)
+from frappe_whatsapp_core.flow_api import (
+	validate_draft as validate_automation_flow,
+)
+from frappe_whatsapp_core.flow_responses import list_flow_responses
 from frappe_whatsapp_core.groups import (
 	change_join_requests as whatsapp_change_join_requests,
 )
@@ -122,12 +148,18 @@ from frappe_whatsapp_core.meta_flows import (
 	upload_flow_json as upload_meta_flow_json,
 )
 from frappe_whatsapp_core.party_bindings import upsert_party_binding
-from frappe_whatsapp_core.permissions import require_core_access
+from frappe_whatsapp_core.permissions import CORE_MANAGEMENT_ROLES, FLOW_BUILDER_ROLES
 from frappe_whatsapp_core.topics import (
 	list_topics,
 	unclassified_messages,
 	upsert_topic,
 )
+from frappe_whatsapp_core.ai_summaries import (
+	get_identity_summary,
+	summarize_identities,
+	summarize_identity,
+)
+from frappe_whatsapp_core.summary_rollups import get_summary_context
 from frappe_whatsapp_core.workspace_api import (
 	assign_conversation,
 	list_messages,
@@ -205,6 +237,43 @@ TOOL_DEFINITIONS = [
 			"type": "object",
 			"required": ["conversation"],
 			"properties": {"conversation": {"type": "string"}},
+		},
+	},
+	{
+		"name": "whatsapp.get_contact_summary",
+		"description": "Read or incrementally refresh the auditable AI summary for one contact.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["identity"],
+			"properties": {
+				"identity": {"type": "string"},
+				"refresh": {"type": "boolean"},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.summarize_contacts",
+		"description": "Compose existing per-contact summaries into one group management overview without resending raw histories.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["identities"],
+			"properties": {
+				"identities": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+				"scope_key": {"type": "string"},
+				"refresh": {"type": "boolean"},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.get_summary_context",
+		"description": "Read retained daily, weekly, monthly and yearly context layers for one contact without rescanning raw messages.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["identity"],
+			"properties": {
+				"identity": {"type": "string"},
+				"reference_date": {"type": "string", "format": "date"},
+			},
 		},
 	},
 	{
@@ -522,6 +591,113 @@ TOOL_DEFINITIONS = [
 			"properties": {
 				"campaign_name": {"type": "string"},
 				"confirmation": {"type": "string", "enum": ["CANCEL"]},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.list_automation_flows",
+		"description": "List site-local visual automation flows.",
+		"inputSchema": {
+			"type": "object",
+			"properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 500}},
+		},
+	},
+	{
+		"name": "whatsapp.get_automation_flow",
+		"description": "Read a visual automation graph and its registered action catalog.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["flow_name"],
+			"properties": {"flow_name": {"type": "string"}},
+		},
+	},
+	{
+		"name": "whatsapp.list_flow_actions",
+		"description": "List allowlisted Python action paths and their parameter schemas.",
+		"inputSchema": {"type": "object", "properties": {}},
+	},
+	{
+		"name": "whatsapp.create_automation_flow",
+		"description": "Create a site-local visual automation draft.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["title", "flow_key"],
+			"properties": {
+				"title": {"type": "string"},
+				"flow_key": {"type": "string"},
+				"description": {"type": "string"},
+				"graph": {"type": "object"},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.save_automation_flow",
+		"description": "Save and validate a complete visual automation graph.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["flow_name", "graph"],
+			"properties": {
+				"flow_name": {"type": "string"},
+				"graph": {"type": "object"},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.validate_automation_flow",
+		"description": "Validate the saved visual graph without publishing it.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["flow_name"],
+			"properties": {"flow_name": {"type": "string"}},
+		},
+	},
+	{
+		"name": "whatsapp.request_automation_flow_approval",
+		"description": "Submit a valid visual automation draft for WhatsApp Manager review.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["flow_name"],
+			"properties": {"flow_name": {"type": "string"}},
+		},
+	},
+	{
+		"name": "whatsapp.publish_automation_flow",
+		"description": "Publish an immutable visual automation version. Requires confirmation=PUBLISH.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["flow_name", "confirmation"],
+			"properties": {
+				"flow_name": {"type": "string"},
+				"confirmation": {"type": "string", "enum": ["PUBLISH"]},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.list_flow_responses",
+		"description": "List durable visual automation, Meta submission, and data-exchange responses.",
+		"inputSchema": {
+			"type": "object",
+			"properties": {
+				"flow": {"type": "string"},
+				"conversation": {"type": "string"},
+				"response_type": {
+					"type": "string",
+					"enum": ["Automation", "Meta Submission", "Data Exchange"],
+				},
+				"limit": {"type": "integer", "minimum": 1, "maximum": 500},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.start_automation_flow",
+		"description": "Start one published automation for an accessible conversation. Requires confirmation=START.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["flow_name", "conversation", "confirmation"],
+			"properties": {
+				"flow_name": {"type": "string"},
+				"conversation": {"type": "string"},
+				"confirmation": {"type": "string", "enum": ["START"]},
 			},
 		},
 	},
@@ -1003,20 +1179,32 @@ TOOL_DEFINITIONS = [
 ]
 
 
+FLOW_AUTHORING_TOOL_NAMES = {
+	"whatsapp.list_automation_flows",
+	"whatsapp.get_automation_flow",
+	"whatsapp.list_flow_actions",
+	"whatsapp.create_automation_flow",
+	"whatsapp.save_automation_flow",
+	"whatsapp.validate_automation_flow",
+	"whatsapp.request_automation_flow_approval",
+}
+
+
 @frappe.whitelist()
-@require_core_access(manage=True)
 def manifest() -> dict:
+	permitted = _permitted_tool_names()
 	return {
 		"name": "frappe-whatsapp-core",
 		"version": "0.1.0",
-		"tools": TOOL_DEFINITIONS,
+		"tools": [tool for tool in TOOL_DEFINITIONS if tool["name"] in permitted],
 		"note": "Bind these audited contracts to the selected MCP transport.",
 	}
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
 def call_tool(name: str, arguments: dict | str | None = None) -> dict | list:
+	if name not in _permitted_tool_names():
+		frappe.throw("This MCP role cannot call that WhatsApp tool", frappe.PermissionError)
 	arguments = _arguments(arguments)
 	handlers = {
 		"whatsapp.list_conversations": lambda: _list_conversations(
@@ -1034,6 +1222,20 @@ def call_tool(name: str, arguments: dict | str | None = None) -> dict | list:
 		),
 		"whatsapp.upsert_topic": lambda: upsert_topic(**arguments),
 		"whatsapp.list_conversation_topics": (lambda: list_topics(arguments["conversation"])),
+		"whatsapp.get_contact_summary": lambda: (
+			summarize_identity(arguments["identity"])
+			if arguments.get("refresh")
+			else get_identity_summary(arguments["identity"])
+		),
+		"whatsapp.summarize_contacts": lambda: summarize_identities(
+			arguments["identities"],
+			scope_key=arguments.get("scope_key"),
+			force=bool(arguments.get("refresh")),
+		),
+		"whatsapp.get_summary_context": lambda: get_summary_context(
+			arguments["identity"],
+			arguments.get("reference_date"),
+		),
 		"whatsapp.create_case": lambda: create_case(
 			arguments["case_type"],
 			arguments["title"],
@@ -1106,6 +1308,24 @@ def call_tool(name: str, arguments: dict | str | None = None) -> dict | list:
 			arguments,
 		),
 		"whatsapp.cancel_campaign": lambda: _cancel_campaign(arguments),
+		"whatsapp.list_automation_flows": lambda: list_automation_flows(
+			arguments.get("limit", 500)
+		),
+		"whatsapp.get_automation_flow": lambda: get_automation_flow(arguments["flow_name"]),
+		"whatsapp.list_flow_actions": registered_action_catalog,
+		"whatsapp.create_automation_flow": lambda: create_automation_flow(**arguments),
+		"whatsapp.save_automation_flow": lambda: save_automation_flow(
+			arguments["flow_name"], arguments["graph"]
+		),
+		"whatsapp.validate_automation_flow": lambda: validate_automation_flow(
+			arguments["flow_name"]
+		),
+		"whatsapp.request_automation_flow_approval": lambda: request_automation_flow_approval(
+			arguments["flow_name"]
+		),
+		"whatsapp.publish_automation_flow": lambda: _publish_automation_flow(arguments),
+		"whatsapp.list_flow_responses": lambda: list_flow_responses(**arguments),
+		"whatsapp.start_automation_flow": lambda: _start_automation_flow(arguments),
 		"whatsapp.list_flows": lambda: meta_flow_workspace(arguments.get("account_name")),
 		"whatsapp.get_flow": lambda: get_meta_flow(arguments["account_name"], arguments["flow_id"]),
 		"whatsapp.create_flow": lambda: create_meta_flow(**arguments),
@@ -1164,6 +1384,17 @@ def call_tool(name: str, arguments: dict | str | None = None) -> dict | list:
 	if not handler:
 		frappe.throw("Unknown Core MCP tool")
 	return handler()
+
+
+def _permitted_tool_names() -> set[str]:
+	if frappe.session.user == "Guest":
+		frappe.throw("Authentication required", frappe.AuthenticationError)
+	roles = set(frappe.get_roles())
+	if roles & CORE_MANAGEMENT_ROLES:
+		return {tool["name"] for tool in TOOL_DEFINITIONS}
+	if roles & FLOW_BUILDER_ROLES:
+		return set(FLOW_AUTHORING_TOOL_NAMES)
+	frappe.throw("WhatsApp MCP access is required", frappe.PermissionError)
 
 
 def _list_conversations(limit: int) -> list[dict]:
@@ -1271,6 +1502,24 @@ def _publish_meta_flow(arguments: dict):
 	if arguments.get("confirmation") != "PUBLISH":
 		frappe.throw("Publishing a Meta Flow requires confirmation=PUBLISH", frappe.ValidationError)
 	return publish_meta_flow(arguments["account_name"], arguments["flow_id"])
+
+
+def _publish_automation_flow(arguments: dict):
+	if arguments.get("confirmation") != "PUBLISH":
+		frappe.throw(
+			"Publishing a visual automation requires confirmation=PUBLISH",
+			frappe.ValidationError,
+		)
+	return publish_automation_flow(arguments["flow_name"])
+
+
+def _start_automation_flow(arguments: dict):
+	if arguments.get("confirmation") != "START":
+		frappe.throw(
+			"Starting a visual automation requires confirmation=START",
+			frappe.ValidationError,
+		)
+	return start_automation_flow(arguments["flow_name"], arguments["conversation"])
 
 
 def _cancel_campaign(arguments: dict):

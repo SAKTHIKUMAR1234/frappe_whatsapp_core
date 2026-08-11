@@ -1,144 +1,87 @@
-"""Business-neutral starter graphs for the Core visual builder."""
+"""Business-neutral starter graphs for the Core visual builder.
+
+Starter graphs demonstrate the transport and input nodes only. Business
+actions (creating documents, opening tickets, fetching catalogs, and similar
+operations) belong to the installed business app and must be registered with
+the ``whatsapp_core_flow_actions`` hook.
+"""
 
 import copy
 import json
 
 import frappe
 
-
 BUILTIN_FLOWS = {
-	"branched_review": {
+	"guided_request": {
 		"schema_version": 1,
 		"triggers": [
-			{"key": "help", "type": "command", "match": "/help", "priority": 10},
-			{
-				"key": "review_start",
-				"type": "template_button",
-				"match": "start_review",
-				"priority": 20,
-			},
+			{"key": "guided_request", "type": "command", "match": "/start", "priority": 10}
 		],
 		"nodes": [
 			{
 				"id": "start",
 				"type": "start",
-				"position": {"x": 40, "y": 230},
+				"position": {"x": 40, "y": 180},
 				"config": {"label": "Start"},
 			},
 			{
-				"id": "welcome",
-				"type": "send_message",
-				"position": {"x": 250, "y": 230},
+				"id": "request_type",
+				"type": "ask_input",
+				"position": {"x": 280, "y": 180},
 				"config": {
-					"label": "Welcome",
-					"message": "We would like to ask two quick questions.",
-				},
-			},
-			{
-				"id": "liked",
-				"type": "ask_choice",
-				"position": {"x": 480, "y": 230},
-				"config": {
-					"label": "Do they like it?",
-					"message": "Do you like our products?",
-					"answer_key": "liked",
+					"label": "Choose request type",
+					"message": "How can we help you?",
+					"answer_key": "request_type",
+					"input_type": "radio",
+					"required": True,
 					"options": [
-						{"label": "Yes", "value": "yes"},
-						{"label": "No", "value": "no"},
+						{"label": "Support", "value": "support"},
+						{"label": "Information", "value": "information"},
 					],
 				},
 			},
 			{
-				"id": "liked_branch",
-				"type": "condition",
-				"position": {"x": 730, "y": 230},
-				"config": {"label": "Yes or No?"},
-			},
-			{
-				"id": "favorite_product",
-				"type": "ask_text",
-				"position": {"x": 980, "y": 80},
+				"id": "details",
+				"type": "ask_input",
+				"position": {"x": 550, "y": 180},
 				"config": {
-					"label": "Favourite product",
-					"message": "Which product do you like most?",
-					"answer_key": "favorite_product",
+					"label": "Capture details",
+					"message": "Please share the details of your request.",
+					"answer_key": "details",
+					"input_type": "text",
+					"required": True,
 				},
 			},
 			{
-				"id": "record_interest",
-				"type": "action",
-				"position": {"x": 1240, "y": 80},
-				"config": {
-					"label": "Categorize interest",
-					"action": "customer.categorize_interest",
-					"input": {"product": {"var": "answers.favorite_product"}},
-				},
-			},
-			{
-				"id": "difficulty",
-				"type": "ask_text",
-				"position": {"x": 980, "y": 380},
-				"config": {
-					"label": "Capture difficulty",
-					"message": "What difficulty did you face with us?",
-					"answer_key": "difficulty",
-				},
-			},
-			{
-				"id": "create_ticket",
-				"type": "action",
-				"position": {"x": 1240, "y": 380},
-				"config": {
-					"label": "Create support ticket",
-					"action": "case.create",
-					"input": {
-						"case_type": "essdee.operations.tech_support",
-						"description": {"var": "answers.difficulty"},
-					},
-					"output_key": "ticket",
-				},
-			},
-			{
-				"id": "thanks",
+				"id": "confirmation",
 				"type": "send_message",
-				"position": {"x": 1510, "y": 230},
+				"position": {"x": 820, "y": 180},
 				"config": {
-					"label": "Thank customer",
+					"label": "Confirm",
 					"message": "Thank you. Your response has been recorded.",
 				},
 			},
 			{
 				"id": "end",
 				"type": "end",
-				"position": {"x": 1750, "y": 230},
+				"position": {"x": 1080, "y": 180},
 				"config": {"label": "End"},
 			},
 		],
 		"edges": [
-			{"id": "e1", "source": "start", "target": "welcome"},
-			{"id": "e2", "source": "welcome", "target": "liked"},
-			{"id": "e3", "source": "liked", "target": "liked_branch"},
-			{
-				"id": "e4",
-				"source": "liked_branch",
-				"target": "favorite_product",
-				"when": {"op": "eq", "left": {"var": "answers.liked"}, "right": "yes"},
-			},
-			{"id": "e5", "source": "liked_branch", "target": "difficulty", "default": True},
-			{"id": "e6", "source": "favorite_product", "target": "record_interest"},
-			{"id": "e7", "source": "record_interest", "target": "thanks"},
-			{"id": "e8", "source": "difficulty", "target": "create_ticket"},
-			{"id": "e9", "source": "create_ticket", "target": "thanks"},
-			{"id": "e10", "source": "thanks", "target": "end"},
+			{"id": "e1", "source": "start", "target": "request_type"},
+			{"id": "e2", "source": "request_type", "target": "details"},
+			{"id": "e3", "source": "details", "target": "confirmation"},
+			{"id": "e4", "source": "confirmation", "target": "end"},
 		],
 	}
 }
 
 
 def create_from_template(
-	template_key="branched_review",
-	flow_key="core.demo.branched_review",
-	title="Branched Customer Review",
+	template_key="guided_request",
+	flow_key="core.starter.guided_request",
+	title="Guided Request",
 ):
 	if template_key not in BUILTIN_FLOWS:
 		frappe.throw(f"Unknown flow template: {template_key}")
@@ -149,8 +92,9 @@ def create_from_template(
 		"doctype": "WhatsApp Core Flow",
 		"flow_key": flow_key,
 		"title": title,
-		"description": "Template button or /help, branched questions, and typed business actions.",
+		"description": "A business-neutral starter Flow for collecting a guided response.",
 		"status": "Draft",
+		"approval_status": "Draft",
 		"enabled": 1,
 		"draft_graph": json.dumps(graph, separators=(",", ":"), ensure_ascii=False),
 	}).insert(ignore_permissions=True).name

@@ -21,12 +21,12 @@ from frappe_whatsapp_core.hub_client import (
 from frappe_whatsapp_core.hub_client import (
 	send_batch as send_hub_batch,
 )
+from frappe_whatsapp_core.identity import phone_candidates
 from frappe_whatsapp_core.materializer import (
 	get_or_create_conversation,
 	get_or_create_identity,
 	normalize_phone,
 )
-from frappe_whatsapp_core.identity import phone_candidates
 from frappe_whatsapp_core.permissions import assert_conversation_access, require_core_access
 
 
@@ -44,6 +44,11 @@ def resolve_recipient_phone(identity, context: dict | None = None) -> str:
 	"""Resolve the delivery number, falling back to the Core Identity value."""
 	if isinstance(identity, str):
 		identity = frappe.get_cached_doc("WhatsApp Core Identity", identity)
+	if getattr(identity, "status", "Active") != "Active":
+		frappe.throw(
+			"This WhatsApp contact is blocked from outbound messaging",
+			frappe.ValidationError,
+		)
 	paths = frappe.get_hooks("whatsapp_core_recipient_phone_resolver") or []
 	if isinstance(paths, str):
 		paths = [paths]
@@ -278,6 +283,8 @@ def queue_text_internal(
 	*,
 	context_message_id: str | None = None,
 	client_message_id: str | None = None,
+	enqueue_delivery: bool = True,
+	_batch_context: dict | None = None,
 ) -> dict:
 	body = str(body or "").strip()
 	if not body:
@@ -294,6 +301,8 @@ def queue_text_internal(
 			"context_message_id": _provider_context_id(context_message_id),
 		},
 		client_message_id=client_message_id,
+		enqueue_delivery=enqueue_delivery,
+		_batch_context=_batch_context,
 	)
 
 
@@ -306,6 +315,7 @@ def queue_rich(
 	body: str = "",
 	source: str = "Core UI",
 	client_message_id: str | None = None,
+	local_file_url: str | None = None,
 ) -> dict:
 	"""Queue a supported native Cloud API message without exposing its recipient.
 
@@ -319,19 +329,28 @@ def queue_rich(
 	if not isinstance(payload, dict):
 		frappe.throw("Rich message payload must be an object", frappe.ValidationError)
 	normalized = _validate_rich_payload(message_type, payload)
+	local_file = _local_media_file(local_file_url, message_type) if local_file_url else None
+	if local_file:
+		normalized["local_file_url"] = local_file.file_url
 	preview = str(body or _rich_message_body(message_type, normalized)).strip()[:4096]
-	return _queue_message(
+	message = _queue_message(
 		conversation_name,
 		message_type,
 		preview,
 		{"payload": normalized, "source": source},
 		client_message_id=client_message_id,
 	)
+	if local_file:
+		local_file.attached_to_doctype = "WhatsApp Core Message"
+		local_file.attached_to_name = message.name
+		local_file.attached_to_field = None
+		local_file.save(ignore_permissions=True)
+	return message
 
 
 @frappe.whitelist()
 @require_core_access()
-def upload_media(conversation_name: str, file_url: str) -> dict:
+def upload_media(conversation_name: str, file_url: str, media_type: str | None = None) -> dict:
 	"""Upload a private Core file to the mapped Meta account and return its ID."""
 	assert_conversation_access(conversation_name)
 	conversation = frappe.get_doc("WhatsApp Core Conversation", conversation_name)
@@ -349,8 +368,21 @@ def upload_media(conversation_name: str, file_url: str) -> dict:
 	content = file_doc.get_content()
 	if isinstance(content, str):
 		content = content.encode()
-	if len(content) > 16 * 1024 * 1024:
-		frappe.throw("WhatsApp media uploads are limited to 16 MB", frappe.ValidationError)
+	media_type = str(media_type or "document").strip().lower()
+	max_bytes = {
+		"image": 5 * 1024 * 1024,
+		"video": 16 * 1024 * 1024,
+		"audio": 16 * 1024 * 1024,
+		"document": 100 * 1024 * 1024,
+		"sticker": 500 * 1024,
+	}.get(media_type)
+	if not max_bytes:
+		frappe.throw("Unsupported media type", frappe.ValidationError)
+	if len(content) > max_bytes:
+		frappe.throw(
+			f"{media_type.title()} exceeds WhatsApp's upload limit",
+			frappe.ValidationError,
+		)
 	settings = get_settings(outbound=True)
 	result = call_management(
 		"frappe_whatsapp_integration.frappe_whatsapp_hub.api.media.upload_media",
@@ -368,6 +400,7 @@ def upload_media(conversation_name: str, file_url: str) -> dict:
 		frappe.throw(result.get("error") or "Meta media upload failed")
 	return {
 		"media_id": result["media_id"],
+		"file_url": file_doc.file_url,
 		"filename": file_doc.file_name,
 		"content_type": mimetypes.guess_type(file_doc.file_name or "")[0],
 	}
@@ -399,8 +432,10 @@ def queue_template_internal(
 	source: str = "Core",
 	*,
 	enqueue_delivery: bool = True,
+	_batch_context: dict | None = None,
+	_template_doc=None,
 ) -> dict:
-	template_doc = _approved_template(template)
+	template_doc = _template_doc or _approved_template(template)
 	if components is None:
 		components = []
 	elif isinstance(components, str):
@@ -424,6 +459,7 @@ def queue_template_internal(
 			"source": source,
 		},
 		enqueue_delivery=enqueue_delivery,
+		_batch_context=_batch_context,
 	)
 
 
@@ -465,11 +501,20 @@ def queue_campaign_recipient(campaign, recipient) -> dict:
 	channel = frappe.get_doc("WhatsApp Core Channel", campaign.channel)
 	identity = frappe.get_doc("WhatsApp Core Identity", recipient.identity)
 	conversation = get_or_create_conversation(channel, identity)
-	message = queue_template_internal(
-		conversation.name,
-		campaign.template,
-		source=f"Campaign:{campaign.name}",
-	)
+	personalization = _json_dict(recipient.personalization)
+	if (getattr(campaign, "content_type", None) or "Template") == "Text":
+		message = queue_text_internal(
+			conversation.name,
+			personalization.get("text") or campaign.message_text,
+			source=f"Campaign:{campaign.name}",
+		)
+	else:
+		message = queue_template_internal(
+			conversation.name,
+			campaign.template,
+			components=personalization.get("components") or [],
+			source=f"Campaign:{campaign.name}",
+		)
 	return {
 		"message": message.name,
 		"conversation": conversation.name,
@@ -477,7 +522,12 @@ def queue_campaign_recipient(campaign, recipient) -> dict:
 
 
 def queue_campaign_batch(campaign, recipients) -> dict:
-	"""Create optimistic messages, then submit one batch of up to 40 to the Hub."""
+	"""Create optimistic messages and enqueue Hub submission after commit.
+
+	The campaign transaction owns the optimistic Core messages and recipient rows.  Sending
+	to the Hub before that transaction commits lets a fast provider callback overtake the
+	message insert, which produces orphaned provider sends and ``message not found`` results.
+	"""
 	if not recipients:
 		return {}
 	if len(recipients) > 40:
@@ -486,9 +536,23 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 			frappe.ValidationError,
 		)
 	channel = frappe.get_cached_doc("WhatsApp Core Channel", campaign.channel)
-	template = frappe.get_cached_doc("WhatsApp Core Template", campaign.template)
+	content_type = getattr(campaign, "content_type", None) or "Template"
+	template = (
+		frappe.get_cached_doc("WhatsApp Core Template", campaign.template)
+		if content_type == "Template"
+		else None
+	)
 	results = {}
-	submissions = []
+	message_names = []
+	message_payloads = []
+	conversation_names = []
+	# Transport readiness is invariant for this bounded batch. Rechecking and
+	# decrypting the same Single DocType for every recipient is avoidable work.
+	if not outbound_ready():
+		frappe.throw(
+			"WhatsApp outbound is not fully configured and enabled",
+			frappe.ValidationError,
+		)
 	for recipient in recipients:
 		try:
 			identity = frappe.get_cached_doc(
@@ -496,15 +560,6 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 				recipient.identity,
 			)
 			conversation = get_or_create_conversation(channel, identity)
-			personalization = _json_dict(recipient.personalization)
-			message = queue_template_internal(
-				conversation.name,
-				template.name,
-				template.language_code,
-				personalization.get("components") or [],
-				source=f"Campaign:{campaign.name}",
-				enqueue_delivery=False,
-			)
 			recipient_phone = resolve_recipient_phone(
 				identity,
 				{
@@ -514,24 +569,146 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 					"conversation": conversation.name,
 				},
 			)
-			submissions.append({
-				"recipient": recipient.name,
+			personalization = _json_dict(recipient.personalization)
+			if content_type == "Text":
+				message = queue_text_internal(
+					conversation.name,
+					personalization.get("text") or campaign.message_text,
+					source=f"Campaign:{campaign.name}",
+					enqueue_delivery=False,
+					_batch_context={
+						"conversation": conversation,
+						"identity": identity,
+					},
+				)
+			else:
+				message = queue_template_internal(
+					conversation.name,
+					template.name,
+					template.language_code,
+					personalization.get("components") or [],
+					source=f"Campaign:{campaign.name}",
+					enqueue_delivery=False,
+					_batch_context={
+						"conversation": conversation,
+						"identity": identity,
+					},
+					_template_doc=template,
+				)
+			# Resolve and validate while the recipient is still available to the campaign
+			# worker. The durable transport call itself happens only after commit.
+			_message_payload(message, recipient_phone)
+			message_names.append(message.name)
+			message_payloads.append(dict(message))
+			conversation_names.append(conversation.name)
+			results[recipient.name] = {
+				"success": True,
 				"message": message.name,
-				"channel": message.channel,
-				"payload": _message_payload(
-					message,
-					recipient_phone,
-				),
-				"idempotency_key": message.idempotency_key,
-			})
+				"conversation": message.conversation,
+			}
 		except Exception as exception:
 			results[recipient.name] = {
 				"success": False,
 				"error": str(exception),
 			}
 
+	if conversation_names:
+		frappe.db.sql(
+			"""
+			UPDATE `tabWhatsApp Core Conversation`
+			SET last_message_at = GREATEST(
+				COALESCE(last_message_at, '1900-01-01 00:00:00'),
+				NOW(6)
+			)
+			WHERE name IN %(conversation_names)s
+			""",
+			{"conversation_names": list(dict.fromkeys(conversation_names))},
+		)
+		frappe.publish_realtime(
+			"whatsapp_core_batch_committed",
+			{
+				"event_count": 0,
+				"completed": 0,
+				"failed": 0,
+				"kinds": ["message"],
+				"conversations": list(dict.fromkeys(conversation_names)),
+				"message_changes": [
+					{"kind": "message", "status": "created", "message": row}
+					for row in message_payloads
+				],
+			},
+			after_commit=True,
+		)
+
+	if message_names:
+		frappe.enqueue(
+			"frappe_whatsapp_core.outbound.deliver_queued_message_batch",
+			queue="short",
+			enqueue_after_commit=True,
+			message_names=message_names,
+		)
+	return results
+
+
+def deliver_queued_message_batch(message_names: list[str]) -> None:
+	"""Submit committed optimistic messages to the Hub in one bounded batch."""
+	message_names = list(dict.fromkeys(message_names or []))
+	if not message_names:
+		return
+	if len(message_names) > 40:
+		frappe.throw(
+			"A WhatsApp campaign transport batch cannot exceed 40 messages",
+			frappe.ValidationError,
+		)
+
+	submissions = []
+	preparation_failures = []
+	for message_name in message_names:
+		message = frappe.get_doc("WhatsApp Core Message", message_name)
+		if message.delivery_status != "Queued":
+			continue
+		try:
+			conversation = frappe.get_doc(
+				"WhatsApp Core Conversation",
+				message.conversation,
+			)
+			identity = frappe.get_doc(
+				"WhatsApp Core Identity",
+				conversation.remote_identity,
+			)
+			context = {
+				"source": "message",
+				"message": message.name,
+				"conversation": conversation.name,
+				"channel": message.channel,
+			}
+			group_id = _group_id(identity)
+			recipient = group_id or resolve_recipient_phone(identity, context)
+			submissions.append({
+				"message": message,
+				"channel": message.channel,
+				"payload": _message_payload(
+					message,
+					recipient,
+					recipient_type="group" if group_id else "individual",
+				),
+				"idempotency_key": message.idempotency_key,
+			})
+		except Exception as exception:
+			preparation_failures.append(
+				(message.name, {"error": str(exception), "retryable": False})
+			)
+
+	# Everything above is read-only. End that database snapshot before the external
+	# request: Meta can deliver its callback while this HTTP request is still in
+	# flight, and retaining the old snapshot makes MariaDB reject the later status
+	# update with error 1020 (record changed since last read). No business write is
+	# discarded here.
+	frappe.db.rollback()
 	if not submissions:
-		return results
+		for message_name, failure in preparation_failures:
+			_mark_failed(frappe._dict(name=message_name), failure)
+		return
 
 	hub_result = send_hub_batch([
 		{
@@ -541,16 +718,19 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 		}
 		for item in submissions
 	])
+	# Hub settings are resolved from Frappe immediately before the HTTP request,
+	# which starts another read transaction. End it after the request for the same
+	# callback-before-response race handled by the single-message path.
+	frappe.db.rollback()
+	for message_name, failure in preparation_failures:
+		_mark_failed(frappe._dict(name=message_name), failure)
 	items_by_key = {
 		item.get("idempotency_key"): item
 		for item in hub_result.get("items") or []
 		if isinstance(item, dict) and item.get("idempotency_key")
 	}
 	for submission in submissions:
-		message = frappe.get_doc(
-			"WhatsApp Core Message",
-			submission["message"],
-		)
+		message = submission["message"]
 		item = items_by_key.get(submission["idempotency_key"]) or {}
 		relay_result = item.get("result") or {}
 		item_status = str(item.get("status") or "").lower()
@@ -595,12 +775,6 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 				},
 			)
 			_enqueue_message_delivery(message.name)
-		results[submission["recipient"]] = {
-			"success": True,
-			"message": message.name,
-			"conversation": message.conversation,
-		}
-	return results
 
 
 def deliver_queued_message(message_name: str) -> None:
@@ -635,6 +809,10 @@ def deliver_queued_message(message_name: str) -> None:
 			payload,
 			message.idempotency_key,
 		)
+		# The provider may have committed a status callback during send_raw().
+		# Refresh the transaction boundary so the monotonic UPDATE below operates
+		# against the current row rather than the pre-request read snapshot.
+		frappe.db.rollback()
 		if result.get("accepted"):
 			if result.get("status") not in {"queued", "retrying"}:
 				_mark_sent(message, result.get("meta_message_id"))
@@ -647,17 +825,25 @@ def deliver_queued_message(message_name: str) -> None:
 
 def retry_queued_messages(limit: int = 500) -> None:
 	cutoff = add_to_date(now_datetime(), seconds=-30)
-	for message_name in frappe.get_all(
-		"WhatsApp Core Message",
-		filters={
-			"direction": "Outbound",
-			"delivery_status": "Queued",
-			"modified": ["<=", cutoff],
-		},
-		pluck="name",
-		order_by="modified asc",
-		limit_page_length=max(1, min(int(limit), 2000)),
-	):
+	message_names = frappe.db.sql(
+		"""
+		SELECT message.name
+		FROM `tabWhatsApp Core Message` message
+		LEFT JOIN `tabWhatsApp Core Campaign Recipient` recipient
+			ON recipient.core_message = message.name
+		LEFT JOIN `tabWhatsApp Core Campaign` campaign
+			ON campaign.name = recipient.campaign
+		WHERE message.direction = 'Outbound'
+			AND message.delivery_status = 'Queued'
+			AND message.modified <= %s
+			AND (campaign.name IS NULL OR campaign.status != 'Cancelled')
+		ORDER BY message.modified ASC
+		LIMIT %s
+		""",
+		(cutoff, max(1, min(int(limit), 2000))),
+		pluck=True,
+	)
+	for message_name in message_names:
 		frappe.enqueue(
 			"frappe_whatsapp_core.outbound.deliver_queued_message",
 			queue="short",
@@ -674,28 +860,30 @@ def _queue_message(
 	*,
 	enqueue_delivery: bool = True,
 	client_message_id: str | None = None,
+	_batch_context: dict | None = None,
 ) -> dict:
-	assert_conversation_access(conversation_name)
-	if not outbound_ready():
+	batch_context = _batch_context or {}
+	if not batch_context:
+		assert_conversation_access(conversation_name)
+	if not batch_context and not outbound_ready():
 		frappe.throw(
 			"WhatsApp outbound is not fully configured and enabled",
 			frappe.ValidationError,
 		)
-	conversation = frappe.get_doc(
-		"WhatsApp Core Conversation",
-		conversation_name,
+	conversation = batch_context.get("conversation") or frappe.get_doc(
+		"WhatsApp Core Conversation", conversation_name
 	)
-	identity = frappe.get_cached_doc(
-		"WhatsApp Core Identity",
-		conversation.remote_identity,
+	identity = batch_context.get("identity") or frappe.get_cached_doc(
+		"WhatsApp Core Identity", conversation.remote_identity
 	)
 	group_id = _group_id(identity)
-	frappe.has_permission(
-		"WhatsApp Core Conversation",
-		"read",
-		doc=conversation,
-		throw=True,
-	)
+	if not batch_context:
+		frappe.has_permission(
+			"WhatsApp Core Conversation",
+			"read",
+			doc=conversation,
+			throw=True,
+		)
 	if (
 		not group_id
 		and message_type != "template"
@@ -739,16 +927,22 @@ def _queue_message(
 		"provider_timestamp": now_datetime(),
 		"delivery_status": "Queued",
 	}).insert(ignore_permissions=True)
-	conversation.last_message_at = message.provider_timestamp
-	conversation.save(ignore_permissions=True)
+	if not batch_context:
+		conversation.last_message_at = message.provider_timestamp
+		conversation.save(ignore_permissions=True)
 	if enqueue_delivery:
 		_enqueue_message_delivery(message.name)
-	frappe.publish_realtime(
-		"whatsapp_core_message",
-		{"conversation": conversation.name, "message": message.as_dict()},
-		after_commit=True,
+	message_payload = message.as_dict()
+	message_payload["sender_name"] = (
+		frappe.db.get_value("User", message.owner, "full_name") or message.owner
 	)
-	return message.as_dict()
+	if not batch_context:
+		frappe.publish_realtime(
+			"whatsapp_core_message",
+			{"conversation": conversation.name, "message": message_payload},
+			after_commit=True,
+		)
+	return message_payload
 
 
 def _client_uuid(client_message_id: str | None = None) -> uuid.UUID:
@@ -851,6 +1045,7 @@ def _message_payload(
 	elif message.message_type in _RICH_MESSAGE_TYPES:
 		rich_payload = deepcopy(content.get("payload") or {})
 		context_message_id = rich_payload.pop("context_message_id", None)
+		rich_payload.pop("local_file_url", None)
 		payload[message.message_type] = (
 			rich_payload.get("contacts")
 			if message.message_type == "contacts"
@@ -861,6 +1056,17 @@ def _message_payload(
 	else:
 		frappe.throw(f"Unsupported outbound message type: {message.message_type}")
 	return payload
+
+
+def _local_media_file(file_url: str, message_type: str):
+	if message_type not in {"audio", "document", "image", "sticker", "video"}:
+		frappe.throw("A local File is valid only for media messages", frappe.ValidationError)
+	file_name = frappe.db.get_value("File", {"file_url": str(file_url or "").strip()}, "name")
+	if not file_name:
+		frappe.throw("Uploaded local media was not found", frappe.DoesNotExistError)
+	file_doc = frappe.get_doc("File", file_name)
+	frappe.has_permission("File", "read", doc=file_doc, throw=True)
+	return file_doc
 
 
 def _group_id(identity) -> str:
@@ -973,12 +1179,52 @@ def _rich_message_body(message_type: str, payload: dict) -> str:
 
 
 def _mark_sent(message, provider_message_id: str | None) -> None:
+	# A provider status webhook can arrive before the HTTP send call returns.
+	# Updating the Document loaded before that network call would then either
+	# raise MariaDB 1020 (stale row) or regress Delivered/Read back to Sent.
+	# Keep this as one atomic, monotonic update against the current database row.
+	frappe.db.sql(
+		"""
+		UPDATE `tabWhatsApp Core Message`
+		SET provider_message_id = CASE
+				WHEN %(provider_message_id)s != '' THEN %(provider_message_id)s
+				ELSE provider_message_id
+			END,
+			delivery_status = CASE
+				WHEN delivery_status = 'Queued' THEN 'Sent'
+				ELSE delivery_status
+			END,
+			failure = CASE
+				WHEN delivery_status IN ('Queued', 'Sent') THEN NULL
+				ELSE failure
+			END
+		WHERE name = %(name)s
+		""",
+		{
+			"name": message.name,
+			"provider_message_id": str(provider_message_id or "").strip(),
+		},
+	)
+	frappe.clear_document_cache("WhatsApp Core Message", message.name)
+	current = frappe.db.get_value(
+		"WhatsApp Core Message",
+		message.name,
+		["name", "conversation", "delivery_status", "provider_message_id"],
+		as_dict=True,
+	)
+	if not current:
+		return
 	if provider_message_id:
-		message.provider_message_id = provider_message_id
-	message.delivery_status = "Sent"
-	message.failure = None
-	message.save(ignore_permissions=True)
-	_publish_status(message)
+		# Direct sends and durable relay-result callbacks share the same provider
+		# race. Wake receipts that arrived before this id was persisted.
+		from frappe_whatsapp_core.dispatcher import enqueue_waiting_status_events
+
+		enqueue_waiting_status_events(
+			[provider_message_id],
+			enqueue_after_commit=True,
+		)
+	_reconcile_campaign_message(message.name)
+	_publish_status(current)
 
 
 def _record_retryable_submission(message, result: dict) -> None:
@@ -987,23 +1233,70 @@ def _record_retryable_submission(message, result: dict) -> None:
 	submission["attempts"] = int(submission.get("attempts") or 0) + 1
 	submission["last_attempt_at"] = str(now_datetime())
 	submission["last_error"] = str(result.get("error") or "")[:500]
-	message.content = json.dumps(
+	content_json = json.dumps(
 		content,
 		separators=(",", ":"),
 		ensure_ascii=False,
 	)
-	message.save(ignore_permissions=True)
+	# Do not overwrite a callback that already advanced this message while the
+	# provider request was in flight.
+	frappe.db.sql(
+		"""
+		UPDATE `tabWhatsApp Core Message`
+		SET content = %(content)s
+		WHERE name = %(name)s AND delivery_status = 'Queued'
+		""",
+		{"name": message.name, "content": content_json},
+	)
+	frappe.clear_document_cache("WhatsApp Core Message", message.name)
 
 
 def _mark_failed(message, failure: dict) -> None:
-	message.delivery_status = "Failed"
-	message.failure = json.dumps(
+	failure_json = json.dumps(
 		failure,
 		separators=(",", ":"),
 		ensure_ascii=False,
 	)
-	message.save(ignore_permissions=True)
-	_publish_status(message)
+	# A late send failure cannot undo an already delivered/read receipt.
+	frappe.db.sql(
+		"""
+		UPDATE `tabWhatsApp Core Message`
+		SET delivery_status = CASE
+				WHEN delivery_status IN ('Delivered', 'Read', 'Deleted')
+					THEN delivery_status
+				ELSE 'Failed'
+			END,
+			failure = CASE
+				WHEN delivery_status IN ('Delivered', 'Read', 'Deleted')
+					THEN failure
+				ELSE %(failure)s
+			END
+		WHERE name = %(name)s
+		""",
+		{"name": message.name, "failure": failure_json},
+	)
+	frappe.clear_document_cache("WhatsApp Core Message", message.name)
+	current = frappe.db.get_value(
+		"WhatsApp Core Message",
+		message.name,
+		["name", "conversation", "delivery_status", "provider_message_id"],
+		as_dict=True,
+	)
+	if not current:
+		return
+	_reconcile_campaign_message(message.name)
+	_publish_status(current)
+
+
+def _reconcile_campaign_message(message_name: str) -> None:
+	# Keep campaign aggregation outside the provider-send transaction. A single
+	# campaign row is shared by thousands of independent message workers; locking
+	# it here can roll back an already accepted provider send and cause a retry.
+	# The after-commit projection is idempotent and the periodic dirty repair is
+	# the final source of truth for counters.
+	from frappe_whatsapp_core.campaigns import enqueue_campaign_refresh_for_messages
+
+	enqueue_campaign_refresh_for_messages([message_name])
 
 
 def _publish_status(message) -> None:

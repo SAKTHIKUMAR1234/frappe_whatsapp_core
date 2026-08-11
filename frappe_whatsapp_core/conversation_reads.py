@@ -10,8 +10,6 @@ from __future__ import annotations
 import hashlib
 
 import frappe
-from frappe.utils import now
-
 from frappe_whatsapp_core.permissions import assert_conversation_access, require_core_access
 
 
@@ -26,13 +24,23 @@ def mark_conversation_read(conversation: str, message: str | None = None) -> dic
 		throw=True,
 	)
 	if message:
-		message_conversation = frappe.db.get_value(
+		target = frappe.db.get_value(
 			"WhatsApp Core Message",
 			message,
-			"conversation",
+			["conversation", "provider_timestamp", "creation"],
+			as_dict=True,
 		)
-		if message_conversation != conversation:
+		if not target or target.conversation != conversation:
 			frappe.throw("The read cursor message does not belong to this conversation")
+	else:
+		target = frappe.db.get_value(
+			"WhatsApp Core Message",
+			{"conversation": conversation, "message_type": ["!=", "reaction"]},
+			["name", "conversation", "provider_timestamp", "creation"],
+			order_by="provider_timestamp desc, creation desc",
+			as_dict=True,
+		)
+		message = target.name if target else None
 
 	user = frappe.session.user
 	read_key = hashlib.sha256(f"{conversation}:{user}".encode()).hexdigest()
@@ -41,12 +49,21 @@ def mark_conversation_read(conversation: str, message: str | None = None) -> dic
 		if frappe.db.exists("WhatsApp Core Conversation Read", read_key)
 		else frappe.new_doc("WhatsApp Core Conversation Read")
 	)
+	if not doc.is_new() and target and not _cursor_advances(doc, target):
+		return _read_state(doc)
 	doc.read_key = read_key
 	doc.conversation = conversation
 	doc.user = user
 	doc.last_read_message = message
-	doc.last_read_at = now()
+	doc.last_read_at = target.provider_timestamp if target else doc.last_read_at
+	doc.last_read_creation = target.creation if target else doc.last_read_creation
 	doc.save(ignore_permissions=True)
+	read_state = _read_state(doc)
+	frappe.publish_realtime(
+		"whatsapp_core_conversation_read",
+		read_state,
+		after_commit=True,
+	)
 	provider_message = _latest_inbound_provider_message(conversation)
 	if provider_message:
 		frappe.enqueue(
@@ -56,11 +73,24 @@ def mark_conversation_read(conversation: str, message: str | None = None) -> dic
 			channel=provider_message.channel,
 			message_id=provider_message.provider_message_id,
 		)
+	return read_state
+
+
+def _cursor_advances(doc, target) -> bool:
+	if not doc.last_read_at:
+		return True
+	existing = (str(doc.last_read_at), str(doc.last_read_creation or ""))
+	incoming = (str(target.provider_timestamp), str(target.creation or ""))
+	return incoming > existing
+
+
+def _read_state(doc) -> dict:
 	return {
-		"conversation": conversation,
-		"user": user,
-		"last_read_message": message,
+		"conversation": doc.conversation,
+		"user": doc.user,
+		"last_read_message": doc.last_read_message,
 		"last_read_at": doc.last_read_at,
+		"last_read_creation": doc.last_read_creation,
 	}
 
 
@@ -118,10 +148,25 @@ def conversation_readers(conversation: str) -> list[dict]:
 		conversation,
 		throw=True,
 	)
-	return frappe.get_all(
+	rows = frappe.get_all(
 		"WhatsApp Core Conversation Read",
 		filters={"conversation": conversation},
-		fields=["user", "last_read_message", "last_read_at"],
+		fields=["user", "last_read_message", "last_read_at", "last_read_creation"],
 		order_by="last_read_at desc",
 		limit_page_length=100,
 	)
+	users = {row.user for row in rows}
+	profiles = {
+		row.name: row
+		for row in frappe.get_all(
+			"User",
+			filters={"name": ["in", list(users)]},
+			fields=["name", "full_name", "user_image"],
+			limit_page_length=len(users),
+		)
+	} if users else {}
+	for row in rows:
+		profile = profiles.get(row.user) or {}
+		row.full_name = profile.get("full_name") or row.user
+		row.user_image = profile.get("user_image") or ""
+	return rows

@@ -1,0 +1,30 @@
+{
+	"doctype": "DocType",
+	"name": "WhatsApp Core Team Contact",
+	"module": "Frappe WhatsApp Core",
+	"istable": 1,
+	"editable_grid": 1,
+	"engine": "InnoDB",
+	"field_order": [
+		"identity",
+		"enabled"
+	],
+	"fields": [
+		{
+			"fieldname": "identity",
+			"fieldtype": "Link",
+			"label": "Contact",
+			"options": "WhatsApp Core Identity",
+			"reqd": 1,
+			"in_list_view": 1,
+			"search_index": 1
+		},
+		{
+			"fieldname": "enabled",
+			"fieldtype": "Check",
+			"label": "Enabled",
+			"default": "1",
+			"in_list_view": 1
+		}
+	]
+}

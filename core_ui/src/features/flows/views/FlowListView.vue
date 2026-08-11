@@ -6,6 +6,7 @@
 	import DataTable from 'primevue/datatable'
 	import Dialog from 'primevue/dialog'
 	import InputText from 'primevue/inputtext'
+	import Message from 'primevue/message'
 	import MultiSelect from 'primevue/multiselect'
 	import Select from 'primevue/select'
 	import Skeleton from 'primevue/skeleton'
@@ -23,8 +24,9 @@
 		provisionFlowEndpoint,
 		setBusinessPublicKey,
 	} from '@/features/flows/services/flowService'
-	import { errorMessage } from '@/services/frappe'
+	import { errorMessage, friendlyMessage } from '@/services/frappe'
 	import { useSessionStore } from '@/stores/session'
+	import { focusDialogControl } from '@/utils/focus'
 
 	const router = useRouter()
 	const confirm = useConfirm()
@@ -38,6 +40,10 @@
 	const migrateDialog = ref(false)
 	const keyDialog = ref(false)
 	const endpointDialog = ref(false)
+	const createDialogRef = ref(null)
+	const endpointDialogRef = ref(null)
+	const migrateDialogRef = ref(null)
+	const keyDialogRef = ref(null)
 	const endpointStatus = ref(null)
 	let loadSequence = 0
 	const workspace = ref({ accounts: [], flows: [], selected_account: '' })
@@ -57,6 +63,7 @@
 		'OTHER',
 	]
 	const canManage = computed(() => Boolean(session.boot?.can_manage))
+	const workspaceErrorText = computed(() => friendlyMessage(workspaceError.value))
 	const filteredFlows = computed(() => {
 		const query = filter.value.trim().toLowerCase()
 		if (!query) return workspace.value.flows
@@ -289,12 +296,22 @@
 			</Button>
 		</div>
 	</div>
-	<div v-if="workspaceError" class="banner error-banner">{{ workspaceError }}</div>
+	<Message
+		v-if="workspaceErrorText"
+		severity="error"
+		:closable="false"
+		class="workspace-error"
+		>{{ workspaceErrorText }}</Message
+	>
 
 	<section class="surface-card flow-list">
 		<div class="list-toolbar">
 			<div class="search-box">
-				<Search :size="16" /><input v-model="filter" placeholder="Search Meta Flows…" />
+				<Search :size="16" /><input
+					v-model="filter"
+					aria-label="Search Meta Flows"
+					placeholder="Search Meta Flows…"
+				/>
 			</div>
 			<Select
 				v-model="selectedAccount"
@@ -358,10 +375,12 @@
 	</section>
 
 	<Dialog
+		ref="createDialogRef"
 		v-model:visible="dialog"
 		modal
 		header="Create native Meta Flow"
 		:style="{ width: '470px', maxWidth: '94vw' }"
+		@show="focusDialogControl(createDialogRef, '#meta-flow-name')"
 	>
 		<div class="dialog-copy">
 			<WandSparkles :size="20" />
@@ -370,12 +389,28 @@
 				next screen.
 			</p>
 		</div>
-		<label>Flow name</label
-		><InputText v-model="form.flow_name" fluid placeholder="Customer support intake" />
-		<label>Categories</label
-		><MultiSelect v-model="form.categories" :options="categories" fluid display="chip" />
-		<label>Data endpoint URL <small>optional</small></label
-		><InputText v-model="form.endpoint_uri" fluid placeholder="https://…" />
+		<label for="meta-flow-name">Flow name</label>
+		<InputText
+			id="meta-flow-name"
+			v-model="form.flow_name"
+			fluid
+			placeholder="Customer support intake"
+		/>
+		<label id="meta-flow-categories-label">Categories</label>
+		<MultiSelect
+			v-model="form.categories"
+			:options="categories"
+			aria-labelledby="meta-flow-categories-label"
+			fluid
+			display="chip"
+		/>
+		<label for="meta-flow-endpoint">Data endpoint URL <small>optional</small></label>
+		<InputText
+			id="meta-flow-endpoint"
+			v-model="form.endpoint_uri"
+			fluid
+			placeholder="https://…"
+		/>
 		<template #footer
 			><Button label="Cancel" text @click="dialog = false" /><Button
 				label="Create in Meta"
@@ -385,10 +420,12 @@
 		/></template>
 	</Dialog>
 	<Dialog
+		ref="endpointDialogRef"
 		v-model:visible="endpointDialog"
 		modal
 		header="Encrypted Meta Flow endpoint"
 		:style="{ width: '620px', maxWidth: '94vw' }"
+		@show="focusDialogControl(endpointDialogRef, 'button')"
 	>
 		<p class="dialog-help">
 			Integration owns the encrypted private key and validates Meta signatures. Core only
@@ -428,17 +465,21 @@
 		</template>
 	</Dialog>
 	<Dialog
+		ref="migrateDialogRef"
 		v-model:visible="migrateDialog"
 		modal
 		header="Migrate Meta Flows"
 		:style="{ width: '470px', maxWidth: '94vw' }"
+		@show="focusDialogControl(migrateDialogRef, '#source-waba-id')"
 	>
 		<p class="dialog-help">
 			Copy selected Flows from another WABA into the currently selected destination account.
 		</p>
-		<label>Source WABA ID</label><InputText v-model="migration.source_waba_id" fluid />
-		<label>Source Flow names <small>optional; comma or line separated</small></label
-		><Textarea v-model="migration.source_flow_names" rows="6" fluid />
+		<label for="source-waba-id">Source WABA ID</label
+		><InputText id="source-waba-id" v-model="migration.source_waba_id" fluid />
+		<label for="source-flow-names"
+			>Source Flow names <small>optional; comma or line separated</small></label
+		><Textarea id="source-flow-names" v-model="migration.source_flow_names" rows="6" fluid />
 		<template #footer
 			><Button label="Cancel" text @click="migrateDialog = false" /><Button
 				label="Migrate"
@@ -448,10 +489,12 @@
 		/></template>
 	</Dialog>
 	<Dialog
+		ref="keyDialogRef"
 		v-model:visible="keyDialog"
 		modal
 		header="Flow encryption public key"
 		:style="{ width: '620px', maxWidth: '94vw' }"
+		@show="focusDialogControl(keyDialogRef, '.key-editor')"
 	>
 		<p class="dialog-help">
 			Meta uses this public key for encrypted Flow endpoint data. The private key must remain
@@ -459,6 +502,7 @@
 		</p>
 		<Textarea
 			v-model="businessPublicKey"
+			aria-label="Flow encryption public key"
 			rows="12"
 			fluid
 			class="key-editor"
@@ -477,6 +521,10 @@
 <style scoped>
 	.flow-list {
 		overflow: hidden;
+	}
+	.workspace-error {
+		margin-bottom: 14px;
+		white-space: normal;
 	}
 	.heading-actions {
 		display: flex;
@@ -506,11 +554,11 @@
 	.endpoint-state span {
 		margin-bottom: 5px;
 		color: var(--wa-muted);
-		font-size: 10px;
+		font-size: 12px;
 	}
 	.endpoint-state code {
 		overflow-wrap: anywhere;
-		font-size: 10px;
+		font-size: 12px;
 	}
 	.key-editor {
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -525,8 +573,8 @@
 	}
 	.list-toolbar > span,
 	.categories {
-		color: #718078;
-		font-size: 10px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 	.search-box {
 		display: flex;
@@ -535,8 +583,8 @@
 		padding: 8px 11px;
 		border: 1px solid var(--wa-border);
 		border-radius: 10px;
-		color: #829088;
-		background: #f8faf9;
+		color: var(--wa-muted);
+		background: var(--wa-surface-muted);
 	}
 	.search-box input {
 		width: 100%;
@@ -560,8 +608,8 @@
 		width: 35px;
 		height: 35px;
 		border-radius: 10px;
-		color: #087255;
-		background: #dff7ed;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
 	}
 	.flow-name strong,
 	.flow-name small {
@@ -572,8 +620,8 @@
 	}
 	.flow-name small {
 		margin-top: 3px;
-		color: #87938d;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 	.loading {
 		display: grid;
@@ -587,10 +635,10 @@
 		align-items: center;
 		justify-content: center;
 		gap: 8px;
-		color: #819088;
+		color: var(--wa-muted);
 	}
 	.empty strong {
-		color: #24312c;
+		color: var(--wa-text);
 	}
 	.dialog-copy {
 		display: flex;
@@ -598,8 +646,8 @@
 		padding: 12px;
 		margin-bottom: 17px;
 		border-radius: 10px;
-		color: #126249;
-		background: #e9f8f2;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
 	}
 	.dialog-copy p {
 		margin: 0;
@@ -613,7 +661,7 @@
 		font-weight: 700;
 	}
 	label small {
-		color: #8a9690;
+		color: var(--wa-muted);
 		font-weight: 500;
 	}
 	@media (max-width: 700px) {

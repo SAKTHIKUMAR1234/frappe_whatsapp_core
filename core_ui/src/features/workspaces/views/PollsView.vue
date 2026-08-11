@@ -8,14 +8,16 @@
 	import Tag from 'primevue/tag'
 	import { GitBranch, MessageCircleQuestion } from 'lucide-vue-next'
 	import AsyncState from '@/components/AsyncState.vue'
+	import FlowResponseCard from '@/features/flows/components/FlowResponseCard.vue'
 	import { flowWorkspace } from '@/features/flows/services/flowService'
-	import { errorMessage } from '@/services/frappe'
+	import { call, errorMessage } from '@/services/frappe'
 
 	const router = useRouter()
 	const loading = ref(true)
 	const loadError = ref('')
 	const workspace = ref({ accounts: [], flows: [], selected_account: '' })
 	const selectedAccount = ref('')
+	const responses = ref([])
 	let loadSequence = 0
 	const forms = computed(() =>
 		workspace.value.flows.filter((flow) =>
@@ -31,9 +33,13 @@
 		loading.value = true
 		loadError.value = ''
 		try {
-			const loaded = await flowWorkspace(account)
+			const [loaded, responseRows] = await Promise.all([
+				flowWorkspace(account),
+				call('frappe_whatsapp_core.flow_responses.list_flow_responses', { limit: 200 }),
+			])
 			if (request !== loadSequence) return
 			workspace.value = loaded
+			responses.value = responseRows
 			selectedAccount.value = workspace.value.selected_account
 		} catch (error) {
 			if (request === loadSequence)
@@ -55,12 +61,7 @@
 <template>
 	<div class="page-heading">
 		<div>
-			<div class="eyebrow">Meta-hosted structured collection</div>
 			<h1>Forms & Surveys</h1>
-			<p>
-				Survey and lead forms are native WhatsApp Flows—rendered, validated and hosted by
-				Meta.
-			</p>
 		</div>
 		<Button label="Create Meta Flow" @click="router.push({ name: 'flows' })"
 			><template #icon><GitBranch :size="16" /></template
@@ -68,15 +69,7 @@
 	</div>
 	<AsyncState v-if="loadError" :error="loadError" @retry="() => load(selectedAccount)" />
 	<template v-else>
-		<div class="engine-note">
-			<MessageCircleQuestion :size="18" />
-			<div>
-				<strong>No message-by-message form emulation</strong
-				><span
-					>Core launches the published Meta Flow and stores only WhatsApp events and
-					operational logs.</span
-				>
-			</div>
+		<div class="flow-filter">
 			<Select
 				v-model="selectedAccount"
 				:options="workspace.accounts"
@@ -116,35 +109,67 @@
 				></DataTable
 			>
 		</section>
+		<section class="surface-card response-table">
+			<header>
+				<h2>Flow responses</h2>
+				<Tag :value="`${responses.length} records`" rounded />
+			</header>
+			<DataTable :value="responses" striped-rows scrollable scroll-height="420px">
+				<Column field="response_type" header="Type" />
+				<Column header="Flow">
+					<template #body="{ data }">{{
+						data.flow || data.provider_flow_name || '—'
+					}}</template>
+				</Column>
+				<Column field="status" header="Status">
+					<template #body="{ data }">
+						<Tag
+							:value="data.status"
+							:severity="data.status === 'Failed' ? 'danger' : 'success'"
+							rounded
+						/>
+					</template>
+				</Column>
+				<Column field="creation" header="Received" />
+				<Column header="Response">
+					<template #body="{ data }">
+						<FlowResponseCard
+							:response="data.response_payload"
+							:heading="data.provider_flow_name || data.flow || 'Flow response'"
+							:status="data.status"
+							compact
+						/>
+					</template>
+				</Column>
+				<template #empty><div class="empty">No flow responses yet</div></template>
+			</DataTable>
+		</section>
 	</template>
 </template>
 
 <style scoped>
-	.engine-note {
+	.flow-filter {
 		display: flex;
-		align-items: center;
-		gap: 11px;
-		padding: 13px 16px;
+		justify-content: flex-end;
 		margin-bottom: 16px;
-		border: 1px solid #cfe9df;
-		border-radius: 14px;
-		color: #147154;
-		background: #edf9f4;
-	}
-	.engine-note > div {
-		flex: 1;
-	}
-	.engine-note strong,
-	.engine-note span {
-		display: block;
-	}
-	.engine-note span {
-		margin-top: 3px;
-		color: #56736a;
-		font-size: 9px;
 	}
 	.poll-table {
 		overflow: hidden;
+	}
+	.response-table {
+		margin-top: 18px;
+		overflow: hidden;
+	}
+	.response-table > header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 14px 16px;
+		border-bottom: 1px solid var(--wa-border);
+	}
+	.response-table h2 {
+		margin: 0;
+		font-size: 14px;
 	}
 	.flow-name {
 		display: flex;
@@ -162,8 +187,8 @@
 		width: 35px;
 		height: 35px;
 		border-radius: 10px;
-		color: #087255;
-		background: #e3f7ef;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
 	}
 	.flow-name strong,
 	.flow-name small {
@@ -174,8 +199,8 @@
 	}
 	.flow-name small {
 		margin-top: 3px;
-		color: #89958f;
-		font-size: 8px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 	.empty {
 		height: 240px;
@@ -184,10 +209,10 @@
 		align-items: center;
 		justify-content: center;
 		gap: 8px;
-		color: #829088;
+		color: var(--wa-muted);
 	}
 	.empty strong {
-		color: #28362f;
+		color: var(--wa-text);
 	}
 	@media (max-width: 700px) {
 		.engine-note {

@@ -8,10 +8,32 @@ const client = axios.create({
 
 const AUTH_EXPIRED_EVENT = 'whatsapp-core:auth-expired'
 const API_FAILURE_EVENT = 'whatsapp-core:api-failure'
+const CSRF_STORAGE_KEY = 'whatsapp-core:csrf-token'
+
+function setCsrfToken(token) {
+	if (!token) return
+	window.csrf_token = token
+	if (window.frappe) window.frappe.csrf_token = token
+	try {
+		window.localStorage.setItem(CSRF_STORAGE_KEY, token)
+	} catch {
+		// Storage may be disabled; the in-memory token still protects this tab.
+	}
+}
 
 function currentCsrfToken() {
-	return window.csrf_token || window.frappe?.csrf_token || ''
+	let stored = ''
+	try {
+		stored = window.localStorage.getItem(CSRF_STORAGE_KEY) || ''
+	} catch {
+		// Storage may be disabled; use the token injected by Frappe.
+	}
+	return window.csrf_token || window.frappe?.csrf_token || stored
 }
+
+window.addEventListener('storage', (event) => {
+	if (event.key === CSRF_STORAGE_KEY && event.newValue) setCsrfToken(event.newValue)
+})
 
 client.interceptors.request.use((config) => {
 	const token = currentCsrfToken()
@@ -20,7 +42,10 @@ client.interceptors.request.use((config) => {
 })
 
 client.interceptors.response.use(
-	(response) => response,
+	(response) => {
+		setCsrfToken(response.headers?.['x-frappe-csrf-token'])
+		return response
+	},
 	(error) => {
 		const status = error?.response?.status
 		if (status === 401 || (status === 403 && /login/i.test(errorMessage(error)))) {
@@ -99,6 +124,21 @@ export function errorMessage(error, fallback = 'Unexpected server error') {
 		504: 'The integration service did not respond in time.',
 	}
 	return statusMessages[status] || cleanMessage(error?.message) || fallback
+}
+
+export function friendlyMessage(value, fallback = '') {
+	const message = cleanMessage(value)
+	if (!message) return fallback
+	if (/131215|not eligible to access groups apis/i.test(message))
+		return (
+			'Meta Groups is unavailable for this phone number. Groups currently requires ' +
+			'an eligible Official Business Account (OBA) phone number.'
+		)
+	if (/session has expired|error validating access token/i.test(message))
+		return 'Meta access token expired. Update the account credential in Integration, then retry.'
+	if (/Meta Graph API request failed \(401\)|OAuthException/i.test(message))
+		return 'Meta authentication failed. Update the account credential in Integration, then retry.'
+	return message
 }
 
 export function errorDetails(error, fallback) {

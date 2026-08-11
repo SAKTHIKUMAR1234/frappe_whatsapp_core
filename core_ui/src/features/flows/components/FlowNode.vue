@@ -6,11 +6,13 @@
 		CircleStop,
 		GitBranch,
 		Hand,
+		ListChecks,
 		MessageSquareText,
 		MousePointerClick,
 		Play,
 		Send,
 		Timer,
+		TextCursorInput,
 		Zap,
 	} from 'lucide-vue-next'
 
@@ -18,9 +20,11 @@
 	const styles = {
 		start: ['#087457', '#def8ed', Play],
 		send_template: ['#0f766e', '#dff7f4', Send],
+		send_flow: ['#116b8f', '#e1f4fb', ListChecks],
 		send_message: ['#147d65', '#e0f6ee', MessageSquareText],
 		ask_text: ['#2859bf', '#e7efff', Bot],
 		ask_choice: ['#5542c2', '#eeebff', MousePointerClick],
+		ask_input: ['#2859bf', '#e7efff', TextCursorInput],
 		condition: ['#b16814', '#fff2dd', GitBranch],
 		action: ['#873db3', '#f4e9fb', Zap],
 		wait: ['#56636f', '#eaf0f3', Timer],
@@ -33,7 +37,13 @@
 <template>
 	<div class="node" :style="{ borderColor: style[0] }">
 		<Handle v-if="data.type !== 'start'" type="target" :position="Position.Left" />
-		<div class="icon" :style="{ background: style[1], color: style[0] }">
+		<div
+			class="icon"
+			:style="{
+				background: `color-mix(in srgb, ${style[0]} 16%, var(--wa-surface))`,
+				color: style[0],
+			}"
+		>
 			<component :is="style[2]" :size="15" />
 		</div>
 		<div>
@@ -57,7 +67,7 @@
 		padding: 11px 12px;
 		border: 1.5px solid;
 		border-radius: 13px;
-		background: white;
+		background: var(--wa-surface);
 		box-shadow: 0 6px 18px #12251e10;
 	}
 	.icon {
@@ -74,7 +84,7 @@
 	.node span {
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
-		font-size: 7px;
+		font-size: 12px;
 		font-weight: 800;
 	}
 	.node strong {
@@ -83,8 +93,8 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		color: #203029;
-		font-size: 10px;
+		color: var(--wa-text);
+		font-size: 12px;
 	}
 	.vue-flow__node.selected .node {
 		outline: 3px solid #29ad7d2f;

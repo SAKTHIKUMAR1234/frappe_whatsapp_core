@@ -1,14 +1,18 @@
 import base64
 import json
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import now_datetime
 
-from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS
-from frappe_whatsapp_core.message_media import download_message_media
+from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS, manifest
+from frappe_whatsapp_core.message_media import (
+	cache_message_media_batch,
+	download_message_media,
+	enqueue_message_media_cache,
+)
 from frappe_whatsapp_core.workspace_api import (
 	_outbound_handler,
 	get_conversation,
@@ -39,7 +43,29 @@ class TestCoreRoleBoundary(FrappeTestCase):
 		self.assertEqual(boot["default_module"], "dashboard")
 		self.assertIn("campaigns", boot["modules"])
 		self.assertIn("flows", boot["modules"])
+		self.assertIn("automation-flows", boot["modules"])
 		self.assertIn("ai-queue", boot["modules"])
+
+	def test_flow_user_sees_only_custom_flow_builder(self):
+		from frappe_whatsapp_core import frontend_api
+
+		with patch.object(frontend_api.frappe, "get_roles", return_value=["WhatsApp Flow User"]):
+			boot = frontend_api.bootstrap()
+		self.assertTrue(boot["authorized"])
+		self.assertTrue(boot["can_build_flows"])
+		self.assertFalse(boot["can_manage"])
+		self.assertEqual(boot["default_module"], "automation-flows")
+		self.assertEqual(boot["modules"], ["automation-flows"])
+
+	def test_flow_user_mcp_manifest_stops_at_approval(self):
+		from frappe_whatsapp_core import mcp_tools
+
+		with patch.object(mcp_tools.frappe, "get_roles", return_value=["WhatsApp Flow User"]):
+			tool_names = {tool["name"] for tool in manifest()["tools"]}
+		self.assertIn("whatsapp.create_automation_flow", tool_names)
+		self.assertIn("whatsapp.request_automation_flow_approval", tool_names)
+		self.assertNotIn("whatsapp.publish_automation_flow", tool_names)
+		self.assertNotIn("whatsapp.send_text", tool_names)
 
 	def test_authenticated_user_without_core_role_gets_no_modules(self):
 		from frappe_whatsapp_core import frontend_api
@@ -58,6 +84,16 @@ class TestCoreRoleBoundary(FrappeTestCase):
 		with patch.object(permissions.frappe, "get_roles", return_value=["WhatsApp User"]):
 			with self.assertRaises(frappe.PermissionError):
 				dashboard()
+
+	def test_user_has_no_management_doctype_permissions(self):
+		for doctype in (
+			"WhatsApp Core Group",
+			"WhatsApp Core Group Member",
+			"WhatsApp Core Group Receipt",
+			"WhatsApp Core Flow Response",
+		):
+			roles = {row.role for row in frappe.get_meta(doctype).permissions}
+			self.assertNotIn("WhatsApp User", roles, doctype)
 
 
 class TestWorkspaceAPI(FrappeTestCase):
@@ -139,6 +175,27 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertEqual(inbox_page["messages"][0].body, "Message 1")
 		self.assertTrue(inbox_page["message_page"]["has_more"])
 
+	def test_reply_includes_original_message_preview_outside_page(self):
+		reply = frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": f"workspace-reply-{frappe.generate_hash(length=8)}",
+			"conversation": self.conversation.name,
+			"channel": self.channel.name,
+			"provider_message_id": f"wamid.reply.{frappe.generate_hash(length=8)}",
+			"direction": "Outbound",
+			"message_type": "text",
+			"body": "Reply body",
+			"content": json.dumps({"context_message_id": self.messages[0].provider_message_id}),
+			"provider_timestamp": now_datetime(),
+			"delivery_status": "Sent",
+		}).insert(ignore_permissions=True)
+
+		page = list_messages(self.conversation.name, limit=1)
+		self.assertEqual(page["rows"][0].name, reply.name)
+		self.assertEqual(page["rows"][0].quoted_message["name"], self.messages[0].name)
+		self.assertEqual(page["rows"][0].quoted_message["body"], "Message 0")
+		self.assertNotIn("provider_message_id", page["rows"][0].quoted_message)
+
 	def test_inbound_media_is_exposed_through_authenticated_core_url(self):
 		media = frappe.get_doc({
 			"doctype": "WhatsApp Core Message",
@@ -189,7 +246,10 @@ class TestWorkspaceAPI(FrappeTestCase):
 			"mime_type": "application/pdf",
 		}
 		save_file.return_value = SimpleNamespace(
-			file_name="invoice.pdf", content_type="application/pdf"
+			file_name="invoice.pdf",
+			content_type="application/pdf",
+			get=lambda key: "application/pdf" if key == "content_type" else None,
+			get_content=lambda: b"pdf-content",
 		)
 
 		download_message_media(media.name)
@@ -201,12 +261,102 @@ class TestWorkspaceAPI(FrappeTestCase):
 		save_file.assert_called_once()
 		self.assertEqual(save_file.call_args.kwargs["is_private"], 1)
 
+	@patch("frappe_whatsapp_core.message_media._cached_file")
+	def test_image_media_can_be_forced_to_download(self, cached_file):
+		media = frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": f"workspace-image-download-{frappe.generate_hash(length=8)}",
+			"conversation": self.conversation.name,
+			"channel": self.channel.name,
+			"provider_message_id": f"wamid.image.{frappe.generate_hash(length=8)}",
+			"direction": "Inbound",
+			"message_type": "image",
+			"body": "Photo",
+			"content": json.dumps({"image": {"id": "MEDIA-IMAGE"}}),
+			"provider_timestamp": now_datetime(),
+			"delivery_status": "Received",
+		}).insert(ignore_permissions=True)
+		cached_file.return_value = SimpleNamespace(
+			file_name="photo.png",
+			content_type="image/png",
+			get=lambda key: "image/png" if key == "content_type" else None,
+			get_content=lambda: b"image-content",
+		)
+
+		download_message_media(media.name, download=1)
+
+		self.assertEqual(frappe.local.response.display_content_as, "attachment")
+		self.assertEqual(frappe.local.response.content_type, "image/png")
+
+	@patch("frappe_whatsapp_core.message_media.frappe.enqueue")
+	def test_new_media_cache_jobs_are_bounded_and_after_commit(self, enqueue):
+		enqueue_message_media_cache(
+			[f"message-{index}" for index in range(205)],
+			enqueue_after_commit=True,
+		)
+		self.assertEqual(enqueue.call_count, 3)
+		self.assertEqual(
+			[len(call.kwargs["message_names"]) for call in enqueue.call_args_list],
+			[100, 100, 5],
+		)
+		self.assertTrue(all(call.kwargs["enqueue_after_commit"] for call in enqueue.call_args_list))
+
+	@patch("frappe_whatsapp_core.message_media.frappe.log_error")
+	@patch("frappe_whatsapp_core.message_media.cache_message_media")
+	def test_media_cache_batch_keeps_other_files_when_one_fails(self, cache, log_error):
+		cache.side_effect = [SimpleNamespace(name="FILE-1"), RuntimeError("expired")]
+		result = cache_message_media_batch(["MESSAGE-1", "MESSAGE-2"])
+		self.assertEqual(result["stored"], [{"message": "MESSAGE-1", "file": "FILE-1"}])
+		self.assertEqual(result["failed"], ["MESSAGE-2"])
+		log_error.assert_called_once()
+
+	@patch("frappe_whatsapp_core.outbound._queue_message")
+	@patch("frappe_whatsapp_core.outbound._local_media_file")
+	def test_outbound_media_file_is_attached_to_optimistic_message(self, local_file, queue):
+		from frappe_whatsapp_core.outbound import queue_rich
+
+		file_doc = MagicMock()
+		file_doc.file_url = "/private/files/proof.jpg"
+		local_file.return_value = file_doc
+		queue.return_value = SimpleNamespace(name="MESSAGE-OUT")
+
+		message = queue_rich(
+			self.conversation.name,
+			"image",
+			{"id": "META-MEDIA-1"},
+			local_file_url=file_doc.file_url,
+		)
+
+		self.assertEqual(message.name, "MESSAGE-OUT")
+		self.assertEqual(queue.call_args.args[3]["payload"]["local_file_url"], file_doc.file_url)
+		self.assertEqual(file_doc.attached_to_doctype, "WhatsApp Core Message")
+		self.assertEqual(file_doc.attached_to_name, "MESSAGE-OUT")
+		file_doc.save.assert_called_once_with(ignore_permissions=True)
+
+	def test_local_media_reference_is_never_sent_to_meta(self):
+		from frappe_whatsapp_core.outbound import _message_payload
+
+		message = SimpleNamespace(
+			message_type="image",
+			body="Proof",
+			content=json.dumps({
+				"payload": {
+					"id": "META-MEDIA-1",
+					"local_file_url": "/private/files/proof.jpg",
+				}
+			}),
+		)
+		payload = _message_payload(message, "919999999999")
+		self.assertEqual(payload["image"], {"id": "META-MEDIA-1"})
+
 	def test_team_and_outbound_hook_contracts(self):
 		team = upsert_team(
 			team_name=f"Workspace Team {frappe.generate_hash(length=6)}",
+			icon="building-2",
 			members=[{"user": "Administrator", "team_role": "Manager"}],
 		)
 		self.assertEqual(team["members"][0]["user"], "Administrator")
+		self.assertEqual(team["icon"], "building-2")
 		workspace = team_workspace()
 		self.assertTrue(any(row["name"] == team["name"] for row in workspace["teams"]))
 		administrator = next(row for row in workspace["users"] if row["name"] == "Administrator")

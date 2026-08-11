@@ -93,6 +93,7 @@ class TestRichMessages(FrappeTestCase):
 			SimpleNamespace(channel="CHANNEL-1"),
 			SimpleNamespace(
 				file_name="photo.webp",
+				file_url="/private/files/photo.webp",
 				get_content=lambda: b"image-bytes",
 			),
 		]

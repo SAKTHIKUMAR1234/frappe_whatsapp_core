@@ -1,8 +1,8 @@
 export const NODE_TYPES = [
 	{ type: 'send_template', label: 'Template', icon: 'send' },
+	{ type: 'send_flow', label: 'Meta Flow', icon: 'flow' },
 	{ type: 'send_message', label: 'Message', icon: 'message' },
-	{ type: 'ask_text', label: 'Ask text', icon: 'text' },
-	{ type: 'ask_choice', label: 'Ask choice', icon: 'choice' },
+	{ type: 'ask_input', label: 'Collect input', icon: 'input' },
 	{ type: 'condition', label: 'Branch', icon: 'branch' },
 	{ type: 'action', label: 'Action / connector', icon: 'action' },
 	{ type: 'wait', label: 'Wait', icon: 'wait' },
@@ -15,6 +15,16 @@ export function createNodeConfig(type) {
 
 	const configurations = {
 		send_template: { label, template: '', language: 'en' },
+		send_flow: {
+			label,
+			flow_id: '',
+			message: 'Please complete this form.',
+			flow_cta: 'Open',
+			flow_action: 'navigate',
+			screen: '',
+			response_key: 'form_response',
+			data: {},
+		},
 		send_message: { label, message: '' },
 		ask_text: {
 			label,
@@ -32,10 +42,29 @@ export function createNodeConfig(type) {
 				{ label: 'No', value: 'no' },
 			],
 		},
+		ask_input: {
+			label,
+			message: '',
+			answer_key: '',
+			input_type: 'text',
+			required: true,
+			button_label: 'Choose',
+			options: [
+				{ label: 'Option 1', value: 'option_1' },
+				{ label: 'Option 2', value: 'option_2' },
+			],
+			options_from: '',
+			minimum: '',
+			maximum: '',
+			integer_only: false,
+			accepted_media_types: ['image', 'document', 'audio', 'video'],
+			validation_message: '',
+		},
 		action: {
 			label,
 			action: 'context.set',
 			input: {},
+			output_key: 'action_result',
 		},
 		wait: {
 			label,
@@ -44,7 +73,9 @@ export function createNodeConfig(type) {
 		human_handoff: {
 			label,
 			reason: '',
+			message: '',
 		},
+		end: { label, message: '' },
 	}
 
 	return configurations[type] || { label }
@@ -58,7 +89,7 @@ export function serializeFlowGraph({ nodes, edges, triggers }) {
 			id: node.id,
 			type: node.data.type,
 			position: node.position,
-			config: node.data.config || {},
+			config: serializeValue(node.data.config || {}),
 		})),
 		edges: edges.map((edge) => ({
 			id: edge.id,
@@ -81,7 +112,7 @@ export function hydrateFlowGraph(graph) {
 			position: node.position || { x: 0, y: 0 },
 			data: {
 				type: node.type,
-				config: node.config || {},
+				config: hydrateValue(node.config || {}),
 			},
 		})),
 		edges: graph.edges.map((edge) => ({
@@ -97,4 +128,32 @@ export function hydrateFlowGraph(graph) {
 		})),
 		triggers: graph.triggers || [],
 	}
+}
+
+function serializeValue(value) {
+	if (typeof value === 'string') {
+		const match = value.trim().match(/^\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}$/)
+		if (match) return { var: match[1] }
+		return value
+	}
+	if (Array.isArray(value)) return value.map(serializeValue)
+	if (value && typeof value === 'object') {
+		return Object.fromEntries(
+			Object.entries(value).map(([key, item]) => [key, serializeValue(item)]),
+		)
+	}
+	return value
+}
+
+function hydrateValue(value) {
+	if (Array.isArray(value)) return value.map(hydrateValue)
+	if (value && typeof value === 'object') {
+		if (Object.keys(value).length === 1 && typeof value.var === 'string') {
+			return `{{${value.var}}}`
+		}
+		return Object.fromEntries(
+			Object.entries(value).map(([key, item]) => [key, hydrateValue(item)]),
+		)
+	}
+	return value
 }

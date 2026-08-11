@@ -6,10 +6,17 @@ import json
 
 import frappe
 
+from frappe_whatsapp_core.consent import is_opt_out_event, suppress_conversation
+from frappe_whatsapp_core.flow_responses import (
+	complete_meta_submission,
+	record_meta_submission,
+)
 from frappe_whatsapp_core.flow_router import route_inbound
+from frappe_whatsapp_core.message_media import media_descriptor
 from frappe_whatsapp_core.outbound import (
 	outbound_ready,
 	queue_choice,
+	queue_rich,
 	queue_template_internal,
 	queue_text_internal,
 )
@@ -30,6 +37,7 @@ def handle_core_event(payload, event) -> dict:
 			"content",
 			"provider_timestamp",
 			"delivery_status",
+			"channel",
 		],
 		order_by="provider_timestamp asc",
 		limit_page_length=500,
@@ -72,11 +80,31 @@ def handle_core_event(payload, event) -> dict:
 				after_commit=True,
 			)
 		flow_event = _flow_event(message)
-		flow_result = (
-			route_inbound(message.conversation, f"{event.name}:{message.name}", flow_event)
-			if _legacy_automation_enabled() and not flow_event.get("meta_flow_response")
-			else {"status": "skipped", "reason": "Meta-native Flow response" if flow_event.get("meta_flow_response") else "Legacy local automation disabled"}
+		response_doc = (
+			record_meta_submission(message, event, flow_event)
+			if flow_event.get("meta_flow_response")
+			else None
 		)
+		try:
+			event_key = f"{event.name}:{message.name}"
+			flow_result = (
+				{
+					"handled": True,
+					"kind": "opt_out",
+					"commands": [],
+					**suppress_conversation(message.conversation, event_key),
+				}
+				if is_opt_out_event(flow_event)
+				else route_inbound(message.conversation, event_key, flow_event)
+				if _automation_enabled() or flow_event.get("meta_flow_response")
+				else {"status": "skipped", "reason": "Visual automation disabled"}
+			)
+			if response_doc:
+				complete_meta_submission(response_doc, flow_result)
+		except Exception as exception:
+			if response_doc:
+				complete_meta_submission(response_doc, error=str(exception))
+			raise
 		results.append({
 			"message": message.name,
 			"flow": flow_result,
@@ -101,7 +129,12 @@ def _flow_event(message) -> dict:
 		"message": message.name,
 		"type": message.message_type,
 		"body": message.body or "",
+		"channel": message.channel,
+		"content": content,
 	}
+	media = media_descriptor(message.message_type, content)
+	if media:
+		inbound["media"] = media
 	if message.message_type == "button":
 		button = content.get("button") or {}
 		inbound.update({
@@ -135,9 +168,9 @@ def _flow_event(message) -> dict:
 	return inbound
 
 
-def _legacy_automation_enabled() -> bool:
-	"""Local prompt-by-prompt flows are compatibility-only and opt-in."""
-	return bool(frappe.conf.get("whatsapp_core_enable_legacy_automation", False))
+def _automation_enabled() -> bool:
+	"""Visual automation is enabled unless the site explicitly disables it."""
+	return bool(frappe.conf.get("whatsapp_core_enable_automation", True))
 
 
 def _dispatch_commands(
@@ -150,8 +183,10 @@ def _dispatch_commands(
 		if command_type not in {
 			"send_message",
 			"send_template",
+			"send_flow",
 			"ask_text",
 			"ask_choice",
+			"ask_input",
 		}:
 			continue
 		if not outbound_ready():
@@ -161,25 +196,59 @@ def _dispatch_commands(
 				"reason": "Core outbound is not configured and enabled",
 			})
 			continue
-		if command_type in {"send_message", "ask_text"}:
+		if command_type in {"send_message", "ask_text"} or (
+			command_type == "ask_input"
+			and command.get("input_type", "text")
+			in {"text", "number", "multi_select", "attachment"}
+		):
 			message = queue_text_internal(
 				conversation,
-				command.get("message") or "",
+				_multi_select_prompt(command)
+				if command.get("input_type") == "multi_select"
+				else command.get("message") or "",
 				source="Core Flow",
 			)
-		elif command_type == "ask_choice":
+		elif command_type == "ask_choice" or command_type == "ask_input":
 			message = queue_choice(
 				conversation,
 				command.get("message") or "",
 				command.get("options") or [],
 				command.get("button_label") or "Choose",
 			)
-		else:
+		elif command_type == "send_template":
 			message = queue_template_internal(
 				conversation,
 				command["template"],
 				command.get("language", "en"),
 				command.get("components"),
+				source="Core Flow",
+			)
+		else:
+			flow_action = command.get("flow_action") or "navigate"
+			parameters = {
+				"flow_message_version": "3",
+				"flow_id": command["flow_id"],
+				"flow_token": command["flow_token"],
+				"flow_cta": command.get("flow_cta") or "Open",
+				"flow_action": flow_action,
+			}
+			if flow_action == "navigate":
+				flow_action_payload = {"screen": command.get("screen") or ""}
+				# Meta rejects an explicitly empty ``data`` value for a Flow CTA
+				# (131009: it must be a dynamic_object). The field is optional for
+				# static screens, so only send it when the Flow actually has data.
+				if command.get("data"):
+					flow_action_payload["data"] = command["data"]
+				parameters["flow_action_payload"] = flow_action_payload
+			message = queue_rich(
+				conversation,
+				"interactive",
+				{
+					"type": "flow",
+					"body": {"text": command.get("body") or "Please complete this form."},
+					"action": {"name": "flow", "parameters": parameters},
+				},
+				command.get("body") or "Please complete this form.",
 				source="Core Flow",
 			)
 		results.append({
@@ -188,6 +257,16 @@ def _dispatch_commands(
 			"message": message["name"],
 		})
 	return results
+
+
+def _multi_select_prompt(command: dict) -> str:
+	"""Render deterministic multi-choice input for WhatsApp's single-select controls."""
+	lines = [str(command.get("message") or "").strip()]
+	for index, option in enumerate(command.get("options") or [], start=1):
+		label = option.get("label") if isinstance(option, dict) else option
+		lines.append(f"{index}. {label}")
+	lines.append("Reply with one or more option numbers separated by commas.")
+	return "\n".join(line for line in lines if line)
 
 
 def _json_dict(value) -> dict:

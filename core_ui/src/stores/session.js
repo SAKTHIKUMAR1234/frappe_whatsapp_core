@@ -17,7 +17,7 @@ export const useSessionStore = defineStore('core-session', () => {
 			return boot.value
 		} catch (error) {
 			boot.value = { authenticated: false }
-			bootError.value = error?.message || 'Unable to reach the Frappe site.'
+			bootError.value = error?.message || 'Unable to reach the messaging backend.'
 			throw error
 		} finally {
 			loading.value = false

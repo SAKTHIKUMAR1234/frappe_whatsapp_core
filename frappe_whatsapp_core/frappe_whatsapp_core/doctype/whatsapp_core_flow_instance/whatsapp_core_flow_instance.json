@@ -12,6 +12,7 @@
 		"conversation",
 		"status",
 		"current_node_id",
+		"waiting_flow_token",
 		"context",
 		"lock_version",
 		"last_event_key",
@@ -65,6 +66,13 @@
 			"fieldtype": "Data",
 			"label": "Current Node",
 			"reqd": 1
+		},
+		{
+			"fieldname": "waiting_flow_token",
+			"fieldtype": "Data",
+			"label": "Waiting Meta Flow Token",
+			"unique": 1,
+			"read_only": 1
 		},
 		{
 			"fieldname": "context",

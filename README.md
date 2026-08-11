@@ -32,7 +32,8 @@ recorded in `WhatsApp Core Meta Flow Exchange`.
 
 ### Groups and Calling
 
-Core manages Meta-hosted WhatsApp Groups, including lifecycle, invite links,
+Where Meta enables the corresponding Business Platform products for the
+account, Core manages Meta-hosted WhatsApp Groups, including lifecycle, invite links,
 approved invite templates, join approvals, participants, text/media/template
 messages, pinned messages and per-participant receipts. It also supports
 WhatsApp Business Calling settings, permission requests, call buttons and
@@ -40,6 +41,21 @@ templates, deep links, WebRTC signaling, voicemail announcements, opt-in
 recording/transcription artifacts and durable call-event logs. Meta's calling
 control plane is handled here; audio media runs through the configured WebRTC
 or SIP infrastructure.
+
+### Realtime delivery contract
+
+Integration separates webhook traffic before it reaches Core. Inbound customer
+messages, message echoes, calls and group activity use an immediate JetStream
+lane. Core materializes them in the same authenticated request and emits one
+Socket.IO event after the database transaction commits. Parallel relay workers
+may handle different conversations while a conversation lock preserves message
+order within one chat.
+
+Delivery/read receipts and management status events use a separate batching
+lane (100 by default, up to 1,000 per relay window). Core stores those events in
+one request, processes them in bounded chunks and sends compact UI deltas after
+commit. Socket.IO reconnect triggers reconciliation, so a temporary connection
+loss cannot become a permanently missing message.
 
 ### Business contact resolution
 

@@ -48,7 +48,7 @@
 		align-items: center;
 		justify-content: center;
 		gap: 14px;
-		border: 1px dashed #d5e1db;
+		border: 1px dashed var(--wa-border-soft);
 		border-radius: 16px;
 		background: rgb(255 255 255 / 72%);
 		text-align: left;
@@ -88,7 +88,7 @@
 	}
 	.error .state-icon {
 		color: var(--wa-danger);
-		background: white;
+		background: var(--wa-surface);
 	}
 	.async-state > .p-button {
 		margin-left: 10px;

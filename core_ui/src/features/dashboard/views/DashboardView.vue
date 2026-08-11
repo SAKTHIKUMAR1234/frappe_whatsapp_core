@@ -108,7 +108,7 @@
 <template>
 	<div class="page-heading">
 		<div>
-			<div class="eyebrow">Company workspace</div>
+			<div class="eyebrow">Operations workspace</div>
 			<h1>WhatsApp operations</h1>
 			<p>Operate conversations, campaigns and Meta-hosted customer experiences.</p>
 		</div>
@@ -300,9 +300,9 @@
 		margin-top: 22px;
 		padding: 14px;
 		border-radius: 10px;
-		color: #97502e;
-		background: #fff2e8;
-		font-size: 10px;
+		color: var(--wa-warning);
+		background: var(--wa-warning-soft);
+		font-size: 12px;
 	}
 	.health-row {
 		display: grid;
@@ -310,7 +310,7 @@
 		align-items: center;
 		gap: 10px;
 		padding: 16px 0;
-		border-bottom: 1px solid #edf1ef;
+		border-bottom: 1px solid var(--wa-border-soft);
 	}
 	.health-row.neutral .status-dot {
 		background: #9caaa3;
@@ -325,12 +325,12 @@
 	}
 	.health-row small {
 		margin-top: 3px;
-		color: #829088;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 	.health-row em {
-		color: #6f7d76;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 		font-style: normal;
 	}
 	.boundary-card > .p-button {
@@ -362,16 +362,16 @@
 		width: 43px;
 		height: 43px;
 		border-radius: 13px;
-		color: #08745a;
-		background: #e2f7ee;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
 	}
 	.quick-card strong {
 		font-size: 12px;
 	}
 	.quick-card p {
 		margin: 5px 0 0;
-		color: #7c8983;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 		line-height: 1.5;
 	}
 	@media (max-width: 1100px) {

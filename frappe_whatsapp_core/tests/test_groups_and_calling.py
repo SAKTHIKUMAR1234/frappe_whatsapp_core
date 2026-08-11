@@ -96,18 +96,25 @@ class TestGroupsAndCalling(FrappeTestCase):
 		):
 			identity.return_value = frappe._dict(name="GROUP-IDENTITY")
 			conversation.return_value = frappe._dict(name="GROUP-CONVERSATION")
-			upload_media.return_value = {"media_id": "MEDIA-1", "filename": "proof.pdf"}
+			upload_media.return_value = {
+				"media_id": "MEDIA-1",
+				"filename": "proof.pdf",
+				"file_url": "/private/files/proof.pdf",
+			}
 			queue_rich.return_value = frappe._dict(name="MSG-2", delivery_status="Queued")
 			result = send_group_message(
 				"Hub Account", "GROUP-1", "document", {"file_url": "/private/files/proof.pdf"},
 			)
 		self.assertEqual(result["message"].delivery_status, "Queued")
-		upload_media.assert_called_once_with("GROUP-CONVERSATION", "/private/files/proof.pdf")
+		upload_media.assert_called_once_with(
+			"GROUP-CONVERSATION", "/private/files/proof.pdf", "document",
+		)
 		queue_rich.assert_called_once_with(
 			"GROUP-CONVERSATION",
 			"document",
 			{"id": "MEDIA-1", "filename": "proof.pdf"},
 			source="Core Group UI",
+			local_file_url="/private/files/proof.pdf",
 		)
 
 	@patch("frappe_whatsapp_core.groups._accounts")
@@ -259,9 +266,26 @@ class TestGroupsAndCalling(FrappeTestCase):
 			"provider_timestamp": frappe.utils.now_datetime(),
 			"delivery_status": "Delivered",
 		}).insert(ignore_permissions=True)
+		frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": "GROUP-SUBJECT-MESSAGE-LOCAL",
+			"idempotency_key": "GROUP-SUBJECT-IDEMPOTENCY-LOCAL",
+			"conversation": conversation.name,
+			"channel": channel.name,
+			"provider_message_id": "local:11111111-1111-4111-8111-111111111111",
+			"direction": "Outbound",
+			"message_type": "text",
+			"body": "Queued group update",
+			"content": {"body": "Queued group update"},
+			"provider_timestamp": frappe.utils.add_to_date(
+				frappe.utils.now_datetime(), seconds=1
+			),
+			"delivery_status": "Queued",
+		}).insert(ignore_permissions=True)
 		activity = group_activity("GROUP-SUBJECT-1")
 		self.assertEqual(activity["conversation"], conversation.name)
-		self.assertEqual(activity["messages"][0]["provider_message_id"], "wamid.group.subject.1")
+		self.assertEqual(activity["messages"][0]["delivery_status"], "Queued")
+		self.assertEqual(activity["messages"][1]["provider_message_id"], "wamid.group.subject.1")
 
 	def test_group_list_sync_labels_preexisting_groups_before_webhook(self):
 		channel = get_or_create_channel("GROUP-LIST-PHONE", "GROUP-LIST-WABA")

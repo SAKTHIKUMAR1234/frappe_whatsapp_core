@@ -1,8 +1,19 @@
 <script setup>
 	import Button from 'primevue/button'
 	import Drawer from 'primevue/drawer'
+	import InputNumber from 'primevue/inputnumber'
 	import InputText from 'primevue/inputtext'
+	import Select from 'primevue/select'
 	import Tag from 'primevue/tag'
+
+	const triggerTypes = [
+		{ label: 'Chat command', value: 'command' },
+		{ label: 'Template / interactive button', value: 'template_button' },
+		{ label: 'Inbound text pattern', value: 'inbound_pattern' },
+		{ label: 'Case event', value: 'case_event' },
+		{ label: 'Schedule', value: 'schedule' },
+		{ label: 'API', value: 'api' },
+	]
 
 	defineProps({
 		visible: Boolean,
@@ -23,10 +34,7 @@
 		:style="{ width: '420px' }"
 		@update:visible="emit('update:visible', $event)"
 	>
-		<p class="drawer-copy">
-			A published flow can start from a command, template button, inbound pattern, case
-			event, schedule or API.
-		</p>
+		<p class="drawer-copy">Choose exactly how this flow starts.</p>
 
 		<div v-for="(trigger, index) in triggers" :key="trigger.key" class="trigger-card">
 			<div class="trigger-heading">
@@ -34,8 +42,23 @@
 				<Tag :value="trigger.type" severity="secondary" rounded />
 			</div>
 
-			<label>Match value</label>
+			<label>Trigger key</label>
+			<InputText v-model="trigger.key" fluid />
+
+			<label>Trigger type</label>
+			<Select
+				v-model="trigger.type"
+				:options="triggerTypes"
+				option-label="label"
+				option-value="value"
+				fluid
+			/>
+
+			<label>Match value or pattern</label>
 			<InputText v-model="trigger.match" fluid />
+
+			<label>Priority</label>
+			<InputNumber v-model="trigger.priority" :min="1" :max="10000" fluid />
 
 			<Button
 				class="remove-trigger"
@@ -47,19 +70,13 @@
 			/>
 		</div>
 
-		<Button
-			label="Add command trigger"
-			severity="secondary"
-			outlined
-			fluid
-			@click="emit('add')"
-		/>
+		<Button label="Add trigger" severity="secondary" outlined fluid @click="emit('add')" />
 	</Drawer>
 </template>
 
 <style scoped>
 	.drawer-copy {
-		color: #718079;
+		color: var(--wa-muted);
 		font-size: 11px;
 		line-height: 1.6;
 	}
@@ -85,7 +102,7 @@
 	label {
 		display: block;
 		margin: 13px 0 6px;
-		font-size: 9px;
+		font-size: 12px;
 		font-weight: 700;
 	}
 

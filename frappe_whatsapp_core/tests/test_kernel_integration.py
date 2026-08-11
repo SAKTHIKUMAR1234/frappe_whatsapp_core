@@ -1,15 +1,17 @@
 import copy
 import json
 import unittest
-from datetime import datetime
+from datetime import UTC, datetime
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import convert_utc_to_system_timezone
 
 from frappe_whatsapp_core.api import receive_outbound_result
 from frappe_whatsapp_core.cases import create_case, transition_case
+from frappe_whatsapp_core.flow_actions import validate_registered_actions
 from frappe_whatsapp_core.flow_router import route_inbound
-from frappe_whatsapp_core.flows import publish_flow, resume_flow
+from frappe_whatsapp_core.flows import publish_flow, resume_flow, resume_meta_flow_response, start_flow
 from frappe_whatsapp_core.materializer import (
 	get_or_create_channel,
 	get_or_create_conversation,
@@ -117,6 +119,11 @@ class TestKernelIntegration(FrappeTestCase):
 			install_pack(changed)
 
 	def test_message_projection_deduplication_and_status(self):
+		channel = get_or_create_channel("PHONE-TEST", "WABA-TEST")
+		identity = get_or_create_identity("+91 99999 99999")
+		existing_conversation = get_or_create_conversation(channel, identity)
+		existing_conversation.status = "Resolved"
+		existing_conversation.save(ignore_permissions=True)
 		event = self._event("event-kernel-message", MESSAGE_PAYLOAD)
 		created = materialize_event(event, MESSAGE_PAYLOAD)
 		duplicate = materialize_event(event, MESSAGE_PAYLOAD)
@@ -125,11 +132,15 @@ class TestKernelIntegration(FrappeTestCase):
 
 		message = frappe.get_doc("WhatsApp Core Message", created[0]["name"])
 		self.assertEqual(message.body, "Test message")
-		self.assertEqual(message.provider_timestamp, datetime(2024, 4, 5, 19, 34, 38))
+		expected_timestamp = convert_utc_to_system_timezone(
+			datetime.fromtimestamp(1712345678, tz=UTC)
+		).replace(tzinfo=None)
+		self.assertEqual(message.provider_timestamp, expected_timestamp)
 		conversation = frappe.get_doc(
 			"WhatsApp Core Conversation",
 			message.conversation,
 		)
+		self.assertEqual(conversation.status, "Open")
 		self.assertEqual(
 			frappe.db.count(
 				"WhatsApp Core Conversation",
@@ -169,6 +180,27 @@ class TestKernelIntegration(FrappeTestCase):
 		self.assertEqual(
 			frappe.db.get_value("WhatsApp Core Message", message.name, "delivery_status"),
 			"Delivered",
+		)
+
+	def test_channel_lookup_reuses_configured_document_name(self):
+		suffix = frappe.generate_hash(length=10)
+		phone_number_id = f"configured-phone-{suffix}"
+		configured = frappe.get_doc({
+			"doctype": "WhatsApp Core Channel",
+			"channel_key": f"configured:{suffix}",
+			"provider": "meta",
+			"phone_number_id": phone_number_id,
+			"waba_id": f"configured-waba-{suffix}",
+			"display_name": "Configured channel",
+			"enabled": 1,
+		}).insert(ignore_permissions=True)
+
+		resolved = get_or_create_channel(phone_number_id, f"incoming-waba-{suffix}")
+
+		self.assertEqual(resolved.name, configured.name)
+		self.assertEqual(
+			frappe.db.count("WhatsApp Core Channel", {"phone_number_id": phone_number_id}),
+			1,
 		)
 
 	def test_durable_outbound_result_maps_provider_id_without_regression(self):
@@ -333,6 +365,83 @@ class TestKernelIntegration(FrappeTestCase):
 		instance = frappe.get_doc("WhatsApp Core Flow Instance", started["instance"])
 		self.assertEqual(json.loads(instance.context)["answers"]["product"], "Model A")
 		self.assertEqual(json.loads(instance.context)["variables"]["favorite"], "Model A")
+
+	def test_visual_flow_correlates_meta_response_and_executes_allowlisted_path(self):
+		channel = get_or_create_channel(f"flow-response-{frappe.generate_hash(length=8)}")
+		identity = get_or_create_identity(
+			f"9197{frappe.utils.now_datetime().strftime('%H%M%S%f')[-8:]}"
+		)
+		conversation = get_or_create_conversation(channel, identity)
+		graph = {
+			"schema_version": 1,
+			"triggers": [],
+			"nodes": [
+				{"id": "start", "type": "start", "config": {}},
+				{
+					"id": "form",
+					"type": "send_flow",
+					"config": {
+						"flow_id": "123456",
+						"flow_action": "navigate",
+						"screen": "FEEDBACK",
+						"response_key": "feedback",
+					},
+				},
+				{
+					"id": "remember",
+					"type": "action",
+					"config": {
+						"action": "frappe_whatsapp_core.flow_actions.set_context_action",
+						"input": {
+							"key": "rating",
+							"value": {"var": "responses.feedback.rating"},
+						},
+					},
+				},
+				{"id": "end", "type": "end", "config": {}},
+			],
+			"edges": [
+				{"id": "e1", "source": "start", "target": "form"},
+				{"id": "e2", "source": "form", "target": "remember"},
+				{"id": "e3", "source": "remember", "target": "end"},
+			],
+		}
+		flow = frappe.get_doc({
+			"doctype": "WhatsApp Core Flow",
+			"flow_key": f"test.meta.{frappe.generate_hash(length=8)}",
+			"title": "Meta feedback",
+			"status": "Draft",
+			"enabled": 1,
+			"draft_graph": json.dumps(graph),
+		}).insert(ignore_permissions=True)
+		publish_flow(flow.name)
+		started = start_flow(flow.name, conversation.name, "event:start")
+		self.assertEqual(started["status"], "waiting")
+		self.assertEqual(started["commands"][0]["type"], "send_flow")
+
+		completed = resume_meta_flow_response(
+			started["instance"],
+			"event:response",
+			started["commands"][0]["flow_token"],
+			{"rating": 5},
+		)
+		self.assertEqual(completed["status"], "completed")
+		instance = frappe.get_doc("WhatsApp Core Flow Instance", started["instance"])
+		self.assertEqual(json.loads(instance.context)["variables"]["rating"], 5)
+		response = frappe.get_doc(
+			"WhatsApp Core Flow Response", f"instance:{started['instance']}"
+		)
+		self.assertEqual(response.status, "Completed")
+
+	def test_visual_flow_rejects_unregistered_dotted_action(self):
+		errors = validate_registered_actions({
+			"nodes": [{
+				"id": "unsafe",
+				"type": "action",
+				"config": {"action": "frappe.delete_doc", "input": {}},
+			}]
+		})
+		self.assertIn("unregistered action", errors[0])
 
 
 if __name__ == "__main__":

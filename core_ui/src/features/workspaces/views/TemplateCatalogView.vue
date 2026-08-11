@@ -5,7 +5,7 @@
 	import DataTable from 'primevue/datatable'
 	import Skeleton from 'primevue/skeleton'
 	import Tag from 'primevue/tag'
-	import { BadgeCheck, Ban, MessageSquareText, RefreshCw, ShieldCheck } from 'lucide-vue-next'
+	import { BadgeCheck, Ban, MessageSquareText, RefreshCw } from 'lucide-vue-next'
 
 	import AsyncState from '@/components/AsyncState.vue'
 	import { call, errorMessage } from '@/services/frappe'
@@ -63,9 +63,7 @@
 <template>
 	<div class="page-heading">
 		<div>
-			<div class="eyebrow">Integration catalog</div>
 			<h1>Available Templates</h1>
-			<p>Templates assigned to this site by the Frappe WhatsApp Integration application.</p>
 		</div>
 		<Button label="Refresh view" outlined @click="load">
 			<template #icon><RefreshCw :size="16" /></template>
@@ -73,17 +71,6 @@
 	</div>
 	<AsyncState v-if="loadError" :error="loadError" @retry="load" />
 	<template v-else>
-		<div class="ownership-note">
-			<ShieldCheck :size="18" />
-			<div>
-				<strong>Read-only in Core</strong>
-				<span
-					>Create, edit, submit to Meta, assign and disable templates in Integration
-					Desk.</span
-				>
-			</div>
-		</div>
-
 		<section class="summary-grid">
 			<article class="surface-card">
 				<BadgeCheck :size="19" />
@@ -94,7 +81,7 @@
 			<article class="surface-card">
 				<MessageSquareText :size="19" />
 				<div>
-					<small>Available to this site</small
+					<small>Available here</small
 					><strong>{{ catalog.metrics.available || 0 }}</strong>
 				</div>
 			</article>
@@ -140,7 +127,7 @@
 						/>
 					</template>
 				</Column>
-				<Column header="Site">
+				<Column header="Availability">
 					<template #body="{ data }">
 						<Tag
 							:value="data.enabled ? 'Enabled' : 'Disabled'"
@@ -153,7 +140,7 @@
 					<div class="empty">
 						<MessageSquareText :size="30" />
 						<strong>No template assignments received</strong>
-						<span>Assign a Meta template to this site in Integration Desk.</span>
+						<span>Assign a Meta template to this workspace in Integration Desk.</span>
 					</div>
 				</template>
 			</DataTable>
@@ -168,10 +155,10 @@
 		gap: 11px;
 		padding: 12px 15px;
 		margin-bottom: 15px;
-		border: 1px solid #cfe9df;
+		border: 1px solid color-mix(in srgb, var(--wa-success) 24%, var(--wa-border));
 		border-radius: 13px;
-		color: #147154;
-		background: #edf9f4;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
 	}
 
 	.ownership-note strong,
@@ -185,8 +172,8 @@
 
 	.ownership-note span {
 		margin-top: 2px;
-		color: #56736a;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 
 	.summary-grid {
@@ -201,7 +188,7 @@
 		align-items: center;
 		gap: 12px;
 		padding: 17px;
-		color: #167458;
+		color: var(--wa-success);
 	}
 
 	.summary-grid small,
@@ -212,11 +199,11 @@
 	.summary-grid small {
 		margin-bottom: 4px;
 		color: var(--wa-muted);
-		font-size: 9px;
+		font-size: 12px;
 	}
 
 	.summary-grid strong {
-		color: #1d2d27;
+		color: var(--wa-text);
 		font-size: 20px;
 	}
 
@@ -236,8 +223,8 @@
 		width: 35px;
 		height: 35px;
 		border-radius: 10px;
-		color: #087255;
-		background: #e3f7ef;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
 	}
 
 	.template-name strong,
@@ -251,16 +238,16 @@
 
 	.template-name small {
 		margin-top: 3px;
-		color: #89958f;
-		font-size: 8px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 
 	.preview {
 		max-width: 320px;
 		margin: 0;
 		overflow: hidden;
-		color: #607069;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 		line-height: 1.45;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -279,11 +266,11 @@
 		align-items: center;
 		justify-content: center;
 		gap: 8px;
-		color: #819088;
+		color: var(--wa-muted);
 	}
 
 	.empty strong {
-		color: #24312c;
+		color: var(--wa-text);
 	}
 
 	@media (max-width: 850px) {

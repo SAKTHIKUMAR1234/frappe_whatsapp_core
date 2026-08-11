@@ -17,7 +17,10 @@ class TestMetaFlowEndpoint(FrappeTestCase):
 	def test_ping_is_handled_without_business_hook(self, resolve, channel, cached, get_doc):
 		log = MagicMock()
 		get_doc.return_value = log
-		with patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["System Manager"]):
+		with (
+			patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["System Manager"]),
+			patch("frappe_whatsapp_core.flow_endpoint.record_data_exchange"),
+		):
 			result = handle("ACCOUNT-1", "PHONE-1", {"action": "ping", "version": "3.0"})
 		self.assertEqual(result, {"data": {"status": "active"}, "_http_status": 200})
 		self.assertEqual(log.status, "Completed")
@@ -37,7 +40,10 @@ class TestMetaFlowEndpoint(FrappeTestCase):
 			"screen": "SUCCESS",
 			"data": {"extension_message_response": {"params": {"flow_token": payload["flow_token"]}}},
 		}
-		with patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["System Manager"]):
+		with (
+			patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["System Manager"]),
+			patch("frappe_whatsapp_core.flow_endpoint.record_data_exchange"),
+		):
 			result = handle(
 				"ACCOUNT-1",
 				"PHONE-1",

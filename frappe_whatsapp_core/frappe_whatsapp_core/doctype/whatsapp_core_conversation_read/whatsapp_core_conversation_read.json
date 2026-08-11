@@ -10,7 +10,8 @@
 		"conversation",
 		"user",
 		"last_read_message",
-		"last_read_at"
+		"last_read_at",
+		"last_read_creation"
 	],
 	"fields": [
 		{
@@ -47,6 +48,11 @@
 			"fieldtype": "Datetime",
 			"label": "Last Read At",
 			"reqd": 1
+		},
+		{
+			"fieldname": "last_read_creation",
+			"fieldtype": "Datetime",
+			"label": "Last Read Message Creation"
 		}
 	],
 	"permissions": [

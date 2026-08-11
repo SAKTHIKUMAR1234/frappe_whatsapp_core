@@ -5,15 +5,16 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from typing import Any
 
-
 GRAPH_VERSION = 1
 
 NODE_TYPES = {
 	"start",
 	"send_template",
 	"send_message",
+	"send_flow",
 	"ask_text",
 	"ask_choice",
+	"ask_input",
 	"condition",
 	"action",
 	"wait",
@@ -30,7 +31,9 @@ TRIGGER_TYPES = {
 	"api",
 }
 
-QUESTION_TYPES = {"ask_text", "ask_choice"}
+QUESTION_TYPES = {"ask_text", "ask_choice", "ask_input"}
+INPUT_TYPES = {"text", "number", "radio", "select", "multi_select", "attachment"}
+ATTACHMENT_TYPES = {"audio", "document", "image", "video"}
 TERMINAL_TYPES = {"end", "human_handoff"}
 MAX_NODES = 250
 MAX_EDGES = 750
@@ -219,13 +222,55 @@ def _validate_node_config(node: dict[str, Any], errors: list[str]) -> None:
 	if not isinstance(config, dict):
 		errors.append(f"Node {node_id} config must be an object")
 		return
-	if node_type in {"send_message", "ask_text", "ask_choice"} and not config.get("message"):
+	if node_type in {"send_message", "ask_text", "ask_choice", "ask_input"} and not config.get("message"):
 		errors.append(f"Node {node_id} requires config.message")
 	if node_type == "send_template" and not config.get("template"):
 		errors.append(f"Node {node_id} requires config.template")
+	if node_type == "send_flow":
+		if not config.get("flow_id"):
+			errors.append(f"Node {node_id} requires config.flow_id")
+		if config.get("flow_action", "navigate") not in {"navigate", "data_exchange"}:
+			errors.append(f"Node {node_id} has an invalid config.flow_action")
+		if config.get("flow_action", "navigate") == "navigate" and not config.get("screen"):
+			errors.append(f"Node {node_id} requires config.screen for navigate")
 	if node_type in QUESTION_TYPES and not config.get("answer_key"):
 		errors.append(f"Node {node_id} requires config.answer_key")
-	if node_type == "ask_choice":
+	input_type = config.get("input_type", "text") if node_type == "ask_input" else None
+	if node_type == "ask_input" and input_type not in INPUT_TYPES:
+		errors.append(f"Node {node_id} has unsupported config.input_type: {input_type}")
+	if node_type == "ask_input" and input_type == "number":
+		for field in ("minimum", "maximum"):
+			if config.get(field) in (None, ""):
+				continue
+			if not isinstance(config[field], (int, float)) or isinstance(config[field], bool):
+				errors.append(f"Node {node_id} config.{field} must be a number")
+		if (
+			isinstance(config.get("minimum"), (int, float))
+			and isinstance(config.get("maximum"), (int, float))
+			and config["minimum"] > config["maximum"]
+		):
+			errors.append(f"Node {node_id} minimum cannot exceed maximum")
+	if node_type == "ask_input" and input_type == "attachment":
+		accepted = config.get("accepted_media_types") or sorted(ATTACHMENT_TYPES)
+		if not isinstance(accepted, list) or not accepted:
+			errors.append(f"Node {node_id} requires accepted media types")
+		elif any(item not in ATTACHMENT_TYPES for item in accepted):
+			errors.append(f"Node {node_id} has an unsupported attachment type")
+	if node_type == "ask_choice" or (
+		node_type == "ask_input" and input_type in {"radio", "select", "multi_select"}
+	):
+		if config.get("options_from"):
+			options_from = config["options_from"]
+			if not (
+				isinstance(options_from, dict)
+				and set(options_from) == {"var"}
+				and isinstance(options_from.get("var"), str)
+				and options_from["var"].strip()
+			):
+				errors.append(
+					f"Node {node_id} config.options_from must be a context variable"
+				)
+			return
 		options = config.get("options")
 		if not isinstance(options, list) or len(options) < 2:
 			errors.append(f"Node {node_id} requires at least two options")
@@ -362,6 +407,7 @@ def _validate_cycles(
 def _validate_triggers(triggers: list[Any]) -> list[str]:
 	errors: list[str] = []
 	keys: set[str] = set()
+	signatures: set[tuple[str, str]] = set()
 	for index, trigger in enumerate(triggers):
 		if not isinstance(trigger, dict):
 			errors.append(f"Trigger {index + 1} must be an object")
@@ -376,7 +422,20 @@ def _validate_triggers(triggers: list[Any]) -> list[str]:
 			keys.add(key)
 		if trigger_type not in TRIGGER_TYPES:
 			errors.append(f"Trigger {key or index + 1} has unsupported type: {trigger_type}")
-		if trigger_type in {"command", "template_button", "inbound_pattern", "case_event"}:
-			if not trigger.get("match"):
-				errors.append(f"Trigger {key or index + 1} requires match")
+		if trigger_type in TRIGGER_TYPES and not trigger.get("match"):
+			errors.append(f"Trigger {key or index + 1} requires match")
+		elif trigger_type in TRIGGER_TYPES:
+			signature = (
+				trigger_type,
+				str(trigger.get("match") or "").strip().casefold(),
+			)
+			if signature in signatures:
+				errors.append(
+					f"Duplicate {trigger_type} trigger match: {trigger.get('match')}"
+				)
+			else:
+				signatures.add(signature)
+		priority = trigger.get("priority", 100)
+		if not isinstance(priority, int) or isinstance(priority, bool) or priority < 1:
+			errors.append(f"Trigger {key or index + 1} priority must be a positive integer")
 	return errors

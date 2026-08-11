@@ -1,7 +1,7 @@
 <script setup>
 	import Button from 'primevue/button'
 	import Tag from 'primevue/tag'
-	import { ArrowLeft, CheckCircle2, Play, Save } from 'lucide-vue-next'
+	import { ArrowLeft, CheckCircle2, Clock3, Play, Rocket, Save } from 'lucide-vue-next'
 
 	defineProps({
 		flow: {
@@ -11,14 +11,23 @@
 		saving: Boolean,
 		validating: Boolean,
 		publishing: Boolean,
+		requesting: Boolean,
+		canManage: Boolean,
 	})
 
-	defineEmits(['back', 'open-triggers', 'save', 'validate', 'publish'])
+	defineEmits(['back', 'open-triggers', 'save', 'validate', 'publish', 'request-approval'])
+
+	function approvalSeverity(status) {
+		if (status === 'Approved') return 'success'
+		if (status === 'Rejected') return 'danger'
+		if (status === 'Pending Approval') return 'info'
+		return 'secondary'
+	}
 </script>
 
 <template>
 	<header class="flow-toolbar">
-		<Button text rounded @click="$emit('back')">
+		<Button text rounded aria-label="Back to flows" @click="$emit('back')">
 			<ArrowLeft :size="18" />
 		</Button>
 
@@ -30,6 +39,11 @@
 			<Tag
 				:value="flow.status"
 				:severity="flow.status === 'Published' ? 'success' : 'warn'"
+				rounded
+			/>
+			<Tag
+				:value="flow.approval_status || 'Draft'"
+				:severity="approvalSeverity(flow.approval_status)"
 				rounded
 			/>
 		</div>
@@ -55,7 +69,27 @@
 			>
 				<template #icon><Save :size="15" /></template>
 			</Button>
-			<Button label="Publish" :loading="publishing" @click="$emit('publish')" />
+			<Button
+				v-if="canManage"
+				label="Approve & publish"
+				:loading="publishing"
+				@click="$emit('publish')"
+			>
+				<template #icon><Rocket :size="15" /></template>
+			</Button>
+			<Button
+				v-else
+				:label="
+					flow.approval_status === 'Pending Approval'
+						? 'Approval pending'
+						: 'Request approval'
+				"
+				:disabled="flow.approval_status === 'Pending Approval'"
+				:loading="requesting"
+				@click="$emit('request-approval')"
+			>
+				<template #icon><Clock3 :size="15" /></template>
+			</Button>
 		</div>
 	</header>
 </template>
@@ -68,7 +102,7 @@
 		align-items: center;
 		gap: 11px;
 		border-bottom: 1px solid var(--wa-border);
-		background: white;
+		background: var(--wa-surface);
 	}
 
 	.flow-title {
@@ -84,8 +118,8 @@
 	}
 
 	.flow-title span {
-		color: #86928c;
-		font-size: 8px;
+		color: var(--wa-muted);
+		font-size: 12px;
 		text-transform: uppercase;
 		letter-spacing: 0.09em;
 	}
@@ -105,9 +139,56 @@
 		gap: 8px;
 	}
 
-	@media (max-width: 1050px) {
-		.toolbar-actions :deep(.p-button:nth-child(-n + 2)) {
+	@media (max-width: 700px) {
+		.toolbar-actions :deep(.p-button) {
+			width: 36px;
+			height: 36px;
+			padding: 0;
+		}
+
+		.toolbar-actions :deep(.p-button-label) {
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			padding: 0;
+			margin: -1px;
+			overflow: hidden;
+			clip: rect(0, 0, 0, 0);
+			white-space: nowrap;
+			border: 0;
+		}
+	}
+
+	@media (max-width: 540px) {
+		.flow-toolbar {
+			padding: 0 8px;
+			gap: 6px;
+		}
+
+		.flow-title {
+			flex: 1;
+			gap: 0;
+		}
+
+		.flow-title > div {
+			min-width: 0;
+		}
+
+		.flow-title strong {
+			max-width: 120px;
+		}
+
+		.flow-title :deep(.p-tag) {
 			display: none;
+		}
+
+		.toolbar-actions {
+			gap: 2px;
+		}
+
+		.toolbar-actions :deep(.p-button) {
+			padding: 0;
+			font-size: 11px;
 		}
 	}
 </style>

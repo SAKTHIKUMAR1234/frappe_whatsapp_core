@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
+import time
 from collections.abc import Iterable
 
 import frappe
@@ -11,6 +13,15 @@ from frappe.utils import get_datetime, now_datetime
 
 MAX_PREPARE_RECIPIENTS = 10_000
 DEFAULT_BATCH_SIZE = 40
+DIRTY_CAMPAIGNS_CACHE_KEY = "whatsapp_core_dirty_campaigns"
+CAMPAIGN_COUNTER_FIELDS = {
+	"Queued": "queued_count",
+	"Sent": "sent_count",
+	"Delivered": "delivered_count",
+	"Read": "read_count",
+	"Failed": "failed_count",
+	"Skipped": "skipped_count",
+}
 
 
 def create_campaign(
@@ -18,17 +29,24 @@ def create_campaign(
 	campaign_key: str,
 	title: str,
 	channel: str,
-	template: str,
+	template: str = "",
+	content_type: str = "Template",
+	message_text: str = "",
 	description: str = "",
 	audience_source: dict | None = None,
 ):
+	content_type = str(content_type or "Template").strip().title()
+	if content_type not in {"Template", "Text"}:
+		frappe.throw("Campaign content type must be Template or Text", frappe.ValidationError)
 	campaign = frappe.get_doc({
 		"doctype": "WhatsApp Core Campaign",
 		"campaign_key": campaign_key,
 		"title": title,
 		"description": description,
 		"channel": channel,
-		"template": template,
+		"content_type": content_type,
+		"template": template if content_type == "Template" else None,
+		"message_text": str(message_text or "").strip() if content_type == "Text" else None,
 		"audience_source": json.dumps(
 			audience_source or {},
 			separators=(",", ":"),
@@ -208,6 +226,23 @@ def launch_campaign(campaign_name: str) -> dict:
 
 
 def cancel_campaign(campaign_name: str) -> dict:
+	"""Cancel safely while independent transport workers are still committing."""
+	for attempt in range(6):
+		try:
+			return _cancel_campaign_once(campaign_name)
+		except frappe.QueryDeadlockError:
+			frappe.db.rollback()
+			if attempt == 5:
+				raise
+			time.sleep(min(1.5, 0.08 * (2**attempt)) + random.uniform(0, 0.04))
+
+
+def _cancel_campaign_once(campaign_name: str) -> dict:
+	# Serialize cancellation with campaign batch preparation and counter refreshes.
+	# Loading the document before taking this row lock lets a concurrent worker
+	# update ``modified`` and makes ``campaign.save()`` fail with MariaDB error
+	# 1020 (document changed since it was read).
+	_lock_campaign_rows([campaign_name])
 	campaign = frappe.get_doc("WhatsApp Core Campaign", campaign_name)
 	frappe.has_permission(
 		"WhatsApp Core Campaign",
@@ -217,9 +252,54 @@ def cancel_campaign(campaign_name: str) -> dict:
 	)
 	if campaign.status == "Completed":
 		frappe.throw("A completed campaign cannot be cancelled", frappe.ValidationError)
+	# Messages are created optimistically before the durable relay submission.  A
+	# campaign can therefore be cancelled while those messages are still Queued.
+	# Make them terminal in the same transaction so the global retry scheduler
+	# cannot resurrect a cancelled campaign.
+	queued_messages = frappe.get_all(
+		"WhatsApp Core Campaign Recipient",
+		filters={
+			"campaign": campaign.name,
+			"status": "Queued",
+			"core_message": ["is", "set"],
+		},
+		pluck="core_message",
+		limit_page_length=MAX_PREPARE_RECIPIENTS,
+	)
+	if queued_messages:
+		message_names = sorted(set(queued_messages))
+		frappe.db.sql(
+			"""
+			SELECT name
+			FROM `tabWhatsApp Core Message`
+			WHERE name IN %(message_names)s
+			  AND delivery_status = 'Queued'
+			ORDER BY name
+			FOR UPDATE
+			""",
+			{"message_names": message_names},
+		)
+		frappe.db.sql(
+			"""
+			UPDATE `tabWhatsApp Core Message`
+			SET
+				delivery_status = 'Failed',
+				failure = %(failure)s
+			WHERE name IN %(message_names)s
+				AND delivery_status = 'Queued'
+			""",
+			{
+				"message_names": message_names,
+				"failure": json.dumps({
+					"error": "Campaign cancelled before relay submission",
+					"code": "campaign_cancelled",
+					"retryable": False,
+				}, separators=(",", ":")),
+			},
+		)
 	frappe.db.set_value(
 		"WhatsApp Core Campaign Recipient",
-		{"campaign": campaign.name, "status": "Prepared"},
+		{"campaign": campaign.name, "status": ["in", ["Prepared", "Queued"]]},
 		{"status": "Skipped", "completed_at": now_datetime()},
 		update_modified=False,
 	)
@@ -257,6 +337,12 @@ def process_campaign_batch(
 	campaign_name: str,
 	batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> None:
+	# Every path that mutates campaign recipients/counters takes the campaign
+	# row first.  This gives concurrent campaign and callback workers one
+	# deterministic lock order: Campaign -> Campaign Recipient.  Without it,
+	# MariaDB can raise error 1020 when a callback changes the aggregate row
+	# after this transaction has read it.
+	_lock_campaign_rows([campaign_name])
 	campaign = frappe.get_doc("WhatsApp Core Campaign", campaign_name)
 	if campaign.status != "Running":
 		return
@@ -277,8 +363,9 @@ def process_campaign_batch(
 		return
 
 	if batch_sender:
-		_queue_recipient_batch(campaign, recipients, batch_sender)
+		batch_counts = _queue_recipient_batch(campaign, recipients, batch_sender)
 	else:
+		batch_counts = {}
 		for row in recipients:
 			if frappe.db.get_value(
 				"WhatsApp Core Campaign",
@@ -286,8 +373,9 @@ def process_campaign_batch(
 				"status",
 			) != "Running":
 				return
-			_queue_recipient(campaign, row, sender)
-	refresh_campaign_counts(campaign.name)
+			status = _queue_recipient(campaign, row, sender)
+			batch_counts[status] = batch_counts.get(status, 0) + 1
+	_apply_campaign_count_deltas(campaign.name, batch_counts)
 
 	if frappe.db.exists(
 		"WhatsApp Core Campaign Recipient",
@@ -315,6 +403,7 @@ def refresh_active_campaigns() -> None:
 
 
 def refresh_campaign_counts(campaign_name: str) -> dict:
+	_lock_campaign_rows([campaign_name])
 	frappe.db.sql(
 		"""
 		UPDATE `tabWhatsApp Core Campaign Recipient` recipient
@@ -322,6 +411,7 @@ def refresh_campaign_counts(campaign_name: str) -> dict:
 			ON message.name = recipient.core_message
 		SET
 			recipient.status = CASE
+				WHEN recipient.status = 'Skipped' THEN 'Skipped'
 				WHEN message.delivery_status = 'Read' THEN 'Read'
 				WHEN message.delivery_status = 'Delivered' THEN 'Delivered'
 				WHEN message.delivery_status = 'Sent' THEN 'Sent'
@@ -377,20 +467,222 @@ def refresh_campaign_counts(campaign_name: str) -> dict:
 	return values
 
 
+def refresh_campaigns_for_messages(message_names) -> None:
+	"""Reconcile only recipients linked to the changed messages.
+
+	Delivery callbacks are intentionally concurrent.  Updating every recipient in a
+	10,000-row campaign for each callback both serialized the hot path and created a
+	lock-order cycle with the campaign sender.  Lock and transition only the affected
+	recipient rows, then maintain the summary counters with one atomic campaign update.
+	``refresh_campaign_counts`` remains the periodic/final full repair pass.
+	"""
+	message_names = list(dict.fromkeys(message_names or []))
+	if not message_names:
+		return
+	campaign_names = [
+		row.campaign
+		for row in frappe.db.sql(
+			"""
+			SELECT DISTINCT recipient.campaign
+			FROM `tabWhatsApp Core Campaign Recipient` recipient
+			WHERE recipient.core_message IN %(message_names)s
+			ORDER BY recipient.campaign
+			""",
+			{"message_names": message_names},
+			as_dict=True,
+		)
+	]
+	_lock_campaign_rows(campaign_names)
+	rows = frappe.db.sql(
+		"""
+		SELECT
+			recipient.name,
+			recipient.campaign,
+			recipient.status,
+			message.delivery_status
+		FROM `tabWhatsApp Core Campaign Recipient` recipient
+		INNER JOIN `tabWhatsApp Core Message` message
+			ON message.name = recipient.core_message
+		WHERE recipient.core_message IN %(message_names)s
+		FOR UPDATE
+		""",
+		{"message_names": message_names},
+		as_dict=True,
+	)
+	deltas_by_campaign = {}
+	for row in rows:
+		# Cancellation intentionally makes the recipient terminal even though its
+		# optimistic message is recorded as Failed to suppress transport retries.
+		if row.status == "Skipped":
+			continue
+		target_status = (
+			row.delivery_status
+			if row.delivery_status in {"Queued", "Sent", "Delivered", "Read", "Failed"}
+			else None
+		)
+		if not target_status or target_status == row.status:
+			continue
+		values = {"status": target_status}
+		if target_status in {"Delivered", "Read", "Failed"}:
+			values["completed_at"] = now_datetime()
+		frappe.db.set_value(
+			"WhatsApp Core Campaign Recipient",
+			row.name,
+			values,
+			update_modified=False,
+		)
+		deltas = deltas_by_campaign.setdefault(row.campaign, {})
+		if row.status in CAMPAIGN_COUNTER_FIELDS:
+			deltas[row.status] = deltas.get(row.status, 0) - 1
+		if target_status in CAMPAIGN_COUNTER_FIELDS:
+			deltas[target_status] = deltas.get(target_status, 0) + 1
+
+	for campaign_name, deltas in deltas_by_campaign.items():
+		_apply_campaign_count_deltas(campaign_name, deltas)
+
+
+def reconcile_campaign_status_batch(message_names) -> list[str]:
+	"""Mark affected campaigns for serialized minute-level projection.
+
+	Provider sent/delivered/read callbacks are operational telemetry, not new
+	human-visible messages. Concurrent callback workers only identify affected
+	campaigns; the scheduler performs the recipient join update once per campaign.
+	This removes a hot multi-table update from the callback transaction.
+	"""
+	message_names = list(dict.fromkeys(message_names or []))
+	if not message_names:
+		return []
+	campaign_names = [
+		row.campaign
+		for row in frappe.db.sql(
+			"""
+			SELECT DISTINCT recipient.campaign
+			FROM `tabWhatsApp Core Campaign Recipient` recipient
+			WHERE recipient.core_message IN %(message_names)s
+			ORDER BY recipient.campaign
+			""",
+			{"message_names": message_names},
+			as_dict=True,
+		)
+	]
+	if not campaign_names:
+		return []
+	_mark_campaigns_dirty(campaign_names)
+	return campaign_names
+
+
+def refresh_dirty_campaign_counts(limit: int = 100) -> int:
+	"""Repair aggregate counters for campaigns touched by status fast lanes."""
+	members = sorted(frappe.cache.smembers(DIRTY_CAMPAIGNS_CACHE_KEY))
+	refreshed = 0
+	for member in members[: max(1, int(limit))]:
+		campaign_name = member.decode() if isinstance(member, bytes) else str(member)
+		if not frappe.db.exists("WhatsApp Core Campaign", campaign_name):
+			frappe.cache.srem(DIRTY_CAMPAIGNS_CACHE_KEY, member)
+			continue
+		_sync_campaign_recipient_statuses(campaign_name)
+		refresh_campaign_counts(campaign_name)
+		frappe.cache.srem(DIRTY_CAMPAIGNS_CACHE_KEY, member)
+		refreshed += 1
+	return refreshed
+
+
+def _sync_campaign_recipient_statuses(campaign_name: str) -> None:
+	"""Apply all provider states for one campaign under one stable row lock."""
+	_lock_campaign_rows([campaign_name])
+	frappe.db.sql(
+		"""
+		UPDATE `tabWhatsApp Core Campaign Recipient` recipient
+		INNER JOIN `tabWhatsApp Core Message` message
+			ON message.name = recipient.core_message
+		SET
+			recipient.status = CASE
+				WHEN recipient.status = 'Skipped' THEN 'Skipped'
+				WHEN message.delivery_status = 'Read' THEN 'Read'
+				WHEN message.delivery_status = 'Delivered' THEN 'Delivered'
+				WHEN message.delivery_status = 'Sent' THEN 'Sent'
+				WHEN message.delivery_status = 'Failed' THEN 'Failed'
+				ELSE recipient.status
+			END,
+			recipient.completed_at = CASE
+				WHEN message.delivery_status IN ('Read', 'Delivered', 'Failed')
+					THEN COALESCE(recipient.completed_at, NOW())
+				ELSE recipient.completed_at
+			END
+		WHERE recipient.campaign = %(campaign_name)s
+			AND recipient.status != 'Skipped'
+		""",
+		{"campaign_name": campaign_name},
+	)
+
+
+def _mark_campaigns_dirty(campaign_names) -> None:
+	names = sorted({str(name) for name in (campaign_names or []) if name})
+	if names:
+		frappe.cache.sadd(DIRTY_CAMPAIGNS_CACHE_KEY, *names)
+
+
+def _lock_campaign_rows(campaign_names) -> None:
+	"""Lock campaign aggregates in a stable order before recipient rows."""
+	names = sorted({str(name) for name in (campaign_names or []) if name})
+	if not names:
+		return
+	frappe.db.sql(
+		"""
+		SELECT name
+		FROM `tabWhatsApp Core Campaign`
+		WHERE name IN %(campaign_names)s
+		ORDER BY name
+		FOR UPDATE
+		""",
+		{"campaign_names": names},
+	)
+
+
+def enqueue_campaign_refresh_for_messages(message_names) -> None:
+	"""Serialize campaign projection changes behind the Core short worker.
+
+	Relay result callbacks are deliberately concurrent.  They may update independent
+	message rows in parallel, but they must not all contend for the campaign's one
+	aggregate row.  Queue one bounded reconciliation unit after the callback commits;
+	the same short worker that advances campaign batches applies the recipient/status
+	deltas in a deterministic order.
+	"""
+	message_names = list(dict.fromkeys(message_names or []))
+	if not message_names:
+		return
+	if frappe.flags.in_test:
+		refresh_campaigns_for_messages(message_names)
+		return
+	frappe.enqueue(
+		"frappe_whatsapp_core.campaigns.reconcile_campaign_status_batch",
+		queue="short",
+		enqueue_after_commit=True,
+		message_names=message_names,
+	)
+
+
 def campaign_summary(campaign_name: str) -> dict:
 	campaign = frappe.get_doc("WhatsApp Core Campaign", campaign_name)
-	template = frappe.get_cached_doc("WhatsApp Core Template", campaign.template)
+	content_type = campaign.content_type or "Template"
+	template = (
+		frappe.get_cached_doc("WhatsApp Core Template", campaign.template)
+		if content_type == "Template" and campaign.template
+		else None
+	)
 	return {
 		"name": campaign.name,
 		"campaign_key": campaign.campaign_key,
 		"title": campaign.title,
 		"description": campaign.description,
 		"channel": campaign.channel,
+		"content_type": content_type,
 		"template": campaign.template,
-		"template_name": template.template_name,
-		"language_code": template.language_code,
-		"template_approval_status": template.approval_status,
-		"template_enabled": bool(template.enabled),
+		"message_text": campaign.message_text if content_type == "Text" else "",
+		"template_name": template.template_name if template else "",
+		"language_code": template.language_code if template else "",
+		"template_approval_status": template.approval_status if template else "NOT_REQUIRED",
+		"template_enabled": bool(template.enabled) if template else False,
 		"status": campaign.status,
 		"send_authorized": bool(campaign.send_authorized),
 		"authorized_by": campaign.authorized_by,
@@ -458,17 +750,29 @@ def _recipient_key(campaign_name: str, identity_name: str) -> str:
 
 
 def _validate_campaign_definition(campaign) -> None:
-	template = frappe.get_cached_doc("WhatsApp Core Template", campaign.template)
-	if not template.enabled:
-		frappe.throw(
-			"Template is disabled for this site in the Integration application",
-			frappe.ValidationError,
-		)
-	if template.approval_status != "APPROVED":
-		frappe.throw(
-			"Meta template approval is required before SEND authorization",
-			frappe.ValidationError,
-		)
+	content_type = campaign.content_type or "Template"
+	if content_type == "Template":
+		if not campaign.template:
+			frappe.throw("Select an approved template", frappe.ValidationError)
+		template = frappe.get_cached_doc("WhatsApp Core Template", campaign.template)
+		if not template.enabled:
+			frappe.throw(
+				"Template is disabled for this site in the Integration application",
+				frappe.ValidationError,
+			)
+		if template.approval_status != "APPROVED":
+			frappe.throw(
+				"Meta template approval is required before SEND authorization",
+				frappe.ValidationError,
+			)
+	elif content_type == "Text":
+		body = str(campaign.message_text or "").strip()
+		if not body:
+			frappe.throw("Enter a campaign message", frappe.ValidationError)
+		if len(body) > 4096:
+			frappe.throw("Campaign message cannot exceed 4096 characters", frappe.ValidationError)
+	else:
+		frappe.throw("Campaign content type must be Template or Text", frappe.ValidationError)
 	channel = frappe.get_cached_doc("WhatsApp Core Channel", campaign.channel)
 	if not channel.enabled:
 		frappe.throw("Campaign channel is disabled", frappe.ValidationError)
@@ -531,13 +835,14 @@ def _campaign_batch_sender():
 	return queue_campaign_batch
 
 
-def _queue_recipient_batch(campaign, recipients, sender) -> None:
+def _queue_recipient_batch(campaign, recipients, sender) -> dict[str, int]:
+	counts = {}
 	try:
 		results = sender(campaign, recipients)
 	except Exception as exception:
 		for recipient in recipients:
 			_mark_recipient_failed(recipient, exception)
-		return
+		return {"Failed": len(recipients)}
 	if not isinstance(results, dict):
 		results = {}
 	for recipient in recipients:
@@ -556,6 +861,7 @@ def _queue_recipient_batch(campaign, recipients, sender) -> None:
 				},
 				update_modified=False,
 			)
+			counts["Queued"] = counts.get("Queued", 0) + 1
 			continue
 		_mark_recipient_failed(
 			recipient,
@@ -564,9 +870,11 @@ def _queue_recipient_batch(campaign, recipients, sender) -> None:
 			else "Campaign batch sender returned an invalid result",
 			message_name=message_name,
 		)
+		counts["Failed"] = counts.get("Failed", 0) + 1
+	return counts
 
 
-def _queue_recipient(campaign, recipient, sender) -> None:
+def _queue_recipient(campaign, recipient, sender) -> str:
 	try:
 		result = sender(campaign, recipient)
 		message_name = result.get("message") if isinstance(result, dict) else result
@@ -584,12 +892,14 @@ def _queue_recipient(campaign, recipient, sender) -> None:
 			},
 			update_modified=False,
 		)
+		return "Queued"
 	except Exception as exception:
 		_mark_recipient_failed(recipient, exception)
 		frappe.log_error(
 			title=f"WhatsApp campaign recipient failed: {recipient.name}",
 			message=frappe.get_traceback(),
 		)
+		return "Failed"
 
 
 def _mark_recipient_failed(recipient, exception, message_name=None) -> None:
@@ -610,7 +920,15 @@ def _mark_recipient_failed(recipient, exception, message_name=None) -> None:
 
 
 def _complete_campaign(campaign) -> None:
-	refresh_campaign_counts(campaign.name)
+	"""Close dispatch without scanning message rows on the callback hot path.
+
+	``process_campaign_batch`` has already applied the recipient deltas for the
+	last batch.  Provider callbacks may concurrently update those same message
+	rows, so running the full ``UPDATE .. JOIN`` reconciliation here can fail
+	with MariaDB error 1020 (record changed since last read) and roll back the
+	last prepared batch.  Callback-driven incremental reconciliation and the
+	periodic repair job keep the delivery counters current after dispatch closes.
+	"""
 	campaign.reload()
 	if campaign.status != "Running":
 		return
@@ -633,6 +951,38 @@ def _publish_campaign(campaign, *, counts: dict | None = None) -> None:
 		{"campaign": name, "status": status, "counts": counts or {}},
 		after_commit=True,
 	)
+
+
+def _apply_campaign_count_deltas(campaign_name: str, deltas: dict[str, int]) -> None:
+	"""Apply status transitions without scanning or locking the audience table."""
+	assignments = []
+	values = []
+	for status, counter_field in CAMPAIGN_COUNTER_FIELDS.items():
+		delta = int(deltas.get(status) or 0)
+		if not delta:
+			continue
+		assignments.append(
+			f"`{counter_field}` = GREATEST(0, `{counter_field}` + %s)"
+		)
+		values.append(delta)
+	if not assignments:
+		return
+	values.append(campaign_name)
+	frappe.db.sql(
+		f"""
+		UPDATE `tabWhatsApp Core Campaign`
+		SET {', '.join(assignments)}
+		WHERE name = %s
+		""",
+		values,
+	)
+	counts = frappe.db.get_value(
+		"WhatsApp Core Campaign",
+		campaign_name,
+		list(CAMPAIGN_COUNTER_FIELDS.values()),
+		as_dict=True,
+	) or {}
+	_publish_campaign(campaign_name, counts=counts)
 
 
 def _reset_delivery_counts(campaign) -> None:

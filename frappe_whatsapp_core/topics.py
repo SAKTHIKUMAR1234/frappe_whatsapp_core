@@ -127,11 +127,20 @@ def unclassified_messages(
 		SELECT
 			message.name,
 			message.conversation,
+			COALESCE(
+				NULLIF(identity.display_value, ''),
+				NULLIF(identity.normalized_value, ''),
+				message.conversation
+			) AS conversation_label,
 			message.direction,
 			message.message_type,
 			message.body,
 			message.provider_timestamp
 		FROM `tabWhatsApp Core Message` AS message
+		INNER JOIN `tabWhatsApp Core Conversation` AS conversation
+			ON conversation.name = message.conversation
+		LEFT JOIN `tabWhatsApp Core Identity` AS identity
+			ON identity.name = conversation.remote_identity
 		LEFT JOIN `tabWhatsApp Core Topic Message` AS assignment
 			ON assignment.message = message.name
 		WHERE assignment.name IS NULL

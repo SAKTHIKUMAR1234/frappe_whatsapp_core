@@ -5,7 +5,12 @@ import {
 	hydrateFlowGraph,
 	serializeFlowGraph,
 } from '@/features/flows/domain/nodeTypes'
-import { getFlow, publishFlow, saveFlowDraft } from '@/features/flows/services/flowService'
+import {
+	getAutomationFlow,
+	publishAutomationFlow,
+	requestAutomationFlowApproval,
+	saveAutomationFlowDraft,
+} from '@/features/flows/services/automationFlowService'
 import { errorMessage } from '@/services/frappe'
 
 export function useFlowBuilder({ flowName, toast }) {
@@ -15,15 +20,19 @@ export function useFlowBuilder({ flowName, toast }) {
 	const catalog = ref({
 		actions: [],
 		templates: [],
+		meta_flows: [],
 	})
 	const flow = ref({
 		title: flowName,
 		status: 'Draft',
+		approval_status: 'Draft',
+		can_manage: false,
 	})
 	const selected = ref(null)
 	const saving = ref(false)
 	const validating = ref(false)
 	const publishing = ref(false)
+	const requesting = ref(false)
 	let itemCounter = 20
 
 	const {
@@ -33,7 +42,7 @@ export function useFlowBuilder({ flowName, toast }) {
 		onConnect,
 		onEdgeClick,
 		onNodeClick,
-		project,
+		screenToFlowCoordinate,
 		removeEdges,
 		removeNodes,
 	} = useVueFlow()
@@ -98,21 +107,14 @@ export function useFlowBuilder({ flowName, toast }) {
 		}
 	})
 
-	function addNodeFromDrop(event) {
-		const type = event.dataTransfer.getData('application/core-flow')
+	function addNode(type, position) {
 		if (!type) return
-
-		const canvasBounds = event.currentTarget.getBoundingClientRect()
 		const id = `${type}-${++itemCounter}`
-
 		addNodes([
 			{
 				id,
 				type: 'core',
-				position: project({
-					x: event.clientX - canvasBounds.left,
-					y: event.clientY - canvasBounds.top,
-				}),
+				position,
 				data: {
 					type,
 					config: createNodeConfig(type),
@@ -124,6 +126,17 @@ export function useFlowBuilder({ flowName, toast }) {
 			kind: 'node',
 			id,
 		}
+	}
+
+	function addNodeFromDrop(event) {
+		const type = event.dataTransfer.getData('application/core-flow')
+		if (!type) return
+		addNode(type, screenToFlowCoordinate({ x: event.clientX, y: event.clientY }))
+	}
+
+	function addNodeFromPalette(type) {
+		const offset = (itemCounter % 7) * 24
+		addNode(type, { x: 280 + offset, y: 150 + offset })
 	}
 
 	function deleteSelected() {
@@ -155,7 +168,7 @@ export function useFlowBuilder({ flowName, toast }) {
 	}
 
 	async function load() {
-		const result = await getFlow(flowName)
+		const result = await getAutomationFlow(flowName)
 		const hydrated = hydrateFlowGraph(result.graph)
 
 		flow.value = result
@@ -176,7 +189,8 @@ export function useFlowBuilder({ flowName, toast }) {
 	async function save({ notify = true } = {}) {
 		saving.value = true
 		try {
-			const result = await saveFlowDraft(flowName, graph())
+			const result = await saveAutomationFlowDraft(flowName, graph())
+			flow.value.approval_status = result.approval_status || 'Draft'
 			if (notify) {
 				toast.add({
 					severity: 'success',
@@ -241,8 +255,9 @@ export function useFlowBuilder({ flowName, toast }) {
 				return
 			}
 
-			const result = await publishFlow(flowName)
+			const result = await publishAutomationFlow(flowName)
 			flow.value.status = 'Published'
+			flow.value.approval_status = 'Approved'
 			toast.add({
 				severity: 'success',
 				summary: `Version ${result.version} published`,
@@ -261,6 +276,40 @@ export function useFlowBuilder({ flowName, toast }) {
 		}
 	}
 
+	async function requestApproval() {
+		requesting.value = true
+		try {
+			const validation = await save({ notify: false })
+			if (!validation) return
+			if (validation.errors.length) {
+				toast.add({
+					severity: 'error',
+					summary: 'Cannot request approval',
+					detail: validation.errors[0],
+					life: 5000,
+				})
+				return
+			}
+			const result = await requestAutomationFlowApproval(flowName)
+			flow.value.approval_status = result.approval_status
+			toast.add({
+				severity: 'success',
+				summary: 'Approval requested',
+				detail: 'A WhatsApp Manager can now review and publish this version.',
+				life: 3500,
+			})
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Approval not requested',
+				detail: errorMessage(error),
+				life: 5000,
+			})
+		} finally {
+			requesting.value = false
+		}
+	}
+
 	return {
 		nodes,
 		edges,
@@ -274,12 +323,15 @@ export function useFlowBuilder({ flowName, toast }) {
 		saving,
 		validating,
 		publishing,
+		requesting,
 		addNodeFromDrop,
+		addNodeFromPalette,
 		deleteSelected,
 		ensureEdgeCondition,
 		load,
 		save,
 		validate,
 		publish,
+		requestApproval,
 	}
 }

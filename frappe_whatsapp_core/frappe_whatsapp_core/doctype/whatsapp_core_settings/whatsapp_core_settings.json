@@ -14,6 +14,12 @@
 		"api_secret",
 		"request_timeout",
 		"default_country_calling_code",
+		"section_ai_summaries",
+		"enable_ai_summaries",
+		"summary_i2a_action",
+		"summary_rollup_i2a_action",
+		"summary_batch_size",
+		"summary_max_media_mb",
 		"section_accounts",
 		"accounts"
 	],
@@ -67,6 +73,43 @@
 			"fieldname": "default_country_calling_code",
 			"fieldtype": "Data",
 			"label": "Default Country Calling Code"
+		},
+		{
+			"fieldname": "section_ai_summaries",
+			"fieldtype": "Section Break",
+			"label": "AI Message Understanding"
+		},
+		{
+			"default": "0",
+			"fieldname": "enable_ai_summaries",
+			"fieldtype": "Check",
+			"label": "Enable Incremental AI Summaries"
+		},
+		{
+			"description": "Enabled I2A Action in Frappe Tools used for transcription, message intent and incremental summaries.",
+			"fieldname": "summary_i2a_action",
+			"fieldtype": "Link",
+			"label": "Summary I2A Action",
+			"options": "I2A Action"
+		},
+		{
+			"description": "Core-owned I2A Action used to compact daily summaries into weekly, monthly, and yearly context.",
+			"fieldname": "summary_rollup_i2a_action",
+			"fieldtype": "Link",
+			"label": "Summary Rollup I2A Action",
+			"options": "I2A Action"
+		},
+		{
+			"default": "100",
+			"fieldname": "summary_batch_size",
+			"fieldtype": "Int",
+			"label": "Messages Per Summary Pass"
+		},
+		{
+			"default": "15",
+			"fieldname": "summary_max_media_mb",
+			"fieldtype": "Int",
+			"label": "Maximum Media Size Per Message (MB)"
 		},
 		{
 			"fieldname": "section_accounts",

@@ -48,7 +48,13 @@ export const navigation = [
 	{
 		label: 'Automate',
 		items: [
-			{ label: 'Meta Flow Builder', route: 'flows', module: 'flows', icon: GitBranch },
+			{
+				label: 'Flow Builder',
+				route: 'automation-flows',
+				module: 'automation-flows',
+				icon: GitBranch,
+			},
+			{ label: 'Meta Flows', route: 'flows', module: 'flows', icon: Activity },
 			{ label: 'Connectors', route: 'connectors', module: 'connectors', icon: PlugZap },
 		],
 	},
@@ -57,7 +63,7 @@ export const navigation = [
 		items: [
 			{ label: 'Teams', route: 'teams', module: 'teams', icon: UsersRound },
 			{ label: 'Audit & Health', route: 'health', module: 'health', icon: ShieldCheck },
-			{ label: 'Company Settings', route: 'settings', module: 'settings', icon: Settings },
+			{ label: 'Settings', route: 'settings', module: 'settings', icon: Settings },
 		],
 	},
 ]

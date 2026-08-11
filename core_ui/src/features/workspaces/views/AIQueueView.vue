@@ -2,6 +2,7 @@
 	import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 	import { useToast } from 'primevue/usetoast'
 	import Button from 'primevue/button'
+	import Checkbox from 'primevue/checkbox'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
 	import Dialog from 'primevue/dialog'
@@ -15,6 +16,7 @@
 	import { call, errorMessage } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
+	import { focusDialogControl } from '@/utils/focus'
 
 	const toast = useToast()
 	const session = useSessionStore()
@@ -25,6 +27,7 @@
 	const saving = ref(false)
 	const loadError = ref('')
 	const dialogVisible = ref(false)
+	const dialogRef = ref(null)
 	const selected = ref([])
 	const workspace = ref({
 		messages: [],
@@ -78,6 +81,16 @@
 		if (!canClassify.value) return
 		form.value = { title: '', category: '', summary: '' }
 		dialogVisible.value = true
+	}
+
+	function toggleMessage(row, checked) {
+		selected.value = checked
+			? [...selected.value.filter((item) => item.name !== row.name), row]
+			: selected.value.filter((item) => item.name !== row.name)
+	}
+
+	function isSelected(row) {
+		return selected.value.some((item) => item.name === row.name)
 	}
 
 	async function classify() {
@@ -198,15 +211,16 @@
 			</div>
 			<DataTable
 				v-else
+				class="desktop-table"
 				v-model:selection="selected"
 				:value="workspace.messages"
 				data-key="name"
 				striped-rows
 			>
 				<Column selection-mode="multiple" header-style="width: 3rem" />
-				<Column field="conversation" header="Conversation">
+				<Column field="conversation_label" header="Conversation">
 					<template #body="{ data }">
-						<code>{{ data.conversation }}</code>
+						<strong class="conversation-label">{{ data.conversation_label }}</strong>
 					</template>
 				</Column>
 				<Column field="body" header="Message">
@@ -228,6 +242,32 @@
 					</div>
 				</template>
 			</DataTable>
+			<div v-if="!loading" class="mobile-queue">
+				<label
+					v-for="message in workspace.messages"
+					:key="message.name"
+					class="message-card"
+				>
+					<Checkbox
+						:model-value="isSelected(message)"
+						binary
+						@update:model-value="toggleMessage(message, $event)"
+					/>
+					<span>
+						<strong>{{ message.conversation_label }}</strong>
+						<p>{{ message.body || `(${message.message_type})` }}</p>
+						<small>
+							<Tag :value="message.direction" severity="secondary" rounded />
+							<time>{{ message.provider_timestamp }}</time>
+						</small>
+					</span>
+				</label>
+				<div v-if="!workspace.messages.length" class="empty">
+					<CircleCheck :size="30" />
+					<strong>Queue is clear</strong>
+					<span>Every materialized message belongs to a topic.</span>
+				</div>
+			</div>
 		</section>
 
 		<section class="surface-card invocation-card">
@@ -237,7 +277,7 @@
 					<h2>Recent MCP activity</h2>
 				</div>
 			</header>
-			<DataTable :value="workspace.invocations" striped-rows>
+			<DataTable class="desktop-table" :value="workspace.invocations" striped-rows>
 				<Column field="tool_name" header="Tool" />
 				<Column field="user" header="User" />
 				<Column field="duration_ms" header="Duration">
@@ -254,13 +294,34 @@
 				</Column>
 				<Column field="creation" header="Time" />
 			</DataTable>
+			<div class="mobile-invocations">
+				<article v-for="invocation in workspace.invocations" :key="invocation.name">
+					<div>
+						<strong>{{ invocation.tool_name }}</strong>
+						<small>{{ invocation.user }} · {{ invocation.creation }}</small>
+					</div>
+					<span>
+						<Tag
+							:value="invocation.status"
+							:severity="invocationSeverity(invocation.status)"
+							rounded
+						/>
+						<small>{{ invocation.duration_ms }} ms</small>
+					</span>
+				</article>
+				<div v-if="!workspace.invocations.length" class="empty compact">
+					<span>No recent MCP activity.</span>
+				</div>
+			</div>
 		</section>
 
 		<Dialog
+			ref="dialogRef"
 			v-model:visible="dialogVisible"
 			modal
 			header="Create conversation topic"
 			:style="{ width: '470px' }"
+			@show="focusDialogControl(dialogRef, '#topic-title')"
 		>
 			<div class="dialog-copy">
 				<strong>{{ selected.length }} messages</strong>
@@ -269,12 +330,18 @@
 					topics.</span
 				>
 			</div>
-			<label>Topic title</label>
-			<InputText v-model="form.title" fluid placeholder="Credit note request" />
-			<label>Category</label>
-			<InputText v-model="form.category" fluid placeholder="Complaint" />
-			<label>Summary</label>
+			<label for="topic-title">Topic title</label>
+			<InputText
+				id="topic-title"
+				v-model="form.title"
+				fluid
+				placeholder="Credit note request"
+			/>
+			<label for="topic-category">Category</label>
+			<InputText id="topic-category" v-model="form.category" fluid placeholder="Complaint" />
+			<label for="topic-summary">Summary</label>
 			<Textarea
+				id="topic-summary"
 				v-model="form.summary"
 				rows="4"
 				fluid
@@ -315,15 +382,15 @@
 		align-items: center;
 		gap: 12px;
 		padding: 17px;
-		color: #17805f;
+		color: var(--wa-success);
 	}
 
 	.summary-grid article.attention {
-		color: #bf6a16;
+		color: var(--wa-warning);
 	}
 
 	.summary-grid article.danger {
-		color: #b43c42;
+		color: var(--wa-danger);
 	}
 
 	.summary-grid small,
@@ -333,12 +400,12 @@
 
 	.summary-grid small {
 		color: var(--wa-muted);
-		font-size: 9px;
+		font-size: 12px;
 	}
 
 	.summary-grid strong {
 		margin-top: 4px;
-		color: #17211d;
+		color: var(--wa-text);
 		font-size: 20px;
 	}
 
@@ -361,19 +428,24 @@
 
 	header small {
 		color: var(--wa-muted);
-		font-size: 9px;
+		font-size: 12px;
 	}
 
-	code {
-		color: #476059;
-		font-size: 9px;
+	.conversation-label {
+		color: var(--wa-text);
+		font-size: 12px;
+	}
+
+	.mobile-queue,
+	.mobile-invocations {
+		display: none;
 	}
 
 	.message-preview {
 		max-width: 440px;
 		margin: 0;
 		overflow: hidden;
-		font-size: 10px;
+		font-size: 12px;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
@@ -393,20 +465,104 @@
 	.dialog-copy span {
 		margin-top: 3px;
 		color: var(--wa-muted);
-		font-size: 10px;
+		font-size: 12px;
 		line-height: 1.45;
 	}
 
 	label {
 		display: block;
 		margin: 13px 0 6px;
-		font-size: 10px;
+		font-size: 12px;
 		font-weight: 700;
 	}
 
 	@media (max-width: 980px) {
 		.summary-grid {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+
+	@media (max-width: 700px) {
+		.desktop-table {
+			display: none;
+		}
+
+		.mobile-queue,
+		.mobile-invocations {
+			display: grid;
+		}
+
+		.message-card {
+			display: grid;
+			grid-template-columns: auto minmax(0, 1fr);
+			gap: 12px;
+			align-items: start;
+			padding: 14px 16px;
+			border-bottom: 1px solid var(--wa-border-soft);
+			cursor: pointer;
+		}
+
+		.message-card > span,
+		.message-card small,
+		.mobile-invocations article > div,
+		.mobile-invocations article > span {
+			min-width: 0;
+			display: flex;
+		}
+
+		.message-card > span,
+		.mobile-invocations article > div,
+		.mobile-invocations article > span {
+			flex-direction: column;
+			gap: 5px;
+		}
+
+		.message-card p {
+			margin: 0;
+			overflow: hidden;
+			color: var(--wa-muted);
+			font-size: 12px;
+			line-height: 1.45;
+			display: -webkit-box;
+			-webkit-box-orient: vertical;
+			-webkit-line-clamp: 3;
+		}
+
+		.message-card small {
+			align-items: center;
+			justify-content: space-between;
+			gap: 8px;
+			color: var(--wa-muted);
+			font-size: 11px;
+		}
+
+		.message-card time {
+			overflow: hidden;
+			white-space: nowrap;
+			text-overflow: ellipsis;
+		}
+
+		.mobile-invocations article {
+			display: flex;
+			justify-content: space-between;
+			gap: 12px;
+			padding: 14px 16px;
+			border-bottom: 1px solid var(--wa-border-soft);
+		}
+
+		.mobile-invocations article > div small,
+		.mobile-invocations article > span small {
+			color: var(--wa-muted);
+			font-size: 11px;
+		}
+
+		.mobile-invocations article > span {
+			align-items: flex-end;
+			flex: none;
+		}
+
+		.empty.compact {
+			min-height: 100px;
 		}
 	}
 </style>

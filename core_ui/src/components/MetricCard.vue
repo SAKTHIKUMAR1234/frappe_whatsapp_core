@@ -26,8 +26,8 @@
 		padding: 20px;
 		min-height: 128px;
 		border: 1px solid var(--wa-border);
-		border-radius: 17px;
-		background: white;
+		border-radius: 8px;
+		background: var(--wa-surface);
 	}
 	.metric-icon {
 		display: grid;
@@ -43,7 +43,7 @@
 		display: block;
 	}
 	.metric-copy span {
-		color: #6e7c75;
+		color: var(--wa-muted);
 		font-size: 11px;
 		font-weight: 600;
 	}
@@ -53,23 +53,23 @@
 		letter-spacing: -0.8px;
 	}
 	.metric-copy small {
-		color: #8b9791;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 	.green .metric-icon {
-		background: #ddf8eb;
-		color: #087354;
+		background: var(--wa-success-soft);
+		color: var(--wa-success);
 	}
 	.blue .metric-icon {
-		background: #e5efff;
-		color: #2b61c9;
+		background: color-mix(in srgb, var(--wa-primary) 14%, var(--wa-surface));
+		color: var(--wa-primary);
 	}
 	.orange .metric-icon {
-		background: #fff0da;
-		color: #bf6617;
+		background: var(--wa-warning-soft);
+		color: var(--wa-warning);
 	}
 	.purple .metric-icon {
-		background: #f0e8ff;
-		color: #7540ba;
+		background: color-mix(in srgb, #8756c5 16%, var(--wa-surface));
+		color: color-mix(in srgb, #8756c5 78%, var(--wa-text));
 	}
 </style>

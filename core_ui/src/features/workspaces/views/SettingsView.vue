@@ -11,6 +11,7 @@
 	import { call, errorMessage } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import ContactSourcesCard from '@/features/settings/components/ContactSourcesCard.vue'
+	import AISummarySettingsCard from '@/features/settings/components/AISummarySettingsCard.vue'
 	import TransportSettingsCard from '@/features/settings/components/TransportSettingsCard.vue'
 	import { useSessionStore } from '@/stores/session'
 
@@ -64,9 +65,7 @@
 		<div>
 			<div class="eyebrow">Company configuration</div>
 			<h1>Core Settings</h1>
-			<p>
-				{{ workspace.site || 'Current Frappe site' }} · {{ workspace.time_zone || 'UTC' }}
-			</p>
+			<p>Configure accounts, teams, contact sources and messaging defaults.</p>
 		</div>
 		<Button label="Refresh inventory" outlined @click="load">
 			<template #icon><RefreshCw :size="16" /></template>
@@ -109,13 +108,19 @@
 			<div>
 				<strong>Install Core, connect the Hub, start working</strong>
 				<span
-					>Core owns the site experience. The separate Integration Hub owns Meta
+					>Core owns the operator experience. The separate Integration Hub owns Meta
 					onboarding, template administration and durable delivery.</span
 				>
 			</div>
 		</div>
 
 		<TransportSettingsCard
+			:workspace="workspace"
+			:can-manage="Boolean(session.boot?.can_manage)"
+			@saved="workspace = $event"
+		/>
+
+		<AISummarySettingsCard
 			:workspace="workspace"
 			:can-manage="Boolean(session.boot?.can_manage)"
 			@saved="workspace = $event"
@@ -145,7 +150,7 @@
 					<Column field="display_name" header="Channel" />
 					<Column field="provider" header="Provider" />
 					<Column field="phone_number_id" header="Phone number ID" />
-					<Column header="Site">
+					<Column header="Status">
 						<template #body="{ data }">
 							<Tag
 								:value="data.enabled ? 'Enabled' : 'Disabled'"
@@ -160,7 +165,7 @@
 			<section class="surface-card settings-card">
 				<header>
 					<div>
-						<div class="eyebrow">Tenant isolation</div>
+						<div class="eyebrow">Operational scope</div>
 						<h2>Workspaces</h2>
 					</div>
 					<Tag
@@ -227,7 +232,7 @@
 		align-items: center;
 		gap: 12px;
 		padding: 17px;
-		color: #17805f;
+		color: var(--wa-success);
 	}
 
 	.summary-grid small,
@@ -237,12 +242,12 @@
 
 	.summary-grid small {
 		color: var(--wa-muted);
-		font-size: 9px;
+		font-size: 12px;
 	}
 
 	.summary-grid strong {
 		margin-top: 4px;
-		color: #17211d;
+		color: var(--wa-text);
 		font-size: 20px;
 	}
 
@@ -252,10 +257,10 @@
 		gap: 11px;
 		padding: 13px 16px;
 		margin-bottom: 16px;
-		border: 1px solid #cfe9df;
+		border: 1px solid color-mix(in srgb, var(--wa-success) 24%, var(--wa-border));
 		border-radius: 14px;
-		color: #147154;
-		background: #edf9f4;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
 	}
 
 	.boundary-note strong,
@@ -265,8 +270,8 @@
 
 	.boundary-note span {
 		margin-top: 3px;
-		color: #56736a;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 
 	.settings-grid {

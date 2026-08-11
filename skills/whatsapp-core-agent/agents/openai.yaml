@@ -1,0 +1,4 @@
+interface:
+  display_name: "WhatsApp Core Agent"
+  short_description: "Build and operate audited WhatsApp flows"
+  default_prompt: "Use $whatsapp-core-agent to build or operate this WhatsApp workflow safely through audited MCP tools."

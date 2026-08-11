@@ -3,26 +3,32 @@
 		CircleStop,
 		GitBranch,
 		Hand,
+		ListChecks,
 		ListPlus,
 		MessageSquareText,
 		MousePointerClick,
 		Send,
 		Timer,
+		TextCursorInput,
 		Zap,
 	} from 'lucide-vue-next'
 	import { NODE_TYPES } from '@/features/flows/domain/nodeTypes'
 
 	const icons = {
 		send: Send,
+		flow: ListChecks,
 		message: MessageSquareText,
 		text: ListPlus,
 		choice: MousePointerClick,
+		input: TextCursorInput,
 		branch: GitBranch,
 		action: Zap,
 		wait: Timer,
 		handoff: Hand,
 		end: CircleStop,
 	}
+
+	defineEmits(['add'])
 
 	function startDrag(event, nodeType) {
 		event.dataTransfer.setData('application/core-flow', nodeType)
@@ -43,6 +49,7 @@
 			draggable="true"
 			type="button"
 			@dragstart="startDrag($event, nodeType.type)"
+			@click="$emit('add', nodeType.type)"
 		>
 			<span>
 				<component :is="icons[nodeType.icon]" :size="15" />
@@ -57,7 +64,7 @@
 		padding: 15px;
 		overflow-y: auto;
 		border-right: 1px solid var(--wa-border);
-		background: white;
+		background: var(--wa-surface);
 	}
 
 	.panel-heading {
@@ -73,8 +80,8 @@
 	}
 
 	.panel-heading small {
-		color: #87948e;
-		font-size: 8px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 
 	button {
@@ -84,12 +91,12 @@
 		gap: 9px;
 		padding: 8px;
 		margin: 5px 0;
-		border: 1px solid #e2e9e5;
+		border: 1px solid var(--wa-border);
 		border-radius: 10px;
-		color: #33433c;
-		background: #f8faf9;
+		color: var(--wa-text);
+		background: var(--wa-surface-muted);
 		cursor: grab;
-		font-size: 10px;
+		font-size: 12px;
 		font-weight: 650;
 		text-align: left;
 	}
@@ -100,7 +107,14 @@
 		display: grid;
 		place-items: center;
 		border-radius: 8px;
-		color: #087457;
-		background: #e1f7ee;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
+	}
+
+	button:hover,
+	button:focus-visible {
+		border-color: color-mix(in srgb, var(--wa-success) 45%, var(--wa-border));
+		background: var(--wa-success-soft);
+		outline: 0;
 	}
 </style>

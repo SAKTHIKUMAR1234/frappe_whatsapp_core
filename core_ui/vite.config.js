@@ -26,7 +26,12 @@ export default defineConfig(({ mode }) => {
 		},
 		build: {
 			outDir: '../frappe_whatsapp_core/public/core_ui',
-			emptyOutDir: true,
+			// Frappe can keep the rendered page entry in cache briefly while a
+			// deployment is replacing assets. Retaining hashed chunks prevents an
+			// already-open inbox (or that cached entry) from requesting a lazy
+			// route that disappeared mid-session. Deployment housekeeping may prune
+			// old hashes only after Frappe caches have been cleared.
+			emptyOutDir: false,
 			target: 'es2018',
 		},
 	}

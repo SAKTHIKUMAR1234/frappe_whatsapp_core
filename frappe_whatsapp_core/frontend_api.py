@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import csv
+import io
+import re
+
 import frappe
 from frappe.utils import cint
 
@@ -15,15 +19,24 @@ from frappe_whatsapp_core.campaigns import (
 	revoke_campaign_authorization,
 	schedule_campaign,
 )
+from frappe_whatsapp_core.contact_presentation import present_identity_names
 from frappe_whatsapp_core.flow_actions import registered_actions
 from frappe_whatsapp_core.hub_client import call_management, connection_status
-from frappe_whatsapp_core.identity import contact_options
+from frappe_whatsapp_core.identity import contact_options, normalize_phone
 from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS
 from frappe_whatsapp_core.permissions import (
 	CORE_ACCESS_ROLES,
+	CORE_APP_ROLES,
+	FLOW_BUILDER_ROLES,
 	require_core_access,
+	require_flow_builder_access,
 )
 from frappe_whatsapp_core.topics import unclassified_messages, upsert_topic
+from frappe_whatsapp_core.ai_summaries import (
+	get_identity_summary,
+	summarize_identities,
+	summarize_identity,
+)
 
 
 @frappe.whitelist(allow_guest=True)
@@ -32,28 +45,20 @@ def bootstrap():
 	if user == "Guest":
 		return {"authenticated": False, "authorized": False, "site": frappe.local.site}
 	roles = set(frappe.get_roles(user))
-	authorized = bool(roles & CORE_ACCESS_ROLES)
+	authorized = bool(roles & CORE_APP_ROLES)
 	can_manage = bool(roles & {"System Manager", "WhatsApp Manager"})
-	return {
-		"authenticated": True,
-		"authorized": authorized,
-		"site": frappe.local.site,
-		"user": {
-			"name": user,
-			"full_name": frappe.db.get_value("User", user, "full_name") or user,
-			"roles": sorted(roles & CORE_ACCESS_ROLES),
-		},
-		"can_manage": can_manage,
-		"default_module": (
-			"dashboard" if can_manage else "inbox" if authorized else "access-denied"
-		),
-		"modules": ([
+	can_use_inbox = bool(roles & CORE_ACCESS_ROLES)
+	can_build_flows = bool(roles & FLOW_BUILDER_ROLES)
+	modules = []
+	if can_manage:
+		modules = [
 			"inbox",
 			"dashboard",
 			"templates",
 			"campaigns",
 			"ai-queue",
 			"polls",
+			"automation-flows",
 			"flows",
 			"groups",
 			"calling",
@@ -61,7 +66,33 @@ def bootstrap():
 			"health",
 			"settings",
 			"teams",
-		] if can_manage else ["inbox"] if authorized else []),
+		]
+	else:
+		if can_use_inbox:
+			modules.append("inbox")
+		if can_build_flows:
+			modules.append("automation-flows")
+	return {
+		"authenticated": True,
+		"authorized": authorized,
+		"site": frappe.local.site,
+		"user": {
+			"name": user,
+			"full_name": frappe.db.get_value("User", user, "full_name") or user,
+			"roles": sorted(roles & CORE_APP_ROLES),
+		},
+		"can_manage": can_manage,
+		"can_build_flows": can_build_flows,
+		"default_module": (
+			"dashboard"
+			if can_manage
+			else "inbox"
+			if can_use_inbox
+			else "automation-flows"
+			if can_build_flows
+			else "access-denied"
+		),
+		"modules": modules,
 	}
 
 
@@ -90,7 +121,7 @@ def search_contact_options(search=None, limit=50):
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_flow_builder_access()
 def list_flows():
 	return frappe.get_list(
 		"WhatsApp Core Flow",
@@ -102,6 +133,11 @@ def list_flows():
 			"status",
 			"enabled",
 			"active_version",
+			"approval_status",
+			"approval_requested_by",
+			"approval_requested_at",
+			"approved_by",
+			"approved_at",
 			"modified",
 		],
 		order_by="modified desc",
@@ -110,12 +146,12 @@ def list_flows():
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_flow_builder_access()
 def create_starter_flow(title, flow_key):
 	from frappe_whatsapp_core.flow_templates import create_from_template
 
 	return create_from_template(
-		template_key="branched_review",
+		template_key="guided_request",
 		flow_key=flow_key,
 		title=title,
 	)
@@ -143,6 +179,7 @@ def campaign_workspace():
 				"category",
 				"approval_status",
 				"body_text",
+				"components",
 			],
 			order_by="template_name asc",
 			limit_page_length=500,
@@ -185,7 +222,10 @@ def template_catalog():
 			"approval_status",
 			"enabled",
 			"header_type",
+			"header_content",
 			"body_text",
+			"footer_text",
+			"components",
 			"last_synced_at",
 		],
 		order_by="template_name asc",
@@ -242,6 +282,29 @@ def ai_queue_workspace(limit: int = 100):
 			),
 		},
 	}
+
+
+@frappe.whitelist()
+@require_core_access()
+def contact_summary(identity: str, refresh: int = 0):
+	"""Read one incremental summary; only managers may spend AI tokens."""
+	if cint(refresh):
+		roles = set(frappe.get_roles())
+		if not roles & {"System Manager", "WhatsApp Manager"}:
+			frappe.throw("WhatsApp Core management access is required", frappe.PermissionError)
+		return summarize_identity(identity)
+	return get_identity_summary(identity)
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def contact_group_summary(identities, scope_key: str | None = None, refresh: int = 0):
+	identities = frappe.parse_json(identities) if isinstance(identities, str) else identities
+	return summarize_identities(
+		identities or [],
+		scope_key=scope_key,
+		force=bool(cint(refresh)),
+	)
 
 
 @frappe.whitelist()
@@ -525,6 +588,27 @@ def settings_workspace():
 		],
 		"request_timeout": settings.request_timeout or 30,
 		"default_country_calling_code": settings.default_country_calling_code or "91",
+		"ai_summary": {
+			"enabled": bool(settings.enable_ai_summaries),
+			"action": settings.summary_i2a_action or "",
+			"batch_size": settings.summary_batch_size or 100,
+			"max_media_mb": settings.summary_max_media_mb or 15,
+			"configured": bool(
+				settings.summary_i2a_action
+				and frappe.db.exists("I2A Action", settings.summary_i2a_action)
+			),
+		},
+		"i2a_actions": (
+			frappe.get_all(
+				"I2A Action",
+				filters={"enabled": 1},
+				fields=["name", "action_name", "purpose"],
+				order_by="action_name asc",
+				limit_page_length=100,
+			)
+			if frappe.db.exists("DocType", "I2A Action")
+			else []
+		),
 		"contact_sources": _contact_sources(),
 		"inventory": {
 			"identities": frappe.db.count("WhatsApp Core Identity"),
@@ -697,6 +781,29 @@ def save_core_settings(
 	return settings_workspace()
 
 
+@frappe.whitelist()
+@require_core_access(manage=True)
+def save_ai_summary_settings(
+	enabled=0,
+	action: str = "",
+	batch_size: int = 50,
+	max_media_mb: int = 15,
+):
+	settings = frappe.get_single("WhatsApp Core Settings")
+	action = str(action or "").strip()
+	if cint(enabled):
+		if not action or not frappe.db.exists("I2A Action", action):
+			frappe.throw("Select a valid Frappe Tools I2A Action", frappe.ValidationError)
+		if not cint(frappe.db.get_value("I2A Action", action, "enabled")):
+			frappe.throw("The selected I2A Action is disabled", frappe.ValidationError)
+	settings.enable_ai_summaries = int(bool(cint(enabled)))
+	settings.summary_i2a_action = action
+	settings.summary_batch_size = max(1, min(cint(batch_size) or 100, 250))
+	settings.summary_max_media_mb = max(1, min(cint(max_media_mb) or 15, 50))
+	settings.save()
+	return settings_workspace()
+
+
 def _validated_hub_account_mappings(accounts) -> list[dict]:
 	accounts = frappe.parse_json(accounts) if accounts is not None else []
 	if not isinstance(accounts, list):
@@ -740,7 +847,9 @@ def create_campaign_draft(
 	title: str,
 	campaign_key: str,
 	channel: str,
-	template: str,
+	template: str = "",
+	content_type: str = "Template",
+	message_text: str = "",
 	description: str = "",
 ):
 	doc = create_campaign(
@@ -748,6 +857,8 @@ def create_campaign_draft(
 		title=title,
 		channel=channel,
 		template=template,
+		content_type=content_type,
+		message_text=message_text,
 		description=description,
 		audience_source={"provider": "company_layer"},
 	)
@@ -758,6 +869,135 @@ def create_campaign_draft(
 @require_core_access(manage=True)
 def prepare_campaign_audience(campaign_name: str, recipients):
 	return prepare_campaign(campaign_name, recipients)
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def preview_campaign_audience_csv(csv_text: str) -> dict:
+	"""Resolve a bounded CSV into exact Core identities without persisting it."""
+	if not isinstance(csv_text, str):
+		frappe.throw("CSV content is required", frappe.ValidationError)
+	if len(csv_text.encode("utf-8")) > 2_000_000:
+		frappe.throw("Audience CSV cannot exceed 2 MB", frappe.ValidationError)
+	reader = csv.DictReader(io.StringIO(csv_text.lstrip("\ufeff")))
+	if not reader.fieldnames:
+		frappe.throw("Audience CSV requires a header row", frappe.ValidationError)
+	identifier_fields = ("identity", "contact", "phone", "phone_number", "mobile")
+	rows = []
+	errors = []
+	default_country_code = (
+		frappe.db.get_single_value("WhatsApp Core Settings", "default_country_calling_code")
+		or "91"
+	)
+	for row_number, raw in enumerate(reader, start=2):
+		if len(rows) + len(errors) >= 10_000:
+			frappe.throw("Audience CSV cannot exceed 10,000 data rows", frappe.ValidationError)
+		row = {str(key or "").strip().lower(): str(value or "").strip() for key, value in raw.items()}
+		if not any(row.values()):
+			continue
+		identifier = next((row.get(field) for field in identifier_fields if row.get(field)), "")
+		if not identifier:
+			errors.append({"row": row_number, "error": "Missing identity or phone column value"})
+			continue
+		identity = frappe.db.get_value(
+			"WhatsApp Core Identity",
+			{"name": identifier, "identity_type": "WhatsApp", "status": "Active"},
+			"name",
+		)
+		if not identity:
+			normalized = normalize_phone(
+				identifier,
+				assume_local=True,
+				country_code=default_country_code,
+			)
+			identity = frappe.db.get_value(
+				"WhatsApp Core Identity",
+				{
+					"normalized_value": normalized,
+					"identity_type": "WhatsApp",
+					"status": "Active",
+				},
+				"name",
+			)
+		if not identity:
+			errors.append({"row": row_number, "error": "Active Core contact not found"})
+			continue
+		try:
+			components = _csv_template_components(row)
+		except (TypeError, ValueError, frappe.ValidationError) as exception:
+			errors.append({"row": row_number, "error": str(exception)})
+			continue
+		rows.append({
+			"identity": identity,
+			"personalization": {
+				"components": components,
+				"text": row.get("message") or row.get("text") or "",
+			},
+			"source_row": row_number,
+		})
+
+	deduplicated = {row["identity"]: row for row in rows}
+	presentations = present_identity_names(
+		list(deduplicated), context={"surface": "campaign_csv_preview"}
+	)
+	contacts = [
+		{
+			"identity": identity,
+			"label": presentations.get(identity, {}).get("display_name") or identity,
+			"phone_number": presentations.get(identity, {}).get("secondary_text") or "",
+			"reference": presentations.get(identity, {}).get("reference") or "",
+			"presentation": presentations.get(identity, {}),
+		}
+		for identity in deduplicated
+	]
+	return {
+		"recipients": list(deduplicated.values()),
+		"contacts": contacts,
+		"errors": errors[:100],
+		"error_count": len(errors),
+		"resolved_count": len(deduplicated),
+	}
+
+
+def _csv_template_components(row: dict) -> list[dict]:
+	raw_components = row.get("components_json") or row.get("components")
+	if raw_components:
+		components = frappe.parse_json(raw_components)
+		if not isinstance(components, list):
+			raise frappe.ValidationError("components_json must contain a JSON list")
+		return components
+
+	components = []
+	for component_type in ("header", "body"):
+		values = sorted(
+			(
+				(int(match.group(1)), value)
+				for key, value in row.items()
+				if value and (match := re.fullmatch(rf"{component_type}_(\d+)", key))
+			),
+			key=lambda item: item[0],
+		)
+		if values:
+			components.append({
+				"type": component_type,
+				"parameters": [{"type": "text", "text": value} for _, value in values],
+			})
+	buttons = sorted(
+		(
+			(int(match.group(1)), value)
+			for key, value in row.items()
+			if value and (match := re.fullmatch(r"button_(\d+)", key))
+		),
+		key=lambda item: item[0],
+	)
+	for index, value in buttons:
+		components.append({
+			"type": "button",
+			"sub_type": "url",
+			"index": str(index),
+			"parameters": [{"type": "text", "text": value}],
+		})
+	return components
 
 
 @frappe.whitelist()

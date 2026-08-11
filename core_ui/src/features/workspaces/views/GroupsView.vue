@@ -14,9 +14,10 @@
 	import { useConfirm } from 'primevue/useconfirm'
 	import ContactSelect from '@/features/contacts/components/ContactSelect.vue'
 	import { MessageCircleMore, Settings2, ShieldCheck, UsersRound } from 'lucide-vue-next'
-	import { call, errorMessage, uploadFile } from '@/services/frappe'
+	import { call, errorMessage, friendlyMessage, uploadFile } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
+	import { focusDialogControl } from '@/utils/focus'
 
 	const session = useSessionStore()
 	const confirm = useConfirm()
@@ -28,6 +29,8 @@
 		showManage = ref(false),
 		error = ref(''),
 		notice = ref('')
+	const createDialogRef = ref(null)
+	const manageDialogRef = ref(null)
 	const workspace = ref({
 		accounts: [],
 		data: [],
@@ -83,7 +86,7 @@
 			notice.value = success
 			return result
 		} catch (e) {
-			error.value = errorMessage(e)
+			error.value = friendlyMessage(errorMessage(e))
 			return ACTION_FAILED
 		} finally {
 			action.value = ''
@@ -102,7 +105,7 @@
 			account.value = workspace.value.selected_account || ''
 			error.value = workspace.value.error || ''
 		} catch (e) {
-			if (request === loadSequence) error.value = errorMessage(e)
+			if (request === loadSequence) error.value = friendlyMessage(errorMessage(e))
 		} finally {
 			if (!silent && request === loadSequence) loading.value = false
 		}
@@ -388,13 +391,18 @@
 				await loadActivity(selected.value.id, manageSequence)
 		}, 200)
 	}
+	function queueBatchRefresh(event) {
+		const kinds = Array.isArray(event?.kinds) ? event.kinds : null
+		if (!kinds || kinds.some((kind) => kind === 'group' || kind === 'group_receipt'))
+			queueRealtimeRefresh(event)
+	}
 	onMounted(() => {
 		load('')
 		unsubscribe = subscribe(session.boot?.site, 'whatsapp_core_group', queueRealtimeRefresh)
 		unsubscribeBatch = subscribe(
 			session.boot?.site,
 			'whatsapp_core_batch_committed',
-			queueRealtimeRefresh,
+			queueBatchRefresh,
 		)
 	})
 	onUnmounted(() => {
@@ -427,6 +435,7 @@
 				:options="workspace.accounts"
 				option-label="display_name"
 				option-value="account_name"
+				aria-label="WhatsApp account"
 				@change="load($event.value)"
 			/><Button
 				label="Reload"
@@ -480,10 +489,12 @@
 		</div>
 	</section>
 	<Dialog
+		ref="createDialogRef"
 		v-model:visible="showCreate"
 		modal
 		header="Create WhatsApp group"
 		:style="{ width: 'min(34rem, 94vw)' }"
+		@show="focusDialogControl(createDialogRef, 'input')"
 		><div class="form">
 			<label>Subject<InputText v-model="form.subject" maxlength="128" /></label
 			><label
@@ -514,11 +525,13 @@
 				@click="create" /></template
 	></Dialog>
 	<Dialog
+		ref="manageDialogRef"
 		v-model:visible="showManage"
 		modal
 		:header="selected?.subject || 'Manage group'"
 		:style="{ width: 'min(76rem, calc(100vw - 2rem))' }"
 		:content-style="{ maxHeight: 'calc(100vh - 11rem)', overflow: 'auto' }"
+		@show="focusDialogControl(manageDialogRef, '.manage-card input:not([type=file])')"
 	>
 		<div v-if="selected" class="manage-grid">
 			<section class="group-summary">
@@ -816,7 +829,7 @@
 	.group-summary small {
 		margin-top: 3px;
 		color: var(--wa-muted);
-		font-size: 10px;
+		font-size: 12px;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -827,8 +840,8 @@
 		height: 34px;
 		place-items: center;
 		border-radius: 10px;
-		color: #0b7258;
-		background: #e5f7f0;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
 	}
 	.group-card p {
 		min-height: 32px;
@@ -842,7 +855,7 @@
 		flex-wrap: wrap;
 		gap: 8px 14px;
 		color: var(--wa-muted);
-		font-size: 10px;
+		font-size: 12px;
 	}
 	.group-facts span {
 		display: flex;
@@ -949,7 +962,7 @@
 	.message-preview-list span,
 	.message-preview-list small {
 		color: var(--wa-muted);
-		font-size: 10px;
+		font-size: 12px;
 	}
 	.message-preview-list strong {
 		overflow: hidden;
@@ -980,12 +993,14 @@
 		border-radius: 10px;
 	}
 	.error-banner {
-		background: #fff1f1;
-		color: #a52222;
+		background: var(--wa-danger-soft);
+		color: var(--wa-danger);
+		border: 1px solid color-mix(in srgb, var(--wa-danger) 28%, var(--wa-border));
 	}
 	.success-banner {
-		background: #e8f8f1;
-		color: #076445;
+		background: var(--wa-success-soft);
+		color: var(--wa-success);
+		border: 1px solid color-mix(in srgb, var(--wa-success) 28%, var(--wa-border));
 	}
 	.empty {
 		display: grid;
@@ -993,7 +1008,7 @@
 		justify-items: center;
 		padding: 48px;
 		text-align: center;
-		color: #7d8983;
+		color: var(--wa-muted);
 	}
 	@media (max-width: 760px) {
 		.manage-grid,

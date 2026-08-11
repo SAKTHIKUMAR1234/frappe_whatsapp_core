@@ -176,7 +176,7 @@
 		align-items: center;
 		gap: 12px;
 		padding: 17px;
-		color: #17805f;
+		color: var(--wa-success);
 	}
 
 	.summary-grid small,
@@ -186,12 +186,12 @@
 
 	.summary-grid small {
 		color: var(--wa-muted);
-		font-size: 9px;
+		font-size: 12px;
 	}
 
 	.summary-grid strong {
 		margin-top: 4px;
-		color: #17211d;
+		color: var(--wa-text);
 		font-size: 20px;
 	}
 
@@ -201,10 +201,10 @@
 		gap: 12px;
 		padding: 13px 16px;
 		margin-bottom: 16px;
-		border: 1px solid #cfe9df;
+		border: 1px solid color-mix(in srgb, var(--wa-success) 24%, var(--wa-border));
 		border-radius: 14px;
-		color: #147154;
-		background: #edf9f4;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
 	}
 
 	.endpoint-card div {
@@ -218,13 +218,13 @@
 
 	.endpoint-card code {
 		margin-top: 3px;
-		color: #4e6f64;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 
 	.endpoint-card span {
-		color: #56736a;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 
 	.registry-card {
@@ -267,13 +267,13 @@
 		align-items: flex-start;
 		gap: 9px;
 		padding: 13px 15px;
-		background: white;
+		background: var(--wa-surface);
 	}
 
 	.capability-list svg {
 		flex: 0 0 auto;
 		margin-top: 2px;
-		color: #17805f;
+		color: var(--wa-success);
 	}
 
 	.capability-list strong,
@@ -282,13 +282,13 @@
 	}
 
 	.capability-list strong {
-		font-size: 10px;
+		font-size: 12px;
 	}
 
 	.capability-list small {
 		margin-top: 3px;
 		color: var(--wa-muted);
-		font-size: 8px;
+		font-size: 12px;
 		line-height: 1.4;
 	}
 

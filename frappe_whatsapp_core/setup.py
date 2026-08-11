@@ -4,6 +4,7 @@ import frappe
 
 CORE_ROLES = (
 	"WhatsApp User",
+	"WhatsApp Flow User",
 	"WhatsApp Manager",
 )
 
@@ -28,6 +29,17 @@ def ensure_core_roles():
 			}
 		).insert(ignore_permissions=True)
 	_migrate_legacy_roles()
+
+
+def ensure_core_setup():
+	"""Install idempotent Core-owned roles, categories, and optional AI action."""
+	ensure_core_roles()
+	from frappe_whatsapp_core.message_categories import ensure_default_categories
+
+	ensure_default_categories()
+	from frappe_whatsapp_core.ai_summary_setup import ensure_whatsapp_summary_i2a_action
+
+	ensure_whatsapp_summary_i2a_action()
 
 
 def _migrate_legacy_roles():

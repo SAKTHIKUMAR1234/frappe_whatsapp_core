@@ -396,9 +396,9 @@
 
 <style scoped>
 	.native-flow-page {
-		margin: -30px;
-		min-height: calc(100vh - 68px);
-		background: #f4f7f5;
+		min-width: 0;
+		min-height: calc(100dvh - 56px);
+		background: var(--wa-bg);
 	}
 	.builder-header {
 		min-height: 78px;
@@ -408,7 +408,7 @@
 		justify-content: space-between;
 		gap: 20px;
 		border-bottom: 1px solid var(--wa-border);
-		background: white;
+		background: var(--wa-surface);
 	}
 	.title-row,
 	.header-actions,
@@ -423,8 +423,8 @@
 		font-size: 18px;
 	}
 	.title-row small {
-		color: #85928b;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 	.header-actions {
 		flex-wrap: wrap;
@@ -448,13 +448,13 @@
 	.section-title span,
 	.json-card header span {
 		margin-top: 2px;
-		color: #7f8c85;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 	label {
 		display: block;
 		margin: 17px 0 7px;
-		font-size: 10px;
+		font-size: 12px;
 		font-weight: 700;
 	}
 	.metadata-card > .p-button {
@@ -470,10 +470,10 @@
 	.facts div {
 		display: flex;
 		justify-content: space-between;
-		font-size: 9px;
+		font-size: 12px;
 	}
 	.facts span {
-		color: #77857e;
+		color: var(--wa-muted);
 	}
 	.json-card > header {
 		justify-content: space-between;
@@ -491,12 +491,12 @@
 	.validation-panel {
 		margin-top: 12px;
 		padding: 12px;
-		border: 1px solid #f2c7c4;
+		border: 1px solid color-mix(in srgb, var(--wa-danger) 28%, var(--wa-border));
 		border-radius: 10px;
-		background: #fff3f2;
+		background: var(--wa-danger-soft);
 	}
 	.validation-panel > strong {
-		color: #9d2924;
+		color: var(--wa-danger);
 		font-size: 11px;
 	}
 	.validation-panel article {
@@ -504,10 +504,10 @@
 		display: flex;
 		flex-direction: column;
 		gap: 3px;
-		font-size: 10px;
+		font-size: 12px;
 	}
 	.validation-panel small {
-		color: #9a625f;
+		color: color-mix(in srgb, var(--wa-danger) 70%, var(--wa-muted));
 	}
 	.valid-panel {
 		margin-top: 12px;
@@ -516,14 +516,14 @@
 		align-items: center;
 		gap: 8px;
 		border-radius: 9px;
-		color: #087354;
-		background: #e4f8ef;
-		font-size: 10px;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
+		font-size: 12px;
 	}
 	.loading-card {
 		margin: 25px;
 		padding: 40px;
-		color: #78857e;
+		color: var(--wa-muted);
 		text-align: center;
 	}
 	@media (max-width: 1000px) {
@@ -542,9 +542,6 @@
 		}
 	}
 	@media (max-width: 600px) {
-		.native-flow-page {
-			margin: -12px;
-		}
 		.builder-header,
 		.builder-grid {
 			padding: 14px;

@@ -7,7 +7,15 @@ from typing import Any
 
 import frappe
 
-from frappe_whatsapp_core.flows import resume_flow, start_flow
+from frappe_whatsapp_core.flows import (
+	cancel_flow,
+	expire_flow_if_due,
+	resume_flow,
+	resume_meta_flow_response,
+	start_flow,
+)
+
+EXIT_COMMANDS = {"exit", "/exit", "cancel", "/cancel", "stop", "/stop"}
 
 
 def route_inbound(
@@ -19,22 +27,59 @@ def route_inbound(
 	active = frappe.db.get_value(
 		"WhatsApp Core Flow Instance",
 		{"conversation": conversation, "status": ["in", ["Running", "Waiting"]]},
-		["name", "status"],
+		["name", "status", "waiting_flow_token"],
 		as_dict=True,
 		order_by="started_at desc",
 	)
 	if active:
+		if expire_flow_if_due(active.name):
+			active = None
+	if active:
+		if _is_exit(event):
+			return {
+				"handled": True,
+				"kind": "exit",
+				**cancel_flow(active.name, event_key),
+			}
+		if event.get("meta_flow_response"):
+			if not active.waiting_flow_token or str(event.get("flow_token") or "") != active.waiting_flow_token:
+				return {
+					"handled": False,
+					"kind": "orphan_meta_flow_response",
+					"status": "stored",
+					"commands": [],
+				}
+			return {
+				"handled": True,
+				"kind": "meta_flow_response",
+				**resume_meta_flow_response(
+					active.name,
+					event_key,
+					str(event.get("flow_token") or ""),
+					event.get("flow_response") if isinstance(event.get("flow_response"), dict) else {},
+				),
+			}
 		if active.status == "Waiting":
 			return {
 				"handled": True,
 				"kind": "resume",
-				**resume_flow(active.name, event_key, _extract_answer(event)),
+				**resume_flow(active.name, event_key, event),
 			}
 		return {
 			"handled": True,
 			"kind": "busy",
 			"status": "running",
 			"instance": active.name,
+			"commands": [{
+				"type": "send_message",
+				"message": "Please wait while your current request is being processed. You can send /exit to close it.",
+			}],
+		}
+	if event.get("meta_flow_response"):
+		return {
+			"handled": False,
+			"kind": "orphan_meta_flow_response",
+			"status": "stored",
 			"commands": [],
 		}
 
@@ -94,6 +139,8 @@ def _candidate_trigger_values(event: dict[str, Any]):
 	)
 	if interactive_id:
 		yield "template_button", str(interactive_id)
+		if str(interactive_id).startswith("/"):
+			yield "command", str(interactive_id).split(maxsplit=1)[0]
 	body = str(event.get("body") or event.get("text") or "").strip()
 	if body.startswith("/"):
 		yield "command", body.split(maxsplit=1)[0]
@@ -132,9 +179,9 @@ def _find_trigger(trigger_type: str, value: str):
 def _matches(trigger_type: str, configured: str, received: str) -> bool:
 	configured = str(configured or "").strip()
 	received = str(received or "").strip()
-	if trigger_type in {"command", "template_button", "case_event", "api"}:
+	if trigger_type in {"command", "case_event", "api"}:
 		return configured.casefold() == received.casefold()
-	if trigger_type == "inbound_pattern":
+	if trigger_type in {"template_button", "inbound_pattern"}:
 		return fnmatch.fnmatchcase(received.casefold(), configured.casefold())
 	return configured == received
 
@@ -148,3 +195,8 @@ def _extract_answer(event: dict[str, Any]) -> Any:
 		or event.get("text")
 		or event
 	)
+
+
+def _is_exit(event: dict[str, Any]) -> bool:
+	value = str(_extract_answer(event) or "").strip().casefold()
+	return value in EXIT_COMMANDS

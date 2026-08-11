@@ -1,5 +1,5 @@
 <script setup>
-	import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+	import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 	import { useRoute, useRouter } from 'vue-router'
 	import Button from 'primevue/button'
 	import Dialog from 'primevue/dialog'
@@ -12,6 +12,8 @@
 		Search,
 		Sparkles,
 		ArrowRight,
+		Moon,
+		Sun,
 	} from 'lucide-vue-next'
 	import { navigation } from '@/config/navigation'
 	import { useSessionStore } from '@/stores/session'
@@ -23,15 +25,20 @@
 	const router = useRouter()
 	const profileMenu = ref()
 	const mobileOpen = ref(false)
+	const sidebarExpanded = ref(false)
 	const commandOpen = ref(false)
 	const commandQuery = ref('')
 	const commandInput = ref()
 	const realtimeStatus = ref('connecting')
+	const darkMode = ref(false)
 	let unsubscribeConnection = () => {}
 	let unsubscribeAuth = () => {}
-	const tenantLabel = computed(() => session.boot?.site || 'Current Frappe site')
+	let sidebarCollapseTimer = null
+	const flushContent = computed(() =>
+		['inbox', 'flow-builder', 'automation-flow-builder'].includes(String(route.name || '')),
+	)
 	const primaryRole = computed(
-		() => session.user?.roles?.find((role) => role.startsWith('WhatsApp ')) || 'Site user',
+		() => session.user?.roles?.find((role) => role.startsWith('WhatsApp ')) || 'Core user',
 	)
 	const visibleNavigation = computed(() => {
 		const modules = new Set(session.boot?.modules || [])
@@ -95,13 +102,63 @@
 	}
 
 	function handleShortcut(event) {
+		if (event.key === 'Escape' && mobileOpen.value) {
+			mobileOpen.value = false
+			return
+		}
 		if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
 			event.preventDefault()
 			openCommand()
 		}
 	}
 
+	function expandSidebar() {
+		window.clearTimeout(sidebarCollapseTimer)
+		sidebarCollapseTimer = null
+		sidebarExpanded.value = true
+	}
+
+	function collapseSidebarSoon() {
+		window.clearTimeout(sidebarCollapseTimer)
+		sidebarCollapseTimer = window.setTimeout(() => {
+			sidebarCollapseTimer = null
+			sidebarExpanded.value = false
+		}, 120)
+	}
+
+	function handleSidebarFocusOut(event) {
+		if (event.currentTarget?.contains(event.relatedTarget)) return
+		collapseSidebarSoon()
+	}
+
+	function applyTheme(value, persist = true) {
+		darkMode.value = Boolean(value)
+		document.documentElement.classList.toggle('app-dark', darkMode.value)
+		if (persist) localStorage.setItem('whatsapp:theme', darkMode.value ? 'dark' : 'light')
+	}
+
+	function toggleTheme() {
+		applyTheme(!darkMode.value)
+	}
+
+	watch(
+		() => route.fullPath,
+		() => {
+			mobileOpen.value = false
+		},
+	)
+	watch(mobileOpen, (open) => {
+		document.documentElement.classList.toggle('mobile-navigation-open', open)
+	})
+
 	onMounted(() => {
+		const savedTheme = localStorage.getItem('whatsapp:theme')
+		applyTheme(
+			savedTheme
+				? savedTheme === 'dark'
+				: window.matchMedia('(prefers-color-scheme: dark)').matches,
+			false,
+		)
 		window.addEventListener('keydown', handleShortcut)
 		unsubscribeConnection = subscribeConnection(session.boot?.site, (status) => {
 			realtimeStatus.value = status
@@ -112,6 +169,8 @@
 		})
 	})
 	onUnmounted(() => {
+		document.documentElement.classList.remove('mobile-navigation-open')
+		window.clearTimeout(sidebarCollapseTimer)
 		window.removeEventListener('keydown', handleShortcut)
 		unsubscribeConnection()
 		unsubscribeAuth()
@@ -126,22 +185,20 @@
 			aria-label="Close navigation"
 			@click="mobileOpen = false"
 		/>
-		<aside :class="['sidebar', { open: mobileOpen }]">
+		<aside
+			id="workspace-navigation"
+			:class="['sidebar', { open: mobileOpen, expanded: sidebarExpanded || mobileOpen }]"
+			@mouseenter="expandSidebar"
+			@mouseleave="collapseSidebarSoon"
+			@focusin="expandSidebar"
+			@focusout="handleSidebarFocusOut"
+		>
 			<div class="brand">
 				<div class="brand-mark"><Sparkles :size="19" /></div>
 				<div>
 					<strong>WhatsApp Core</strong>
-					<span>Company workspace</span>
+					<span>Messaging workspace</span>
 				</div>
-			</div>
-
-			<div class="tenant-card">
-				<div class="tenant-avatar">WA</div>
-				<div>
-					<span>Current site</span>
-					<strong>{{ tenantLabel }}</strong>
-				</div>
-				<ChevronDown :size="15" />
 			</div>
 
 			<nav>
@@ -152,6 +209,8 @@
 						:key="`${group.label}-${item.label}`"
 						:to="{ name: item.route }"
 						:class="['nav-item', { active: route.name === item.route }]"
+						:title="item.label"
+						:aria-label="item.label"
 						@click="mobileOpen = false"
 					>
 						<component :is="item.icon" :size="18" />
@@ -166,13 +225,20 @@
 					<span :class="['status-dot', realtimeStatus]"></span
 					><strong>Realtime {{ realtimeStatus }}</strong>
 				</div>
-				<small>{{ session.boot?.site }}</small>
 			</div>
 		</aside>
 
 		<div class="main-shell">
 			<header class="topbar">
-				<Button class="mobile-menu" text rounded @click="mobileOpen = !mobileOpen">
+				<Button
+					class="mobile-menu"
+					text
+					rounded
+					aria-controls="workspace-navigation"
+					:aria-expanded="mobileOpen"
+					:aria-label="mobileOpen ? 'Close navigation' : 'Open navigation'"
+					@click="mobileOpen = !mobileOpen"
+				>
 					<MenuIcon :size="21" />
 				</Button>
 				<button class="global-search" type="button" @click="openCommand">
@@ -181,6 +247,17 @@
 					<kbd>Ctrl K</kbd>
 				</button>
 				<div class="top-actions">
+					<Button
+						v-if="session.boot?.modules?.includes('inbox')"
+						text
+						rounded
+						severity="secondary"
+						:aria-label="darkMode ? 'Use light theme' : 'Use dark theme'"
+						@click="toggleTheme"
+					>
+						<Sun v-if="darkMode" :size="18" />
+						<Moon v-else :size="18" />
+					</Button>
 					<Button
 						class="mobile-search-button"
 						text
@@ -198,7 +275,12 @@
 						@click="router.push({ name: 'inbox' })"
 						><Bell :size="19"
 					/></Button>
-					<button class="profile" @click="profileMenu.toggle($event)">
+					<button
+						class="profile"
+						type="button"
+						aria-label="Open user menu"
+						@click="profileMenu.toggle($event)"
+					>
 						<span>{{ initials }}</span>
 						<div>
 							<strong>{{ session.user?.full_name }}</strong>
@@ -210,7 +292,7 @@
 				</div>
 			</header>
 
-			<main class="content"><RouterView /></main>
+			<main :class="['content', { flush: flushContent }]"><RouterView /></main>
 		</div>
 		<Dialog
 			v-model:visible="commandOpen"
@@ -253,20 +335,31 @@
 
 <style scoped>
 	.app-shell {
-		min-height: 100vh;
+		width: 100vw;
+		height: 100dvh;
 		display: flex;
+		overflow: hidden;
 	}
 	.sidebar {
 		position: fixed;
 		inset: 0 auto 0 0;
-		width: 272px;
-		padding: 22px 16px 16px;
+		width: 64px;
+		padding: 14px 8px 12px;
 		display: flex;
 		flex-direction: column;
 		background: var(--wa-sidebar);
-		color: #dce9e3;
+		color: var(--wa-text);
+		border-right: 1px solid var(--wa-border);
 		z-index: 30;
-		overflow-y: auto;
+		overflow: hidden;
+		box-shadow: 8px 0 28px rgb(15 23 42 / 2%);
+		transition:
+			width 280ms cubic-bezier(0.22, 1, 0.36, 1),
+			box-shadow 280ms ease;
+	}
+	.sidebar.expanded {
+		width: 236px;
+		box-shadow: 14px 0 36px rgb(15 23 42 / 10%);
 	}
 	.sidebar-scrim {
 		display: none;
@@ -275,141 +368,179 @@
 		display: flex;
 		align-items: center;
 		gap: 11px;
-		padding: 0 8px 20px;
+		padding: 0 5px 14px;
 	}
 	.brand-mark {
 		display: grid;
 		place-items: center;
 		width: 38px;
 		height: 38px;
-		border-radius: 12px;
-		color: #082c21;
-		background: linear-gradient(135deg, #75f0c2, #27b681);
+		border-radius: 8px;
+		color: white;
+		background: var(--wa-green);
+		flex: 0 0 38px;
+	}
+	.brand > div:last-child,
+	.nav-item > span,
+	.nav-item > em,
+	.sidebar-footer strong {
+		min-width: 0;
+		max-width: 0;
+		overflow: hidden;
+		opacity: 0;
+		white-space: nowrap;
+		pointer-events: none;
+		transform: translateX(-5px);
+		transition:
+			opacity 180ms ease 30ms,
+			max-width 220ms cubic-bezier(0.22, 1, 0.36, 1),
+			transform 220ms cubic-bezier(0.22, 1, 0.36, 1) 30ms;
+	}
+	.sidebar.expanded .brand > div:last-child,
+	.sidebar.expanded .nav-item > span,
+	.sidebar.expanded .nav-item > em,
+	.sidebar.expanded .sidebar-footer strong {
+		max-width: 180px;
+		opacity: 1;
+		pointer-events: auto;
+		transform: translateX(0);
 	}
 	.brand strong,
 	.brand span {
 		display: block;
 	}
 	.brand strong {
-		color: white;
+		color: var(--wa-text);
 		font-size: 15px;
 	}
 	.brand span {
-		color: #8ca89d;
+		color: var(--wa-muted);
 		font-size: 11px;
 		margin-top: 2px;
 	}
-	.tenant-card {
-		display: grid;
-		grid-template-columns: 36px 1fr 18px;
-		gap: 10px;
-		align-items: center;
-		padding: 11px;
-		margin-bottom: 20px;
-		border: 1px solid #294238;
-		border-radius: 13px;
-		background: #173128;
+	.sidebar nav {
+		min-height: 0;
+		padding: 6px 0 10px;
+		overflow-y: auto;
+		overflow-x: hidden;
+		scrollbar-gutter: stable;
 	}
-	.tenant-avatar {
-		display: grid;
-		place-items: center;
-		height: 36px;
-		border-radius: 10px;
-		background: #d9fbe9;
-		color: #075e54;
-		font-size: 11px;
-		font-weight: 800;
+	.sidebar:not(.expanded) nav {
+		scrollbar-width: none;
 	}
-	.tenant-card span,
-	.tenant-card strong {
-		display: block;
-	}
-	.tenant-card span {
-		color: #8ca89d;
-		font-size: 10px;
-	}
-	.tenant-card strong {
-		color: white;
-		font-size: 13px;
-		margin-top: 2px;
+	.sidebar:not(.expanded) nav::-webkit-scrollbar {
+		width: 0;
+		height: 0;
 	}
 	.nav-group {
+		margin-bottom: 5px;
+	}
+	.sidebar.expanded .nav-group {
 		margin-bottom: 19px;
 	}
 	.nav-label {
-		padding: 0 11px 7px;
-		color: #718e82;
+		height: 0;
+		padding: 0;
+		overflow: hidden;
+		opacity: 0;
+		color: var(--wa-muted);
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
-		font-size: 10px;
+		font-size: 12px;
 		font-weight: 800;
+		white-space: nowrap;
+		transition:
+			height 220ms cubic-bezier(0.22, 1, 0.36, 1),
+			opacity 160ms ease,
+			padding 220ms cubic-bezier(0.22, 1, 0.36, 1);
+	}
+	.sidebar.expanded .nav-label {
+		height: 23px;
+		padding: 0 11px 7px;
+		opacity: 1;
 	}
 	.nav-item {
+		width: 48px;
 		height: 38px;
-		padding: 0 11px;
+		padding: 0;
 		margin: 2px 0;
 		display: flex;
-		gap: 11px;
+		justify-content: center;
+		gap: 0;
 		align-items: center;
-		border-radius: 10px;
-		color: #a9beb5;
+		border-radius: 6px;
+		color: var(--wa-text);
 		font-size: 13px;
 		font-weight: 600;
-		transition: 0.18s;
+		transition:
+			width 220ms cubic-bezier(0.22, 1, 0.36, 1),
+			padding 220ms cubic-bezier(0.22, 1, 0.36, 1),
+			gap 220ms cubic-bezier(0.22, 1, 0.36, 1),
+			background-color 0.18s ease,
+			color 0.18s ease;
+	}
+	.sidebar.expanded .nav-item {
+		width: 100%;
+		padding: 0 11px;
+		justify-content: flex-start;
+		gap: 11px;
+	}
+	.nav-item > svg {
+		flex: 0 0 18px;
 	}
 	.nav-item:hover {
-		color: white;
-		background: #1b392e;
+		color: var(--wa-text);
+		background: var(--wa-surface-muted);
 	}
 	.nav-item.active {
-		color: white;
-		background: #075e54;
+		color: var(--wa-primary);
+		background: var(--wa-primary-soft);
 	}
 	.nav-item em {
 		margin-left: auto;
 		padding: 2px 6px;
 		border-radius: 20px;
-		color: #0b3a2b;
-		background: #74e8ba;
-		font-size: 9px;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
+		font-size: 12px;
 		font-style: normal;
 		text-transform: uppercase;
 	}
 	.sidebar-footer {
 		margin-top: auto;
-		padding: 13px 11px;
-		border-top: 1px solid #294238;
+		padding: 13px 8px;
+		border-top: 1px solid var(--wa-border);
 	}
 	.sidebar-footer div {
 		display: flex;
 		align-items: center;
+		justify-content: center;
 		gap: 9px;
 	}
-	.sidebar-footer strong {
-		color: #d8e8e1;
-		font-size: 11px;
+	.sidebar.expanded .sidebar-footer div {
+		justify-content: flex-start;
 	}
-	.sidebar-footer small {
-		display: block;
-		margin-top: 7px;
-		color: #6f8f82;
-		font-size: 10px;
+	.sidebar-footer strong {
+		color: var(--wa-text);
+		font-size: 11px;
 	}
 	.main-shell {
 		min-width: 0;
-		width: 100%;
-		margin-left: 272px;
+		width: calc(100vw - 64px);
+		height: 100dvh;
+		margin-left: 64px;
+		overflow: hidden;
 	}
 	.topbar {
 		position: sticky;
 		top: 0;
 		z-index: 20;
-		height: 68px;
-		padding: 0 30px;
+		height: 56px;
+		padding: 0 20px;
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		background: rgba(255, 255, 255, 0.92);
+		background: color-mix(in srgb, var(--wa-surface) 94%, transparent);
 		border-bottom: 1px solid var(--wa-border);
 		backdrop-filter: blur(16px);
 	}
@@ -420,24 +551,24 @@
 		gap: 10px;
 		padding: 9px 12px;
 		border: 1px solid var(--wa-border);
-		border-radius: 12px;
-		color: #839089;
-		background: #f7f9f8;
+		border-radius: 6px;
+		color: var(--wa-muted);
+		background: var(--wa-surface-muted);
 		cursor: pointer;
 		text-align: left;
 	}
 	.global-search span {
 		flex: 1;
-		color: #6f7f77;
+		color: var(--wa-muted);
 		font-size: 13px;
 	}
 	.global-search kbd {
 		padding: 2px 6px;
-		border: 1px solid #dce4e0;
+		border: 1px solid var(--wa-border-soft);
 		border-radius: 5px;
-		background: white;
-		color: #7b8882;
-		font-size: 10px;
+		background: var(--wa-surface);
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 	.command-search {
 		position: relative;
@@ -486,7 +617,7 @@
 		place-items: center;
 		border-radius: 10px;
 		color: var(--wa-primary);
-		background: white;
+		background: var(--wa-surface);
 		border: 1px solid var(--wa-border);
 	}
 	.command-results button div {
@@ -525,8 +656,8 @@
 		width: 34px;
 		height: 34px;
 		border-radius: 10px;
-		background: #dff8ec;
-		color: #075e54;
+		background: var(--wa-primary-soft);
+		color: var(--wa-primary);
 		font-size: 12px;
 		font-weight: 800;
 	}
@@ -541,14 +672,19 @@
 		font-size: 11px;
 	}
 	.profile small {
-		color: #84918b;
-		font-size: 10px;
+		color: var(--wa-muted);
+		font-size: 12px;
 		margin-top: 2px;
 	}
 	.content {
-		padding: 28px 30px;
-		max-width: 1600px;
-		margin: 0 auto;
+		min-width: 0;
+		width: 100%;
+		height: calc(100dvh - 56px);
+		padding: 24px clamp(20px, 2vw, 32px) 32px;
+		overflow: auto;
+	}
+	.content.flush {
+		padding: 0;
 	}
 	.mobile-menu {
 		display: none;
@@ -556,14 +692,24 @@
 	.mobile-search-button {
 		display: none;
 	}
+	:global(html.mobile-navigation-open) {
+		overflow: hidden;
+	}
 	@media (max-width: 900px) {
 		.sidebar {
 			width: min(88vw, 300px);
 			transform: translateX(-100%);
-			transition: 0.2s;
+			visibility: hidden;
+			pointer-events: none;
+			transition:
+				transform 0.2s ease,
+				visibility 0s linear 0.2s;
 		}
 		.sidebar.open {
 			transform: translateX(0);
+			visibility: visible;
+			pointer-events: auto;
+			transition-delay: 0s;
 		}
 		.sidebar-scrim {
 			position: fixed;
@@ -575,6 +721,7 @@
 			z-index: 29;
 		}
 		.main-shell {
+			width: 100vw;
 			margin-left: 0;
 		}
 		.mobile-menu {
@@ -589,17 +736,23 @@
 		.content {
 			padding: 18px;
 		}
+		.content.flush {
+			padding: 0;
+		}
 		.profile div {
 			display: none;
 		}
 	}
 	@media (max-width: 520px) {
 		.topbar {
-			height: 60px;
+			height: 56px;
 			padding: 0 10px;
 		}
 		.content {
 			padding: 12px;
+		}
+		.content.flush {
+			padding: 0;
 		}
 		.top-actions {
 			gap: 2px;

@@ -73,9 +73,29 @@ def _workspace_failure(error: Exception, **payload) -> dict:
 	return {
 		"configured": configured,
 		"available": False,
-		"error": str(error) or "WhatsApp Integration Hub is unavailable",
+		"error": _public_workspace_error(error),
 		**payload,
 	}
+
+
+def _public_workspace_error(error: Exception) -> str:
+	"""Keep operator guidance useful without exposing raw Graph responses."""
+	message = str(error or "").strip()
+	lowered = message.lower()
+	if "131215" in lowered or "not eligible to access groups apis" in lowered:
+		return (
+			"Meta Groups is unavailable for this phone number. Groups currently requires "
+			"an eligible Official Business Account (OBA) phone number."
+		)
+	if "session has expired" in lowered or "error validating access token" in lowered:
+		return "Meta access token expired. Update the account credential in Integration, then retry."
+	if "401" in lowered or "oauth" in lowered:
+		return "Meta authentication failed. Update the account credential in Integration, then retry."
+	if "403" in lowered or "permission" in lowered:
+		return "Meta rejected this account operation. Check its permissions in Integration."
+	if "timeout" in lowered or "timed out" in lowered:
+		return "Meta did not respond in time. Retry in a moment."
+	return message or "WhatsApp Integration is unavailable"
 
 
 @frappe.whitelist()

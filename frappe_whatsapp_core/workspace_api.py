@@ -7,8 +7,14 @@ import json
 import frappe
 from frappe.utils import cint
 
+from frappe_whatsapp_core.contact_presentation import present_identity_names
+from frappe_whatsapp_core.ai_summaries import attach_message_insights
 from frappe_whatsapp_core.conversation_reads import mark_conversation_read
+from frappe_whatsapp_core.identity import contact_options
+from frappe_whatsapp_core.message_categories import category_counts_for_teams
 from frappe_whatsapp_core.message_media import add_media_url
+from frappe_whatsapp_core.message_quotes import attach_quoted_messages
+from frappe_whatsapp_core.message_reactions import attach_message_reactions
 from frappe_whatsapp_core.permissions import (
 	CORE_MANAGEMENT_ROLES,
 	assert_conversation_access,
@@ -55,6 +61,8 @@ def list_conversations(
 			conversation.status,
 			conversation.channel,
 			conversation.assigned_team,
+			assigned_team.team_name AS assigned_team_name,
+			assigned_team.icon AS assigned_team_icon,
 			conversation.assigned_user,
 			conversation.last_inbound_at,
 			conversation.last_message_at,
@@ -68,7 +76,13 @@ def list_conversations(
 			COALESCE(SUM(
 				CASE
 					WHEN message.direction = 'Inbound'
-						AND message.provider_timestamp > COALESCE(reader.last_read_at, '1970-01-01')
+						AND (
+							message.provider_timestamp > COALESCE(reader.last_read_at, '1970-01-01')
+							OR (
+								message.provider_timestamp = reader.last_read_at
+								AND message.creation > COALESCE(reader.last_read_creation, '1970-01-01')
+							)
+						)
 					THEN 1 ELSE 0
 				END
 			), 0) AS unread_count
@@ -85,6 +99,8 @@ def list_conversations(
 			)
 		LEFT JOIN `tabWhatsApp Core Message` message
 			ON message.conversation = conversation.name
+		LEFT JOIN `tabWhatsApp Core Team` assigned_team
+			ON assigned_team.name = conversation.assigned_team
 		LEFT JOIN `tabWhatsApp Core Conversation Read` reader
 			ON reader.conversation = conversation.name AND reader.user = %(user)s
 		WHERE {where}
@@ -95,9 +111,14 @@ def list_conversations(
 		values,
 		as_dict=True,
 	)
+	presentations = present_identity_names(
+		[row.identity for row in rows], context={"surface": "workspace_inbox_list"}
+	)
 	for row in rows:
 		row.unread_count = int(row.unread_count or 0)
 		row.attributes = _json_dict(row.attributes)
+		row.contact_presentation = presentations.get(row.identity) or {}
+		row.display_value = row.contact_presentation.get("display_name") or row.display_value
 	return {
 		"rows": rows,
 		"limit": limit,
@@ -112,13 +133,17 @@ def get_conversation(conversation: str) -> dict:
 	_assert_conversation_access(conversation)
 	doc = frappe.get_doc("WhatsApp Core Conversation", conversation)
 	identity = frappe.get_doc("WhatsApp Core Identity", doc.remote_identity)
+	presentation = present_identity_names(
+		[identity.name], context={"surface": "workspace_conversation", "conversation": doc.name}
+	).get(identity.name, {})
 	return {
 		**doc.as_dict(),
 		"identity": {
 			"name": identity.name,
-			"display_value": identity.display_value,
+			"display_value": presentation.get("display_name") or identity.display_value,
 			"normalized_value": identity.normalized_value,
 			"attributes": _json_dict(identity.attributes),
+			"presentation": presentation,
 		},
 		"readers": frappe.get_all(
 			"WhatsApp Core Conversation Read",
@@ -138,10 +163,11 @@ def list_messages(
 	before_creation: str | None = None,
 	limit: int = 50,
 	search: str | None = None,
+	category: str | None = None,
 ) -> dict:
 	_assert_conversation_access(conversation)
 	limit = min(max(int(limit or 50), 1), 100)
-	filters = ["conversation = %(conversation)s"]
+	filters = ["conversation = %(conversation)s", "message_type != 'reaction'"]
 	values = {"conversation": conversation, "limit": limit + 1}
 	if before:
 		values["before"] = before
@@ -161,11 +187,21 @@ def list_messages(
 	if search:
 		filters.append("body LIKE %(search)s")
 		values["search"] = f"%{search.strip()}%"
+	category = str(category or "").strip()
+	if category:
+		filters.append(
+			"""EXISTS (
+				SELECT 1 FROM `tabWhatsApp Core Message Category Assignment` category_assignment
+				WHERE category_assignment.message = `tabWhatsApp Core Message`.name
+					AND category_assignment.category = %(category)s
+			)"""
+		)
+		values["category"] = category
 	rows = frappe.db.sql(
 		f"""
 		SELECT
 			name, message_key, provider_message_id, direction, message_type,
-			body, content, provider_timestamp, delivery_status, failure, creation,
+			body, content, provider_timestamp, delivery_status, failure, owner, creation,
 			EXISTS(
 				SELECT 1 FROM `tabWhatsApp Core Message Bookmark` bookmark
 				WHERE bookmark.message = `tabWhatsApp Core Message`.name
@@ -181,11 +217,25 @@ def list_messages(
 	)
 	has_more = len(rows) > limit
 	rows = rows[:limit]
+	owners = {row.owner for row in rows if row.direction == "Outbound" and row.owner}
+	owner_names = {
+		row.name: row.full_name or row.name
+		for row in frappe.get_all(
+			"User",
+			filters={"name": ["in", list(owners)]},
+			fields=["name", "full_name"],
+			limit_page_length=len(owners),
+		)
+	} if owners else {}
 	for row in rows:
 		row.content = _json_dict(row.content)
 		row.failure = _json_dict(row.failure)
 		row.bookmarked = bool(row.bookmarked)
+		row.sender_name = owner_names.get(row.owner, row.owner) if row.direction == "Outbound" else ""
 		add_media_url(row)
+	attach_quoted_messages(rows, conversation)
+	attach_message_insights(rows)
+	attach_message_reactions(rows, conversation)
 	return {
 		"rows": rows,
 		"has_more": has_more,
@@ -279,11 +329,13 @@ def assign_conversation(
 def list_teams() -> list[dict]:
 	teams = frappe.get_all(
 		"WhatsApp Core Team",
-		fields=["name", "team_name", "description", "enabled"],
+		fields=["name", "team_name", "icon", "description", "enabled"],
 		order_by="team_name asc",
 		limit_page_length=500,
 	)
 	members_by_team = {team.name: [] for team in teams}
+	contacts_by_team = {team.name: [] for team in teams}
+	categories_by_team = category_counts_for_teams(list(members_by_team))
 	if teams:
 		members = frappe.get_all(
 			"WhatsApp Core Team Member",
@@ -294,8 +346,22 @@ def list_teams() -> list[dict]:
 		)
 		for member in members:
 			members_by_team.setdefault(member.parent, []).append(member)
+		contacts = frappe.get_all(
+			"WhatsApp Core Team Contact",
+			filters={"parent": ["in", list(contacts_by_team)]},
+			fields=["parent", "identity", "enabled"],
+			order_by="parent asc, idx asc",
+			limit_page_length=10000,
+		)
+		for contact in contacts:
+			contacts_by_team.setdefault(contact.parent, []).append(contact)
 	for team in teams:
 		team["members"] = members_by_team.get(team.name, [])
+		team["contacts"] = contacts_by_team.get(team.name, [])
+		team["categories"] = categories_by_team.get(team.name, [])
+		team["categorized_messages"] = sum(
+			row["count"] for row in team["categories"]
+		)
 	return teams
 
 
@@ -355,16 +421,23 @@ def team_workspace() -> dict:
 	"""
 	teams = list_teams()
 	members = [member.user for team in teams for member in team.members]
-	return {"teams": teams, "users": _user_options(include=members)}
+	contacts = [contact.identity for team in teams for contact in team.contacts]
+	return {
+		"teams": teams,
+		"users": _user_options(include=members),
+		"contacts": contact_options(limit=100, include=contacts),
+	}
 
 
 @frappe.whitelist()
 @require_core_access(manage=True)
 def upsert_team(
 	team_name: str,
+	icon: str = "users-round",
 	description: str = "",
 	enabled: int | bool = 1,
 	members=None,
+	contacts=None,
 ) -> dict:
 	if isinstance(members, str):
 		members = frappe.parse_json(members)
@@ -372,6 +445,12 @@ def upsert_team(
 		members = []
 	if not isinstance(members, list):
 		frappe.throw("members must be a list", frappe.ValidationError)
+	if isinstance(contacts, str):
+		contacts = frappe.parse_json(contacts)
+	if contacts is None:
+		contacts = []
+	if not isinstance(contacts, list):
+		frappe.throw("contacts must be a list", frappe.ValidationError)
 	name = (team_name or "").strip()
 	if not name:
 		frappe.throw("Team name is required", frappe.ValidationError)
@@ -381,6 +460,7 @@ def upsert_team(
 		else frappe.new_doc("WhatsApp Core Team")
 	)
 	doc.team_name = name
+	doc.icon = _team_icon(icon)
 	doc.description = description or ""
 	doc.enabled = 1 if _as_bool(enabled) else 0
 	doc.set("members", [])
@@ -396,6 +476,22 @@ def upsert_team(
 			"user": user,
 			"team_role": member.get("team_role") or "Agent",
 			"enabled": 1 if member.get("enabled", True) else 0,
+		})
+	doc.set("contacts", [])
+	seen_contacts = set()
+	for contact in contacts:
+		identity = (contact.get("identity") or "").strip() if isinstance(contact, dict) else ""
+		if not identity or identity in seen_contacts:
+			continue
+		if not frappe.db.exists(
+			"WhatsApp Core Identity",
+			{"name": identity, "identity_type": "WhatsApp", "status": "Active"},
+		):
+			frappe.throw(f"Active WhatsApp contact not found: {identity}", frappe.ValidationError)
+		seen_contacts.add(identity)
+		doc.append("contacts", {
+			"identity": identity,
+			"enabled": 1 if contact.get("enabled", True) else 0,
 		})
 	doc.save(ignore_permissions=True)
 	frappe.publish_realtime(
@@ -454,3 +550,13 @@ def _as_bool(value) -> bool:
 	if isinstance(value, str):
 		return value.strip().lower() in {"1", "true", "yes", "on"}
 	return bool(value)
+
+
+def _team_icon(value) -> str:
+	"""Keep the icon safe for both Desk's Icon field and the Core UI."""
+	icon = str(value or "users-round").strip().lower()
+	if not icon or len(icon) > 40 or any(
+		not (character.isalnum() or character == "-") for character in icon
+	):
+		frappe.throw("Invalid team icon", frappe.ValidationError)
+	return icon

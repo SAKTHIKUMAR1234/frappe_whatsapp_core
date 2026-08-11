@@ -18,6 +18,7 @@ from frappe_whatsapp_core.frontend_api import (
 	health_workspace,
 	polls_workspace,
 	save_contact_source,
+	save_ai_summary_settings,
 	settings_workspace,
 )
 from frappe_whatsapp_core.materializer import (
@@ -130,6 +131,8 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		)
 		settings = settings_workspace()
 		self.assertEqual(settings["site"], frappe.local.site)
+		self.assertIn("ai_summary", settings)
+		self.assertIn("i2a_actions", settings)
 		self.assertEqual(
 			set(settings["inventory"]),
 			{
@@ -139,6 +142,20 @@ class TestFrontendWorkspaces(FrappeTestCase):
 				"messages",
 			},
 		)
+
+	def test_ai_summary_settings_require_a_frappe_tools_action(self):
+		with self.assertRaises(frappe.ValidationError):
+			save_ai_summary_settings(enabled=1, action="Missing I2A Action")
+
+		settings = save_ai_summary_settings(
+			enabled=0,
+			action="",
+			batch_size=0,
+			max_media_mb=99,
+		)
+		self.assertFalse(settings["ai_summary"]["enabled"])
+		self.assertEqual(settings["ai_summary"]["batch_size"], 100)
+		self.assertEqual(settings["ai_summary"]["max_media_mb"], 50)
 
 	@patch("frappe_whatsapp_core.frontend_api.call_management")
 	def test_hub_account_discovery_returns_only_integration_options(self, call_management):

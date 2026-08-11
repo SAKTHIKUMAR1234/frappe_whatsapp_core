@@ -1,6 +1,7 @@
 import unittest
 
 from frappe_whatsapp_core.flow_schema import evaluate_condition, validate_graph
+from frappe_whatsapp_core.flows import _resolve_question_config
 
 
 def valid_graph():
@@ -88,6 +89,62 @@ class TestFlowSchema(unittest.TestCase):
 		}
 		self.assertTrue(evaluate_condition(condition, {"answers": {"liked": "yes"}, "tags": ["buyer"]}))
 		self.assertFalse(evaluate_condition(condition, {"answers": {"liked": "no"}, "tags": ["buyer"]}))
+
+	def test_unified_inputs_support_number_choice_and_attachment(self):
+		for input_type, extra in (
+			("number", {"minimum": 1, "maximum": 10, "integer_only": True}),
+			("radio", {"options": ["Create", "Exit"]}),
+			("select", {"options_from": {"var": "actions.catalog.options"}}),
+			("multi_select", {"options": ["Gym Vest", "Innerwear"]}),
+			("attachment", {"accepted_media_types": ["image", "document", "audio"]}),
+		):
+			graph = valid_graph()
+			graph["nodes"][1] = {
+				"id": "liked",
+				"type": "ask_input",
+				"config": {
+					"message": "Provide a value",
+					"answer_key": "value",
+					"input_type": input_type,
+					**extra,
+				},
+			}
+			self.assertEqual(validate_graph(graph), [], input_type)
+
+	def test_dynamic_options_require_a_context_reference(self):
+		graph = valid_graph()
+		graph["nodes"][1]["type"] = "ask_input"
+		graph["nodes"][1]["config"].update({
+			"input_type": "select",
+			"options_from": "actions.catalog.options",
+		})
+		errors = validate_graph(graph)
+		self.assertTrue(any("options_from must be a context variable" in error for error in errors))
+
+	def test_dynamic_options_resolve_from_action_result(self):
+		node = {
+			"id": "catalog",
+			"type": "ask_input",
+			"config": {
+				"message": "Choose a product",
+				"answer_key": "product",
+				"input_type": "select",
+				"options_from": {"var": "actions.catalog.options"},
+			},
+		}
+		options = [{"label": "Catalog A", "value": "a"}]
+		resolved = _resolve_question_config(node, {"actions": {"catalog": {"options": options}}})
+		self.assertEqual(resolved["options"], options)
+
+	def test_duplicate_trigger_signature_is_rejected(self):
+		graph = valid_graph()
+		graph["triggers"].append({
+			"key": "help-again",
+			"type": "command",
+			"match": " /HELP ",
+		})
+		errors = validate_graph(graph)
+		self.assertTrue(any("Duplicate command trigger match" in error for error in errors))
 
 
 if __name__ == "__main__":

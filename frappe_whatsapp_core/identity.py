@@ -5,9 +5,11 @@ import frappe
 from frappe import _
 from frappe.utils import cint, now_datetime
 
+from frappe_whatsapp_core.contact_presentation import present_contacts
 from frappe_whatsapp_core.frappe_whatsapp_core.doctype.whatsapp_core_identity_link.whatsapp_core_identity_link import (
 	make_identity_link_key,
 )
+from frappe_whatsapp_core.permissions import identity_team_condition
 
 
 def get_or_create_identity(value, resolve=True):
@@ -177,55 +179,68 @@ def phone_candidates(value):
 	return sorted(candidates)
 
 
-def contact_options(limit: int = 50, search: str | None = None) -> list[dict]:
+def contact_options(
+	limit: int = 50,
+	search: str | None = None,
+	include: list[str] | tuple[str, ...] | None = None,
+) -> list[dict]:
 	"""Return active Core contacts as stable options for every user-facing workflow."""
 	limit = max(1, min(cint(limit or 50), 100))
 	search = str(search or "").strip()
-	identity_fields = ["name", "normalized_value", "display_value", "primary_link"]
-	identity_filters = {"identity_type": "WhatsApp", "status": "Active"}
+	include = list(dict.fromkeys(name for name in (include or []) if name))
+	scope, scope_values = identity_team_condition("identity.name")
+	conditions = [
+		"identity.identity_type = 'WhatsApp'",
+		"identity.status = 'Active'",
+		scope,
+	]
+	values = {**scope_values, "limit": max(limit, len(include))}
 	if search:
-		pattern = f"%{search}%"
-		identities = frappe.get_all(
-			"WhatsApp Core Identity",
-			filters=identity_filters,
-			or_filters={
-				"name": ["like", pattern],
-				"display_value": ["like", pattern],
-				"normalized_value": ["like", pattern],
-			},
-			fields=identity_fields,
-			order_by="display_value asc, normalized_value asc",
-			limit_page_length=limit,
+		conditions.append(
+			"""(
+				identity.name LIKE %(search)s
+				OR identity.display_value LIKE %(search)s
+				OR identity.normalized_value LIKE %(search)s
+				OR search_link.display_name LIKE %(search)s
+				OR search_link.reference_name LIKE %(search)s
+			)"""
 		)
-		linked_identities = frappe.get_all(
-			"WhatsApp Core Identity Link",
-			filters={"status": "Active"},
-			or_filters={
-				"display_name": ["like", pattern],
-				"reference_name": ["like", pattern],
-			},
-			pluck="identity",
-			limit_page_length=limit,
-		)
-		known = {row.name for row in identities}
-		missing = [name for name in dict.fromkeys(linked_identities) if name not in known]
-		if missing:
-			identities.extend(
-				frappe.get_all(
-					"WhatsApp Core Identity",
-					filters={**identity_filters, "name": ["in", missing]},
-					fields=identity_fields,
-					limit_page_length=limit,
-				)
-			)
-	else:
-		identities = frappe.get_all(
-			"WhatsApp Core Identity",
-			filters=identity_filters,
-			fields=identity_fields,
-			order_by="display_value asc, normalized_value asc",
-			limit_page_length=limit,
-		)
+		values["search"] = f"%{search}%"
+	identities = frappe.db.sql(
+		f"""
+		SELECT DISTINCT
+			identity.name,
+			identity.normalized_value,
+			identity.display_value,
+			identity.primary_link,
+			identity.attributes
+		FROM `tabWhatsApp Core Identity` AS identity
+		LEFT JOIN `tabWhatsApp Core Identity Link` AS search_link
+			ON search_link.identity = identity.name AND search_link.status = 'Active'
+		WHERE {" AND ".join(conditions)}
+		ORDER BY identity.display_value ASC, identity.normalized_value ASC
+		LIMIT %(limit)s
+		""",
+		values,
+		as_dict=True,
+	)
+	known = {row.name for row in identities}
+	missing = [name for name in include if name not in known]
+	if missing:
+		include_scope, include_values = identity_team_condition("identity.name")
+		identities.extend(frappe.db.sql(
+			f"""
+			SELECT identity.name, identity.normalized_value, identity.display_value,
+				identity.primary_link, identity.attributes
+			FROM `tabWhatsApp Core Identity` AS identity
+			WHERE identity.identity_type = 'WhatsApp'
+				AND identity.status = 'Active'
+				AND identity.name IN %(include)s
+				AND {include_scope}
+			""",
+			{**include_values, "include": tuple(missing)},
+			as_dict=True,
+		))
 	link_names = [row.primary_link for row in identities if row.primary_link]
 	links = (
 		{
@@ -240,24 +255,21 @@ def contact_options(limit: int = 50, search: str | None = None) -> list[dict]:
 		if link_names
 		else {}
 	)
+	presentations = present_contacts(
+		identities,
+		primary_links=links,
+		context={"surface": "contact_options"},
+	)
 	options = []
 	for row in identities:
-		link = links.get(row.primary_link)
-		label = (
-			(link.display_name or link.reference_name)
-			if link
-			else (row.display_value or row.normalized_value)
-		)
+		presentation = presentations.get(row.name) or {}
 		options.append(
 			{
 				"identity": row.name,
 				"phone_number": row.normalized_value,
-				"label": label,
-				"reference": (
-					f"{link.reference_doctype} · {link.reference_name}"
-					if link
-					else "WhatsApp contact"
-				),
+				"label": presentation.get("display_name") or row.normalized_value,
+				"reference": presentation.get("reference") or "WhatsApp contact",
+				"presentation": presentation,
 			}
 		)
 	return sorted(
@@ -266,7 +278,7 @@ def contact_options(limit: int = 50, search: str | None = None) -> list[dict]:
 			str(option["label"] or "").casefold(),
 			option["phone_number"],
 		),
-	)[:limit]
+	)[: max(limit, len(include))]
 
 
 def _resolve_source(identity, source):

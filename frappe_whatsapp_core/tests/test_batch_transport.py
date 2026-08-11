@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
@@ -7,12 +8,59 @@ import frappe
 from frappe_whatsapp_core.campaigns import _campaign_batch_sender
 from frappe_whatsapp_core.hub_client import send_batch
 from frappe_whatsapp_core.outbound import (
+	deliver_queued_message,
+	deliver_queued_message_batch,
 	queue_campaign_batch,
 	resolve_recipient_phone,
 )
 
 
 class TestBatchTransport(TestCase):
+	def test_single_delivery_ends_read_snapshot_before_status_write(self):
+		message = frappe._dict(
+			name="message-1",
+			channel="channel-1",
+			conversation="conversation-1",
+			idempotency_key="key-1",
+			delivery_status="Queued",
+		)
+		conversation = frappe._dict(name="conversation-1", remote_identity="identity-1")
+		identity = frappe._dict(name="identity-1", normalized_value="919999999999")
+		documents = {
+			("WhatsApp Core Message", "message-1"): message,
+			("WhatsApp Core Conversation", "conversation-1"): conversation,
+			("WhatsApp Core Identity", "identity-1"): identity,
+		}
+		sequence = []
+		with (
+			patch("frappe_whatsapp_core.outbound.frappe.cache.lock", return_value=nullcontext()),
+			patch(
+				"frappe_whatsapp_core.outbound.frappe.get_doc",
+				side_effect=lambda doctype, name: documents[(doctype, name)],
+			),
+			patch("frappe_whatsapp_core.outbound.resolve_recipient_phone", return_value="919999999999"),
+			patch("frappe_whatsapp_core.outbound._message_payload", return_value={"to": "919999999999"}),
+			patch(
+				"frappe_whatsapp_core.outbound.send_raw",
+				side_effect=lambda *args: sequence.append("send") or {
+					"accepted": True,
+					"status": "sent",
+					"meta_message_id": "wamid.test",
+				},
+			),
+			patch(
+				"frappe_whatsapp_core.outbound.frappe.db.rollback",
+				side_effect=lambda: sequence.append("rollback"),
+			),
+			patch(
+				"frappe_whatsapp_core.outbound._mark_sent",
+				side_effect=lambda *args: sequence.append("mark"),
+			),
+		):
+			deliver_queued_message("message-1")
+
+		self.assertEqual(sequence, ["send", "rollback", "mark"])
+
 	def test_hub_batch_maps_channels_and_uses_one_request(self):
 		settings = SimpleNamespace(
 			hub_url="https://hub.example.test",
@@ -40,6 +88,10 @@ class TestBatchTransport(TestCase):
 			},
 		}
 		with (
+			patch(
+				"frappe_whatsapp_core.outbound.outbound_ready",
+				return_value=True,
+			) as outbound_ready,
 			patch(
 				"frappe_whatsapp_core.hub_client.get_settings",
 				return_value=settings,
@@ -105,7 +157,7 @@ class TestBatchTransport(TestCase):
 			context={"source": "message"},
 		)
 
-	def test_campaign_batch_submits_all_messages_together(self):
+	def test_campaign_batch_defers_transport_until_after_commit(self):
 		campaign = SimpleNamespace(
 			name="campaign-1",
 			channel="channel-1",
@@ -145,27 +197,11 @@ class TestBatchTransport(TestCase):
 				return template
 			return identities[name]
 
-		hub_response = {
-			"accepted": True,
-			"success": True,
-			"items": [
-				{
-					"idempotency_key": f"key-{index}",
-					"status": "queued" if index == 0 else "completed",
-					"result": {
-						"success": True,
-						"status": "queued" if index == 0 else "sent",
-						"meta_message_id": (
-							None
-							if index == 0
-							else f"wamid.{index}"
-						),
-					},
-				}
-				for index in range(2)
-			],
-		}
 		with (
+			patch(
+				"frappe_whatsapp_core.outbound.outbound_ready",
+				return_value=True,
+			) as outbound_ready,
 			patch(
 				"frappe_whatsapp_core.outbound.frappe.get_cached_doc",
 				side_effect=cached_doc,
@@ -197,21 +233,137 @@ class TestBatchTransport(TestCase):
 			),
 			patch(
 				"frappe_whatsapp_core.outbound.send_hub_batch",
-				return_value=hub_response,
 			) as hub_batch,
-			patch(
-				"frappe_whatsapp_core.outbound.frappe.get_doc",
-				side_effect=messages,
-			),
-			patch("frappe_whatsapp_core.outbound._mark_sent") as mark_sent,
-			patch(
-				"frappe_whatsapp_core.outbound._enqueue_message_delivery",
-			) as enqueue_delivery,
+			patch("frappe_whatsapp_core.outbound.frappe.db.sql") as db_sql,
+			patch("frappe_whatsapp_core.outbound.frappe.publish_realtime") as publish,
+			patch("frappe_whatsapp_core.outbound.frappe.enqueue") as enqueue,
 		):
 			result = queue_campaign_batch(campaign, recipients)
 
+		hub_batch.assert_not_called()
+		outbound_ready.assert_called_once_with()
+		enqueue.assert_called_once_with(
+			"frappe_whatsapp_core.outbound.deliver_queued_message_batch",
+			queue="short",
+			enqueue_after_commit=True,
+			message_names=["message-0", "message-1"],
+		)
+		self.assertTrue(all(row["success"] for row in result.values()))
+		db_sql.assert_called_once()
+		publish.assert_called_once()
+		self.assertEqual(
+			len(publish.call_args.args[1]["message_changes"]),
+			2,
+		)
+
+	def test_committed_campaign_batch_submits_all_messages_together(self):
+		messages = {
+			f"message-{index}": frappe._dict(
+				name=f"message-{index}",
+				channel="channel-1",
+				conversation=f"conversation-{index}",
+				idempotency_key=f"key-{index}",
+				delivery_status="Queued",
+			)
+			for index in range(2)
+		}
+		conversations = {
+			f"conversation-{index}": frappe._dict(
+				name=f"conversation-{index}",
+				remote_identity=f"identity-{index}",
+			)
+			for index in range(2)
+		}
+		identities = {
+			f"identity-{index}": frappe._dict(
+				name=f"identity-{index}",
+				normalized_value=f"91999999999{index}",
+			)
+			for index in range(2)
+		}
+
+		def get_doc(doctype, name):
+			return {
+				"WhatsApp Core Message": messages,
+				"WhatsApp Core Conversation": conversations,
+				"WhatsApp Core Identity": identities,
+			}[doctype][name]
+
+		hub_response = {
+			"accepted": True,
+			"items": [
+				{
+					"idempotency_key": f"key-{index}",
+					"status": "queued",
+					"result": {"success": True, "status": "queued"},
+				}
+				for index in range(2)
+			],
+		}
+		with (
+			patch(
+				"frappe_whatsapp_core.outbound.frappe.get_doc",
+				side_effect=get_doc,
+			),
+			patch(
+				"frappe_whatsapp_core.outbound.resolve_recipient_phone",
+				side_effect=["919999999990", "919999999991"],
+			),
+			patch(
+				"frappe_whatsapp_core.outbound._message_payload",
+				side_effect=[
+					{"to": "919999999990"},
+					{"to": "919999999991"},
+				],
+			),
+			patch(
+				"frappe_whatsapp_core.outbound.send_hub_batch",
+				return_value=hub_response,
+			) as hub_batch,
+			patch("frappe_whatsapp_core.outbound.frappe.db.rollback") as rollback,
+		):
+			deliver_queued_message_batch(list(messages))
+
 		self.assertEqual(hub_batch.call_count, 1)
 		self.assertEqual(len(hub_batch.call_args.args[0]), 2)
-		self.assertEqual(mark_sent.call_count, 1)
-		enqueue_delivery.assert_not_called()
-		self.assertTrue(all(row["success"] for row in result.values()))
+		self.assertEqual(rollback.call_count, 2)
+
+	def test_invalid_campaign_recipient_fails_before_message_creation(self):
+		campaign = SimpleNamespace(
+			name="campaign-invalid-recipient",
+			channel="channel-1",
+			template="template-1",
+		)
+		recipient = SimpleNamespace(
+			name="recipient-invalid",
+			identity="identity-invalid",
+			personalization="{}",
+		)
+		channel = SimpleNamespace(name="channel-1")
+		template = SimpleNamespace(name="template-1", language_code="en")
+		identity = SimpleNamespace(name="identity-invalid")
+		conversation = SimpleNamespace(name="conversation-invalid")
+		with (
+			patch("frappe_whatsapp_core.outbound.outbound_ready", return_value=True),
+			patch(
+				"frappe_whatsapp_core.outbound.frappe.get_cached_doc",
+				side_effect=[channel, template, identity],
+			),
+			patch(
+				"frappe_whatsapp_core.outbound.get_or_create_conversation",
+				return_value=conversation,
+			),
+			patch(
+				"frappe_whatsapp_core.outbound.resolve_recipient_phone",
+				side_effect=frappe.ValidationError("invalid recipient"),
+			),
+			patch(
+				"frappe_whatsapp_core.outbound.queue_template_internal",
+			) as queue_template,
+			patch("frappe_whatsapp_core.outbound.frappe.enqueue") as enqueue,
+		):
+			result = queue_campaign_batch(campaign, [recipient])
+
+		self.assertFalse(result[recipient.name]["success"])
+		queue_template.assert_not_called()
+		enqueue.assert_not_called()

@@ -1,14 +1,15 @@
 <script setup>
 	import Select from 'primevue/select'
 	import Tag from 'primevue/tag'
-	import { Bot, Link2, UserRoundCheck } from 'lucide-vue-next'
+	import { Bot, RefreshCw, UserRoundCheck } from 'lucide-vue-next'
+	import Button from 'primevue/button'
 
 	defineProps({
 		data: { type: Object, required: true },
 		canManage: { type: Boolean, default: false },
 	})
 
-	defineEmits(['status'])
+	defineEmits(['status', 'refresh-summary'])
 
 	const statusOptions = ['Open', 'Pending', 'Resolved']
 </script>
@@ -35,19 +36,6 @@
 		</section>
 
 		<section>
-			<header><Link2 :size="15" /> Verified business links</header>
-			<div v-if="data.party_bindings?.length" class="binding-list">
-				<div v-for="binding in data.party_bindings" :key="binding.name">
-					<strong>{{ binding.party_name }}</strong>
-					<small>{{ binding.party_role || binding.party_doctype }}</small>
-				</div>
-			</div>
-			<p v-else class="empty-copy">
-				Unmapped. An operator or external AI can bind this identity.
-			</p>
-		</section>
-
-		<section>
 			<header><UserRoundCheck :size="15" /> Team visibility</header>
 			<div class="reader-list">
 				<Tag
@@ -64,11 +52,34 @@
 		</section>
 
 		<section class="ai-note">
-			<header><Bot :size="15" /> AI-ready context</header>
-			<p>
-				Messages, topic summaries and verified bindings are exposed through audited MCP
-				tools.
-			</p>
+			<header>
+				<span><Bot :size="15" /> Contact summary</span>
+				<Button
+					v-if="canManage"
+					text
+					rounded
+					aria-label="Refresh contact summary"
+					@click="$emit('refresh-summary')"
+				>
+					<RefreshCw :size="14" />
+				</Button>
+			</header>
+			<p v-if="data.contact_summary?.summary">{{ data.contact_summary.summary }}</p>
+			<p v-else>No summary has been generated for this contact yet.</p>
+			<div v-if="data.contact_summary?.categories?.length" class="summary-tags">
+				<Tag
+					v-for="category in data.contact_summary.categories"
+					:key="category"
+					:value="category"
+					severity="info"
+					rounded
+				/>
+			</div>
+			<ul v-if="data.contact_summary?.action_items?.length" class="summary-actions">
+				<li v-for="action in data.contact_summary.action_items" :key="action">
+					{{ action }}
+				</li>
+			</ul>
 		</section>
 	</aside>
 </template>
@@ -77,23 +88,31 @@
 	.context-panel {
 		min-height: 0;
 		overflow-y: auto;
-		border-left: 1px solid #e2e9e5;
-		background: #fbfcfb;
+		border-left: 1px solid var(--wa-border);
+		background: var(--wa-surface);
 	}
 	section {
 		padding: 17px;
-		border-bottom: 1px solid #e7ece9;
+		border-bottom: 1px solid var(--wa-border-soft);
 	}
 	section > header {
 		display: flex;
 		align-items: center;
 		gap: 7px;
 		margin-bottom: 12px;
-		color: #52635b;
-		font-size: 10px;
+		color: var(--wa-muted);
+		font-size: 11px;
 		font-weight: 800;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
+	}
+	.ai-note > header {
+		justify-content: space-between;
+	}
+	.ai-note > header > span {
+		display: inline-flex;
+		align-items: center;
+		gap: 7px;
 	}
 	.identity {
 		display: flex;
@@ -107,26 +126,22 @@
 		width: 40px;
 		height: 40px;
 		border-radius: 12px;
-		color: #075e54;
-		background: #dff7ea;
-		font-size: 11px;
+		color: var(--wa-primary);
+		background: var(--wa-primary-soft);
+		font-size: 12px;
 		font-weight: 800;
 	}
 	.identity strong,
-	.identity small,
-	.binding-list strong,
-	.binding-list small {
+	.identity small {
 		display: block;
 	}
-	.identity strong,
-	.binding-list strong {
-		font-size: 11px;
+	.identity strong {
+		font-size: 13px;
 	}
-	.identity small,
-	.binding-list small {
+	.identity small {
 		margin-top: 3px;
-		color: #7a8881;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 11px;
 	}
 	.status-select {
 		width: 100%;
@@ -135,20 +150,10 @@
 		display: inline-flex;
 		padding: 5px 9px;
 		border-radius: 999px;
-		background: #eef4f1;
-		color: #52635b;
-		font-size: 10px;
+		background: var(--wa-surface-muted);
+		color: var(--wa-muted);
+		font-size: 12px;
 		font-weight: 700;
-	}
-	.binding-list {
-		display: grid;
-		gap: 8px;
-	}
-	.binding-list > div {
-		padding: 9px 10px;
-		border: 1px solid #dfe8e3;
-		border-radius: 10px;
-		background: white;
 	}
 	.reader-list {
 		display: flex;
@@ -156,12 +161,25 @@
 		gap: 6px;
 	}
 	.ai-note {
-		background: #f0faf6;
+		background: var(--wa-primary-soft);
 	}
 	.ai-note p {
 		margin: 0;
-		color: #587269;
-		font-size: 10px;
+		color: var(--wa-muted);
+		font-size: 12px;
 		line-height: 1.55;
+	}
+	.summary-tags {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 5px;
+		margin-top: 10px;
+	}
+	.summary-actions {
+		margin: 10px 0 0;
+		padding-left: 18px;
+		color: var(--wa-text);
+		font-size: 12px;
+		line-height: 1.5;
 	}
 </style>

@@ -1,15 +1,22 @@
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from frappe_whatsapp_core.api import receive_outbound_result
 from frappe_whatsapp_core.campaigns import (
+	_complete_campaign,
+	_lock_campaign_rows,
 	authorize_campaign,
+	cancel_campaign,
 	create_campaign,
 	launch_campaign,
 	prepare_campaign,
 	process_campaign_batch,
 )
+from frappe_whatsapp_core.materializer import materialize_status
+from frappe_whatsapp_core.outbound import queue_campaign_recipient, retry_queued_messages
 from frappe_whatsapp_core.template_catalog import sync_template_projection
 
 
@@ -121,6 +128,41 @@ class TestCampaigns(FrappeTestCase):
 		self.assertTrue(summary["send_authorized"])
 		self.assertEqual(summary["template_approval_status"], "APPROVED")
 
+	def test_plain_text_campaign_uses_service_window_guarded_sender(self):
+		campaign = create_campaign(
+			campaign_key=f"campaign.text.{frappe.generate_hash(length=8).lower()}",
+			title="Open-window follow-up",
+			channel=self.channel.name,
+			content_type="Text",
+			message_text="Hello from the service team",
+		)
+		prepare_campaign(campaign.name, [self.identities[0].name])
+		summary = authorize_campaign(campaign.name, f"AUTHORIZE {campaign.campaign_key}")
+		self.assertEqual(summary["content_type"], "Text")
+		self.assertEqual(summary["template_approval_status"], "NOT_REQUIRED")
+
+		recipient = frappe.get_doc(
+			"WhatsApp Core Campaign Recipient",
+			{"campaign": campaign.name},
+		)
+		with (
+			patch(
+				"frappe_whatsapp_core.outbound.get_or_create_conversation",
+				return_value=SimpleNamespace(name="TEXT-CONVERSATION"),
+			),
+			patch(
+				"frappe_whatsapp_core.outbound.queue_text_internal",
+				return_value=SimpleNamespace(name="TEXT-MESSAGE"),
+			) as queue_text,
+		):
+			result = queue_campaign_recipient(campaign, recipient)
+		self.assertEqual(result["message"], "TEXT-MESSAGE")
+		queue_text.assert_called_once_with(
+			"TEXT-CONVERSATION",
+			"Hello from the service team",
+			source=f"Campaign:{campaign.name}",
+		)
+
 	def test_business_preflight_blocks_launch_while_gate_is_locked(self):
 		prepare_campaign(
 			self.campaign.name,
@@ -157,3 +199,171 @@ class TestCampaigns(FrappeTestCase):
 		):
 			process_campaign_batch(self.campaign.name, batch_size=500)
 		self.assertEqual(get_all.call_args.kwargs["limit_page_length"], 40)
+
+	def test_campaign_locks_are_sorted_before_recipient_updates(self):
+		with patch("frappe_whatsapp_core.campaigns.frappe.db.sql") as sql:
+			_lock_campaign_rows(["campaign.z", "campaign.a", "campaign.z", None])
+		query, values = sql.call_args.args
+		self.assertIn("FOR UPDATE", query)
+		self.assertEqual(values["campaign_names"], ["campaign.a", "campaign.z"])
+
+	def test_campaign_completion_does_not_run_hot_path_full_reconciliation(self):
+		self.campaign.status = "Running"
+		self.campaign.save(ignore_permissions=True)
+		with patch("frappe_whatsapp_core.campaigns.refresh_campaign_counts") as refresh:
+			_complete_campaign(self.campaign)
+		refresh.assert_not_called()
+		self.assertEqual(
+			frappe.db.get_value("WhatsApp Core Campaign", self.campaign.name, "status"),
+			"Completed",
+		)
+
+	def test_provider_failure_reconciles_campaign_immediately(self):
+		prepare_campaign(self.campaign.name, [self.identities[0].name])
+		recipient = frappe.get_doc(
+			"WhatsApp Core Campaign Recipient",
+			{"campaign": self.campaign.name},
+		)
+		conversation = frappe.get_doc({
+			"doctype": "WhatsApp Core Conversation",
+			"conversation_key": f"campaign-conversation-{frappe.generate_hash(length=8)}",
+			"channel": self.channel.name,
+			"remote_identity": self.identities[0].name,
+			"status": "Open",
+			"last_message_at": frappe.utils.now_datetime(),
+		}).insert(ignore_permissions=True)
+		message = frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": f"campaign-message-{frappe.generate_hash(length=8)}",
+			"idempotency_key": f"campaign-result-{frappe.generate_hash(length=8)}",
+			"conversation": conversation.name,
+			"channel": self.channel.name,
+			"provider_message_id": f"local:{frappe.generate_hash(length=8)}",
+			"direction": "Outbound",
+			"message_type": "template",
+			"body": "Campaign test",
+			"content": "{}",
+			"provider_timestamp": frappe.utils.now_datetime(),
+			"delivery_status": "Queued",
+		}).insert(ignore_permissions=True)
+		frappe.db.set_value(
+			"WhatsApp Core Campaign Recipient",
+			recipient.name,
+			{"status": "Queued", "core_message": message.name},
+			update_modified=False,
+		)
+
+		receive_outbound_result(
+			message.idempotency_key,
+			"failed",
+			success=0,
+			error="Provider rejected test recipient",
+		)
+
+		self.assertEqual(
+			frappe.db.get_value(
+				"WhatsApp Core Campaign Recipient", recipient.name, "status"
+			),
+			"Failed",
+		)
+		self.assertEqual(
+			frappe.db.get_value(
+				"WhatsApp Core Campaign", self.campaign.name, "failed_count"
+			),
+			1,
+		)
+
+		# Delivery/read webhooks must reconcile the same campaign immediately,
+		# not wait for the five-minute repair scheduler.
+		frappe.db.set_value(
+			"WhatsApp Core Message",
+			message.name,
+			{
+				"delivery_status": "Sent",
+				"provider_message_id": f"wamid.{frappe.generate_hash(length=8)}",
+			},
+			update_modified=False,
+		)
+		frappe.db.set_value(
+			"WhatsApp Core Campaign Recipient",
+			recipient.name,
+			{"status": "Sent", "completed_at": None},
+			update_modified=False,
+		)
+		materialize_status(
+			self.channel,
+			{
+				"id": frappe.db.get_value(
+					"WhatsApp Core Message", message.name, "provider_message_id"
+				),
+				"status": "delivered",
+			},
+		)
+		self.assertEqual(
+			frappe.db.get_value(
+				"WhatsApp Core Campaign Recipient", recipient.name, "status"
+			),
+			"Delivered",
+		)
+
+	def test_cancelled_campaign_messages_are_terminal_and_never_retried(self):
+		prepare_campaign(self.campaign.name, [self.identities[0].name])
+		recipient = frappe.get_doc(
+			"WhatsApp Core Campaign Recipient",
+			{"campaign": self.campaign.name},
+		)
+		conversation = frappe.get_doc({
+			"doctype": "WhatsApp Core Conversation",
+			"conversation_key": f"cancel-conversation-{frappe.generate_hash(length=8)}",
+			"channel": self.channel.name,
+			"remote_identity": self.identities[0].name,
+			"status": "Open",
+			"last_message_at": frappe.utils.now_datetime(),
+		}).insert(ignore_permissions=True)
+		message = frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": f"cancel-message-{frappe.generate_hash(length=8)}",
+			"idempotency_key": f"cancel-result-{frappe.generate_hash(length=8)}",
+			"conversation": conversation.name,
+			"channel": self.channel.name,
+			"provider_message_id": f"local:{frappe.generate_hash(length=8)}",
+			"direction": "Outbound",
+			"message_type": "template",
+			"body": "Cancelled campaign test",
+			"content": "{}",
+			"provider_timestamp": frappe.utils.now_datetime(),
+			"delivery_status": "Queued",
+		}).insert(ignore_permissions=True)
+		frappe.db.set_value(
+			"WhatsApp Core Campaign Recipient",
+			recipient.name,
+			{"status": "Queued", "core_message": message.name},
+			update_modified=False,
+		)
+
+		cancel_campaign(self.campaign.name)
+
+		self.assertEqual(
+			frappe.db.get_value("WhatsApp Core Message", message.name, "delivery_status"),
+			"Failed",
+		)
+		self.assertEqual(
+			frappe.db.get_value(
+				"WhatsApp Core Campaign Recipient", recipient.name, "status"
+			),
+			"Skipped",
+		)
+		# Defence in depth: even a stale/externally-reset queued row from a
+		# cancelled campaign must not be selected by the global retry scheduler.
+		frappe.db.set_value(
+			"WhatsApp Core Message",
+			message.name,
+			{"delivery_status": "Queued", "modified": "2000-01-01 00:00:00"},
+			update_modified=False,
+		)
+		with patch("frappe_whatsapp_core.outbound.frappe.enqueue") as enqueue:
+			retry_queued_messages()
+		retried_messages = {
+			call.kwargs.get("message_name") for call in enqueue.call_args_list
+		}
+		self.assertNotIn(message.name, retried_messages)

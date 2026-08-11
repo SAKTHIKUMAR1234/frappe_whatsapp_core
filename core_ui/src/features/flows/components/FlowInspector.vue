@@ -1,6 +1,9 @@
 <script setup>
+	import { computed } from 'vue'
 	import Button from 'primevue/button'
 	import InputText from 'primevue/inputtext'
+	import InputNumber from 'primevue/inputnumber'
+	import MultiSelect from 'primevue/multiselect'
 	import Select from 'primevue/select'
 	import Textarea from 'primevue/textarea'
 	import ToggleSwitch from 'primevue/toggleswitch'
@@ -18,34 +21,71 @@
 			type: Array,
 			default: () => [],
 		},
+		metaFlows: {
+			type: Array,
+			default: () => [],
+		},
 	})
 
 	defineEmits(['update:choice-options-text', 'delete', 'ensure-condition'])
 
+	const actionOptions = computed(() =>
+		props.actions.map((action) => ({
+			...action,
+			optionLabel: action.label || action.key,
+			optionValue: action.method || action.key,
+		})),
+	)
+	const selectedAction = computed(() => {
+		const reference = props.selectedNode?.data?.config?.action
+		return props.actions.find(
+			(action) => reference === action.key || reference === action.method,
+		)
+	})
+	const actionParameters = computed(() => {
+		const schema = selectedAction.value?.parameters || {}
+		const required = new Set(schema.required || [])
+		return Object.entries(schema.properties || {}).map(([name, property]) => ({
+			name,
+			title: property.title || name.replaceAll('_', ' '),
+			type: property.type || 'string',
+			required: required.has(name),
+		}))
+	})
+	const metaFlowOptions = computed(() =>
+		props.metaFlows.map((flow) => ({
+			label: `${flow.name || flow.id}${flow.status ? ` · ${flow.status}` : ''}`,
+			value: String(flow.id),
+		})),
+	)
+	const inputTypes = [
+		{ label: 'Text', value: 'text' },
+		{ label: 'Number', value: 'number' },
+		{ label: 'Radio buttons', value: 'radio' },
+		{ label: 'Select list', value: 'select' },
+		{ label: 'Multiple selections', value: 'multi_select' },
+		{ label: 'Attachment', value: 'attachment' },
+	]
+	const mediaTypes = ['image', 'document', 'audio', 'video']
+	const isChoiceInput = computed(
+		() =>
+			['ask_choice'].includes(props.selectedNode?.data?.type) ||
+			(props.selectedNode?.data?.type === 'ask_input' &&
+				['radio', 'select', 'multi_select'].includes(
+					props.selectedNode?.data?.config?.input_type,
+				)),
+	)
+
 	function prepareAction(action) {
 		const config = props.selectedNode.data.config
 		config.action = action
-		config.input ||= {}
-		if (action === 'context.set') {
-			config.input = {
-				key: config.input.key || '',
-				value: config.input.value || '',
-			}
-		}
-		if (action === 'case.create') {
-			config.input = {
-				case_type: config.input.case_type || '',
-				title: config.input.title || '',
-				description: config.input.description || '',
-			}
-		}
-		if (action === 'customer.categorize_interest') {
-			config.input = {
-				...config.input,
-				product: config.input.product || {
-					var: 'answers.favorite_product',
-				},
-			}
+		const definition = props.actions.find(
+			(item) => item.method === action || item.key === action,
+		)
+		const previous = config.input || {}
+		config.input = {}
+		for (const [name, property] of Object.entries(definition?.parameters?.properties || {})) {
+			config.input[name] = previous[name] ?? (property.type === 'boolean' ? false : '')
 		}
 	}
 </script>
@@ -62,7 +102,11 @@
 			<InputText v-model="selectedNode.data.config.label" fluid />
 
 			<template
-				v-if="['send_message', 'ask_text', 'ask_choice'].includes(selectedNode.data.type)"
+				v-if="
+					['send_message', 'ask_text', 'ask_choice', 'ask_input', 'end'].includes(
+						selectedNode.data.type,
+					)
+				"
 			>
 				<label>Message</label>
 				<Textarea v-model="selectedNode.data.config.message" rows="4" fluid />
@@ -78,10 +122,50 @@
 				/>
 				<label>Language code</label>
 				<InputText v-model="selectedNode.data.config.language" placeholder="en" fluid />
-				<div class="field-note">Read-only catalog from the Integration app.</div>
 			</template>
 
-			<template v-if="['ask_text', 'ask_choice'].includes(selectedNode.data.type)">
+			<template v-if="selectedNode.data.type === 'send_flow'">
+				<label>Published Meta Flow</label>
+				<Select
+					v-model="selectedNode.data.config.flow_id"
+					:options="metaFlowOptions"
+					option-label="label"
+					option-value="value"
+					filter
+					placeholder="Select a Flow"
+					fluid
+				/>
+				<label>Message</label>
+				<Textarea v-model="selectedNode.data.config.message" rows="3" fluid />
+				<label>Button label</label>
+				<InputText v-model="selectedNode.data.config.flow_cta" fluid />
+				<label>Opening action</label>
+				<Select
+					v-model="selectedNode.data.config.flow_action"
+					:options="['navigate', 'data_exchange']"
+					fluid
+				/>
+				<template v-if="selectedNode.data.config.flow_action === 'navigate'">
+					<label>First screen</label>
+					<InputText v-model="selectedNode.data.config.screen" fluid />
+				</template>
+				<label>Save response as</label>
+				<InputText v-model="selectedNode.data.config.response_key" fluid />
+			</template>
+
+			<template
+				v-if="['ask_text', 'ask_choice', 'ask_input'].includes(selectedNode.data.type)"
+			>
+				<template v-if="selectedNode.data.type === 'ask_input'">
+					<label>Input type</label>
+					<Select
+						v-model="selectedNode.data.config.input_type"
+						:options="inputTypes"
+						option-label="label"
+						option-value="value"
+						fluid
+					/>
+				</template>
 				<label>Save answer as</label>
 				<InputText
 					v-model="selectedNode.data.config.answer_key"
@@ -90,7 +174,23 @@
 				/>
 			</template>
 
-			<template v-if="selectedNode.data.type === 'ask_choice'">
+			<template v-if="selectedNode.data.type === 'ask_input'">
+				<div class="toggle-row compact-toggle">
+					<div>
+						<strong>Required response</strong>
+						<small>Do not continue with an empty value</small>
+					</div>
+					<ToggleSwitch v-model="selectedNode.data.config.required" />
+				</div>
+				<label>Invalid response message</label>
+				<InputText
+					v-model="selectedNode.data.config.validation_message"
+					placeholder="Please send a valid response."
+					fluid
+				/>
+			</template>
+
+			<template v-if="isChoiceInput">
 				<label>
 					Options
 					<small>Label|value, one per line</small>
@@ -107,44 +207,94 @@
 					placeholder="Choose"
 					fluid
 				/>
+				<p
+					v-if="selectedNode.data.config.input_type === 'multi_select'"
+					class="field-note"
+				>
+					Customers may reply with option numbers, labels, or values separated by commas.
+				</p>
+				<label>
+					Dynamic options source
+					<small>Optional action result path</small>
+				</label>
+				<InputText
+					v-model="selectedNode.data.config.options_from"
+					placeholder="{{actions.catalog.options}}"
+					fluid
+				/>
+			</template>
+
+			<template
+				v-if="
+					selectedNode.data.type === 'ask_input' &&
+					selectedNode.data.config.input_type === 'number'
+				"
+			>
+				<label>Minimum</label>
+				<InputNumber v-model="selectedNode.data.config.minimum" fluid />
+				<label>Maximum</label>
+				<InputNumber v-model="selectedNode.data.config.maximum" fluid />
+				<div class="toggle-row compact-toggle">
+					<div>
+						<strong>Whole numbers only</strong>
+						<small>Reject decimal values</small>
+					</div>
+					<ToggleSwitch v-model="selectedNode.data.config.integer_only" />
+				</div>
+			</template>
+
+			<template
+				v-if="
+					selectedNode.data.type === 'ask_input' &&
+					selectedNode.data.config.input_type === 'attachment'
+				"
+			>
+				<label>Accepted attachments</label>
+				<MultiSelect
+					v-model="selectedNode.data.config.accepted_media_types"
+					:options="mediaTypes"
+					display="chip"
+					fluid
+				/>
+				<p class="field-note">
+					The inbound file is stored as a private Frappe File before the next action
+					runs.
+				</p>
 			</template>
 
 			<template v-if="selectedNode.data.type === 'action'">
-				<label>Registered action</label>
+				<label>Python action</label>
 				<Select
-					:model-value="selectedNode.data.config.action"
-					:options="actions"
+					:model-value="selectedAction?.method || selectedNode.data.config.action"
+					:options="actionOptions"
+					option-label="optionLabel"
+					option-value="optionValue"
+					filter
 					fluid
 					@update:model-value="prepareAction"
 				/>
-				<div class="field-note">
-					Only typed actions registered by Core or a solution app can appear.
-				</div>
-				<template v-if="selectedNode.data.config.action === 'context.set'">
-					<label>Context key</label>
-					<InputText v-model="selectedNode.data.config.input.key" fluid />
-					<label>Context value</label>
-					<InputText v-model="selectedNode.data.config.input.value" fluid />
-				</template>
-				<template v-if="selectedNode.data.config.action === 'case.create'">
-					<label>Case type key</label>
-					<InputText v-model="selectedNode.data.config.input.case_type" fluid />
-					<label>Title</label>
-					<InputText v-model="selectedNode.data.config.input.title" fluid />
-					<label>Description</label>
+				<code v-if="selectedAction" class="action-path">{{ selectedAction.method }}</code>
+				<template v-for="parameter in actionParameters" :key="parameter.name">
+					<label>
+						{{ parameter.title }}
+						<small v-if="parameter.required">Required</small>
+					</label>
+					<ToggleSwitch
+						v-if="parameter.type === 'boolean'"
+						v-model="selectedNode.data.config.input[parameter.name]"
+					/>
 					<Textarea
-						v-model="selectedNode.data.config.input.description"
+						v-else-if="parameter.name === 'description'"
+						v-model="selectedNode.data.config.input[parameter.name]"
 						rows="3"
 						fluid
 					/>
-				</template>
-				<template
-					v-if="selectedNode.data.config.action === 'customer.categorize_interest'"
-				>
-					<label>Product context variable</label>
 					<InputText
-						v-model="selectedNode.data.config.input.product.var"
-						placeholder="answers.favorite_product"
+						v-else
+						v-model="selectedNode.data.config.input[parameter.name]"
+						:placeholder="
+							parameter.type === 'object' ? '{{responses.form_response}}' : ''
+						"
 						fluid
 					/>
 				</template>
@@ -164,6 +314,8 @@
 			<template v-if="selectedNode.data.type === 'human_handoff'">
 				<label>Handoff reason</label>
 				<Textarea v-model="selectedNode.data.config.reason" rows="3" fluid />
+				<label>Customer message</label>
+				<Textarea v-model="selectedNode.data.config.message" rows="3" fluid />
 			</template>
 
 			<Button
@@ -236,7 +388,6 @@
 		<div v-else class="empty-inspector">
 			<Settings2 :size="28" />
 			<strong>Select a node or branch</strong>
-			<p>Every option is configured using safe fields—no Python, SQL or shell commands.</p>
 		</div>
 	</aside>
 </template>
@@ -246,7 +397,7 @@
 		padding: 15px;
 		overflow-y: auto;
 		border-left: 1px solid var(--wa-border);
-		background: white;
+		background: var(--wa-surface);
 	}
 
 	.panel-heading {
@@ -262,8 +413,8 @@
 	}
 
 	.panel-heading small {
-		color: #87948e;
-		font-size: 8px;
+		color: var(--wa-muted);
+		font-size: 12px;
 		text-transform: capitalize;
 	}
 
@@ -271,20 +422,32 @@
 		display: flex;
 		justify-content: space-between;
 		margin: 15px 0 6px;
-		font-size: 9px;
+		font-size: 12px;
 		font-weight: 750;
 	}
 
 	label small {
-		color: #8b9791;
+		color: var(--wa-muted);
 		font-weight: 500;
 	}
 
 	.field-note {
 		margin-top: 7px;
-		color: #829088;
-		font-size: 8px;
+		color: var(--wa-muted);
+		font-size: 12px;
 		line-height: 1.5;
+	}
+
+	.action-path {
+		display: block;
+		padding: 8px 9px;
+		margin-top: 8px;
+		overflow-wrap: anywhere;
+		border: 1px solid var(--wa-border);
+		border-radius: 7px;
+		color: var(--wa-muted);
+		background: var(--wa-surface-muted);
+		font-size: 11px;
 	}
 
 	.delete-button {
@@ -306,13 +469,13 @@
 	}
 
 	.toggle-row strong {
-		font-size: 10px;
+		font-size: 12px;
 	}
 
 	.toggle-row small {
 		margin-top: 3px;
-		color: #87948e;
-		font-size: 8px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 
 	.empty-inspector {
@@ -321,19 +484,13 @@
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		color: #87948e;
+		color: var(--wa-muted);
 		text-align: center;
 	}
 
 	.empty-inspector strong {
 		margin-top: 12px;
-		color: #36453e;
+		color: var(--wa-text);
 		font-size: 11px;
-	}
-
-	.empty-inspector p {
-		max-width: 220px;
-		font-size: 9px;
-		line-height: 1.6;
 	}
 </style>

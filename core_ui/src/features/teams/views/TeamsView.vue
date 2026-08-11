@@ -4,28 +4,57 @@
 	import Dialog from 'primevue/dialog'
 	import InputText from 'primevue/inputtext'
 	import Message from 'primevue/message'
+	import Select from 'primevue/select'
 	import Textarea from 'primevue/textarea'
 	import ToggleSwitch from 'primevue/toggleswitch'
 	import Tag from 'primevue/tag'
-	import { Plus, UsersRound } from 'lucide-vue-next'
+	import {
+		Building2,
+		Headphones,
+		MessageCircleMore,
+		Plus,
+		Store,
+		UsersRound,
+	} from 'lucide-vue-next'
 	import { useToast } from 'primevue/usetoast'
 	import AsyncState from '@/components/AsyncState.vue'
+	import ContactMultiSelect from '@/features/contacts/components/ContactMultiSelect.vue'
 	import UserMultiSelect from '@/features/teams/components/UserMultiSelect.vue'
 	import { call, errorMessage } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
+	import { focusDialogControl } from '@/utils/focus'
 
 	const toast = useToast()
 	const session = useSessionStore()
 	const teams = ref([])
 	const userOptions = ref([])
+	const contactOptions = ref([])
 	const loading = ref(false)
 	const saving = ref(false)
 	const loadError = ref('')
 	const submitError = ref('')
 	const attempted = ref(false)
 	const visible = ref(false)
-	const form = reactive({ team_name: '', description: '', enabled: true, members: [] })
+	const dialogRef = ref(null)
+	const form = reactive({
+		team_name: '',
+		icon: 'users-round',
+		description: '',
+		enabled: true,
+		members: [],
+		contacts: [],
+	})
+	const iconOptions = [
+		{ label: 'People', value: 'users-round', component: UsersRound },
+		{ label: 'Customers', value: 'building-2', component: Building2 },
+		{ label: 'Retailers', value: 'store', component: Store },
+		{ label: 'Support', value: 'headphones', component: Headphones },
+		{ label: 'Conversations', value: 'message-circle-more', component: MessageCircleMore },
+	]
+	const iconComponents = Object.fromEntries(
+		iconOptions.map((option) => [option.value, option.component]),
+	)
 	const canManage = computed(() => Boolean(session.boot?.can_manage))
 	let unsubscribe = () => {}
 	let refreshTimer = null
@@ -38,6 +67,10 @@
 		return userByName.value[user]?.full_name || user
 	}
 
+	function teamIcon(icon) {
+		return iconComponents[icon] || UsersRound
+	}
+
 	async function load({ silent = false } = {}) {
 		const request = ++loadSequence
 		if (!silent) loading.value = true
@@ -47,6 +80,7 @@
 			if (request !== loadSequence) return
 			teams.value = workspace.teams || []
 			userOptions.value = workspace.users || []
+			contactOptions.value = workspace.contacts || []
 		} catch (error) {
 			if (request === loadSequence)
 				loadError.value = errorMessage(error, 'Unable to load teams.')
@@ -61,9 +95,11 @@
 
 	function open(team = null) {
 		form.team_name = team?.team_name || ''
+		form.icon = team?.icon || 'users-round'
 		form.description = team?.description || ''
 		form.enabled = team ? Boolean(team.enabled) : true
 		form.members = (team?.members || []).map((member) => member.user)
+		form.contacts = (team?.contacts || []).map((contact) => contact.identity)
 		attempted.value = false
 		submitError.value = ''
 		visible.value = true
@@ -77,9 +113,11 @@
 		try {
 			await call('frappe_whatsapp_core.workspace_api.upsert_team', {
 				team_name: form.team_name,
+				icon: form.icon,
 				description: form.description,
 				enabled: form.enabled ? 1 : 0,
 				members: form.members.map((user) => ({ user, team_role: 'Agent', enabled: 1 })),
+				contacts: form.contacts.map((identity) => ({ identity, enabled: 1 })),
 			})
 			visible.value = false
 			await load()
@@ -130,7 +168,7 @@
 	<section v-if="!loading && !loadError && teams.length" class="team-grid">
 		<article v-for="team in teams" :key="team.name" class="surface-card team-card">
 			<header>
-				<span class="team-icon"><UsersRound :size="20" /></span>
+				<span class="team-icon"><component :is="teamIcon(team.icon)" :size="20" /></span>
 				<Tag
 					:value="team.enabled ? 'Enabled' : 'Disabled'"
 					:severity="team.enabled ? 'success' : 'secondary'"
@@ -154,6 +192,27 @@
 					>
 				</div>
 			</div>
+			<div class="contact-count">
+				<strong>{{ team.contacts.length }}</strong>
+				<span>{{
+					team.contacts.length === 1 ? 'categorized contact' : 'categorized contacts'
+				}}</span>
+			</div>
+			<div class="category-summary">
+				<div>
+					<strong>{{ team.categorized_messages || 0 }}</strong>
+					<span>categorized messages</span>
+				</div>
+				<div v-if="team.categories?.length" class="category-list">
+					<span v-for="category in team.categories.slice(0, 5)" :key="category.category">
+						{{ category.category }} <strong>{{ category.count }}</strong>
+					</span>
+					<small v-if="team.categories.length > 5">
+						+{{ team.categories.length - 5 }} more categories
+					</small>
+				</div>
+				<small v-else>No categorized messages yet.</small>
+			</div>
 			<footer>
 				<Button
 					v-if="canManage"
@@ -166,10 +225,12 @@
 		</article>
 	</section>
 	<Dialog
+		ref="dialogRef"
 		v-model:visible="visible"
 		modal
 		header="WhatsApp team"
 		:style="{ width: '440px', maxWidth: '94vw' }"
+		@show="focusDialogControl(dialogRef, '#team-name')"
 	>
 		<Message v-if="submitError" severity="error" :closable="false">{{ submitError }}</Message>
 		<label for="team-name">Team name <span>*</span></label>
@@ -178,16 +239,56 @@
 			v-model="form.team_name"
 			fluid
 			:invalid="attempted && !form.team_name.trim()"
-			autofocus
 			@keyup.enter="save"
 		/>
 		<small v-if="attempted && !form.team_name.trim()" class="field-error"
 			>Enter a team name.</small
 		>
-		<label>Description</label><Textarea v-model="form.description" rows="3" fluid />
-		<label>Members</label>
-		<UserMultiSelect v-model="form.members" :options="userOptions" />
-		<div class="enabled"><ToggleSwitch v-model="form.enabled" /><span>Team enabled</span></div>
+		<label for="team-icon">Icon</label>
+		<Select
+			input-id="team-icon"
+			v-model="form.icon"
+			:options="iconOptions"
+			option-label="label"
+			option-value="value"
+			fluid
+		>
+			<template #value="slotProps">
+				<span class="icon-option">
+					<component :is="teamIcon(slotProps.value)" :size="16" />
+					{{ iconOptions.find((option) => option.value === slotProps.value)?.label }}
+				</span>
+			</template>
+			<template #option="slotProps">
+				<span class="icon-option">
+					<component :is="slotProps.option.component" :size="16" />
+					{{ slotProps.option.label }}
+				</span>
+			</template>
+		</Select>
+		<label for="team-description">Description</label
+		><Textarea id="team-description" v-model="form.description" rows="3" fluid />
+		<label id="team-members-label">Members</label>
+		<UserMultiSelect
+			v-model="form.members"
+			:options="userOptions"
+			aria-labelledby="team-members-label"
+		/>
+		<label id="team-contacts-label">Contacts</label>
+		<ContactMultiSelect
+			v-model="form.contacts"
+			:options="contactOptions"
+			placeholder="Search and assign contacts"
+			aria-labelledby="team-contacts-label"
+		/>
+		<small class="field-help">
+			Categorized contacts are visible only to members of at least one assigned team.
+			Uncategorized contacts remain visible to every WhatsApp User.
+		</small>
+		<div class="enabled">
+			<ToggleSwitch input-id="team-enabled" v-model="form.enabled" />
+			<label for="team-enabled">Team enabled</label>
+		</div>
 		<template #footer>
 			<Button label="Cancel" text @click="visible = false" />
 			<Button
@@ -234,8 +335,8 @@
 		display: grid;
 		place-items: center;
 		border-radius: 12px;
-		color: #087354;
-		background: #ddf8eb;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
 	}
 	.team-card h2 {
 		margin: 18px 0 6px;
@@ -245,7 +346,7 @@
 	.team-card > p {
 		min-height: 42px;
 		margin: 0 0 18px;
-		color: #77857e;
+		color: var(--wa-muted);
 		font-size: 13px;
 		line-height: 1.55;
 	}
@@ -253,7 +354,7 @@
 		padding: 14px;
 		margin-bottom: 16px;
 		border-radius: 11px;
-		background: #f6f9f7;
+		background: var(--wa-surface-muted);
 	}
 	.members strong {
 		display: block;
@@ -273,10 +374,10 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-		border: 1px solid #dfe9e4;
+		border: 1px solid var(--wa-border);
 		border-radius: 999px;
-		background: white;
-		color: #5f6f67;
+		background: var(--wa-surface);
+		color: var(--wa-text);
 		font-size: 12px;
 		overflow-wrap: anywhere;
 	}
@@ -289,7 +390,7 @@
 		border-radius: 50%;
 		background: var(--wa-mint);
 		color: var(--wa-primary);
-		font-size: 10px;
+		font-size: 12px;
 		font-style: normal;
 		font-weight: 800;
 	}
@@ -297,6 +398,68 @@
 		align-self: center;
 		color: var(--wa-muted);
 		font-size: 12px;
+	}
+	.contact-count {
+		display: flex;
+		align-items: baseline;
+		gap: 6px;
+		margin: -6px 0 16px;
+		color: var(--wa-muted);
+		font-size: 12px;
+	}
+	.category-summary {
+		display: grid;
+		gap: 9px;
+		padding: 14px;
+		margin-bottom: 16px;
+		border: 1px solid var(--wa-border);
+		border-radius: 11px;
+		background: var(--wa-surface);
+	}
+	.category-summary > div:first-child {
+		display: flex;
+		align-items: baseline;
+		gap: 6px;
+	}
+	.category-summary > div:first-child strong {
+		font-size: 18px;
+	}
+	.category-summary > div:first-child span,
+	.category-summary > small,
+	.category-list small {
+		color: var(--wa-muted);
+		font-size: 11px;
+	}
+	.category-list {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+	.category-list span {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 4px 8px;
+		border-radius: 999px;
+		background: var(--wa-mint);
+		color: var(--wa-primary);
+		font-size: 11px;
+	}
+	.contact-count strong {
+		color: var(--wa-text);
+		font-size: 15px;
+	}
+	.field-help {
+		display: block;
+		margin-top: 6px;
+		color: var(--wa-muted);
+		font-size: 11px;
+		line-height: 1.45;
+	}
+	.icon-option {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
 	}
 	.team-card footer {
 		margin-top: auto;
@@ -308,12 +471,12 @@
 		align-items: center;
 		justify-content: center;
 		gap: 8px;
-		color: #829088;
+		color: var(--wa-muted);
 		font-size: 13px;
 		text-align: center;
 	}
 	.empty strong {
-		color: #26352e;
+		color: var(--wa-text);
 		font-size: 16px;
 	}
 	label {
@@ -328,6 +491,9 @@
 		align-items: center;
 		gap: 9px;
 		font-size: 12px;
+	}
+	.enabled label {
+		margin: 0;
 	}
 	@media (max-width: 1000px) {
 		.team-grid {

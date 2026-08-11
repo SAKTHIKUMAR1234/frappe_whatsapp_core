@@ -208,10 +208,10 @@ def group_activity(group_id):
 		if conversation:
 			messages = frappe.get_all(
 				"WhatsApp Core Message",
-				filters={
-					"conversation": conversation,
-					"provider_message_id": ["not like", "local:%"],
-				},
+				# Include optimistic local ids. The management dialog refreshes
+				# immediately after queueing; hiding these rows makes a successful
+				# message disappear until Meta's provider-id callback arrives.
+				filters={"conversation": conversation},
 				fields=[
 					"name", "provider_message_id", "direction", "message_type",
 					"body", "delivery_status", "provider_timestamp",
@@ -335,9 +335,11 @@ def send_group_message(account_name, group_id, message_type, content, idempotenc
 		)
 	else:
 		file_url = str(content.pop("file_url", "") or "").strip()
+		local_file_url = ""
 		if file_url:
-			uploaded = upload_media(conversation.name, file_url)
+			uploaded = upload_media(conversation.name, file_url, message_type)
 			content["id"] = uploaded["media_id"]
+			local_file_url = uploaded.get("file_url") or file_url
 			if message_type == "document" and not content.get("filename"):
 				content["filename"] = uploaded.get("filename")
 		message = queue_rich(
@@ -345,6 +347,7 @@ def send_group_message(account_name, group_id, message_type, content, idempotenc
 			message_type,
 			content,
 			source="Core Group UI",
+			local_file_url=local_file_url or None,
 		)
 	return {"success": True, "conversation": conversation.name, "message": message}
 

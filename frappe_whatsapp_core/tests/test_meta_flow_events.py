@@ -15,9 +15,10 @@ class TestMetaFlowEvents(unittest.TestCase):
 			}
 		}
 		body = inbound_message_body("interactive", content)
-		self.assertIn("ORD-1", body)
+		self.assertEqual(body, "Flow submitted · Order Id: ORD-1")
 		message = type("Message", (), {
 			"name": "MSG-1", "message_type": "interactive", "body": body,
+			"channel": "CHANNEL-1",
 			"content": json.dumps({"interactive": content}),
 		})()
 		event = _flow_event(message)

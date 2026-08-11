@@ -7,23 +7,60 @@
 		BlinkMacSystemFont,
 		'Segoe UI',
 		sans-serif;
-	color: #17211d;
-	background: #f5f7f6;
+	color: #1f272e;
+	background: #f8f9fa;
 	font-synthesis: none;
 	text-rendering: optimizeLegibility;
-	--wa-green: #075e54;
-	--wa-green-bright: #18a879;
-	--wa-mint: #e8f8f1;
-	--wa-primary: #087f68;
-	--wa-bg: #f5f7f6;
+	--wa-green: #16836d;
+	--wa-green-bright: #1f9d7a;
+	--wa-mint: #edf7f4;
+	--wa-primary: #2490ef;
+	--wa-primary-soft: #eaf4fd;
+	--wa-bg: #f8f9fa;
 	--wa-surface: #ffffff;
-	--wa-text: #17211d;
-	--wa-border: #e2e9e5;
-	--wa-muted: #6c7a73;
-	--wa-danger: #c0392b;
-	--wa-danger-soft: #fff0ee;
-	--wa-shadow-lg: 0 24px 60px rgb(23 33 29 / 12%);
-	--wa-sidebar: #10231d;
+	--wa-surface-muted: #f3f5f7;
+	--wa-text: #1f272e;
+	--wa-border: #d1d8dd;
+	--wa-border-soft: #e7eaed;
+	--wa-muted: #687178;
+	--wa-danger: #e24c4c;
+	--wa-danger-soft: #fff0f0;
+	--wa-success: #16836d;
+	--wa-success-soft: #e7f8ef;
+	--wa-warning: #a56314;
+	--wa-warning-soft: #fff9ed;
+	--wa-media-bg: #17211d;
+	--wa-shadow-lg: 0 12px 28px rgb(31 39 46 / 10%);
+	--wa-sidebar: #ffffff;
+	--wa-message-in: #ffffff;
+	--wa-message-out: #e7f8ef;
+}
+
+.app-dark {
+	color-scheme: dark;
+	--wa-green: #3bb991;
+	--wa-green-bright: #4cc9a1;
+	--wa-mint: #21342e;
+	--wa-primary: #5aaafa;
+	--wa-primary-soft: #1d344a;
+	--wa-bg: #111418;
+	--wa-surface: #171b20;
+	--wa-surface-muted: #20252b;
+	--wa-text: #f3f5f7;
+	--wa-border: #343b43;
+	--wa-border-soft: #2a3037;
+	--wa-muted: #a8b0b8;
+	--wa-danger: #ff7b7b;
+	--wa-danger-soft: #3a2022;
+	--wa-success: #4cc9a1;
+	--wa-success-soft: #19362c;
+	--wa-warning: #f4bd62;
+	--wa-warning-soft: #3a3020;
+	--wa-media-bg: #0d1013;
+	--wa-shadow-lg: 0 12px 28px rgb(0 0 0 / 32%);
+	--wa-sidebar: #171b20;
+	--wa-message-in: #20252b;
+	--wa-message-out: #19362c;
 }
 
 * {
@@ -36,7 +73,8 @@ body,
 	margin: 0;
 }
 body {
-	background: #f5f7f6;
+	color: var(--wa-text);
+	background: var(--wa-bg);
 	overflow-x: hidden;
 }
 button,
@@ -61,7 +99,7 @@ a {
 .p-dialog label {
 	display: block;
 	margin: 14px 0 7px;
-	color: #39483f;
+	color: var(--wa-text);
 	font-size: 12px;
 	font-weight: 700;
 }
@@ -79,12 +117,12 @@ a {
 	font-weight: 650;
 }
 #app .p-datatable-thead > tr > th {
-	color: #44534b;
+	color: var(--wa-muted);
 	font-size: 11px;
 	font-weight: 750;
 }
 #app .p-datatable-tbody > tr > td {
-	color: #26342d;
+	color: var(--wa-text);
 	font-size: 12px;
 	line-height: 1.45;
 }
@@ -111,29 +149,29 @@ a {
 	font-size: 14px;
 }
 .surface-card {
-	background: white;
+	background: var(--wa-surface);
 	border: 1px solid var(--wa-border);
-	border-radius: 18px;
-	box-shadow: 0 6px 25px rgba(16, 35, 29, 0.045);
+	border-radius: 8px;
+	box-shadow: 0 1px 2px rgb(31 39 46 / 5%);
 	transition:
 		border-color 160ms ease,
 		box-shadow 160ms ease,
 		transform 160ms ease;
 }
 .eyebrow {
-	color: #17805f;
+	color: var(--wa-primary);
 	text-transform: uppercase;
 	letter-spacing: 0.12em;
 	font-weight: 700;
-	font-size: 10px;
+	font-size: 12px;
 }
 .status-dot {
 	width: 8px;
 	height: 8px;
 	border-radius: 50%;
 	display: inline-block;
-	background: #22c55e;
-	box-shadow: 0 0 0 4px #dcfce7;
+	background: var(--wa-success);
+	box-shadow: 0 0 0 4px var(--wa-success-soft);
 }
 .empty-copy {
 	color: var(--wa-muted);
@@ -146,8 +184,48 @@ a:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 [role='button']:focus-visible {
-	outline: 3px solid rgb(24 168 121 / 22%);
+	outline: 3px solid rgb(36 144 239 / 22%);
 	outline-offset: 2px;
+}
+
+#app .p-inputtext,
+#app .p-textarea,
+#app .p-select,
+#app .p-multiselect,
+.p-dialog .p-inputtext,
+.p-dialog .p-textarea,
+.p-dialog .p-select,
+.p-dialog .p-multiselect {
+	border-color: var(--wa-border);
+	border-radius: 6px;
+	background: var(--wa-surface);
+	color: var(--wa-text);
+	box-shadow: none;
+}
+
+#app .p-inputtext:focus,
+#app .p-textarea:focus,
+#app .p-select.p-focus,
+#app .p-multiselect.p-focus,
+.p-dialog .p-inputtext:focus,
+.p-dialog .p-textarea:focus {
+	border-color: var(--wa-primary);
+	box-shadow: 0 0 0 2px rgb(36 144 239 / 14%);
+}
+
+#app .p-button,
+.p-dialog .p-button {
+	border-radius: 6px;
+}
+
+.p-dialog,
+.p-popover,
+.p-menu,
+.p-select-overlay,
+.p-multiselect-overlay {
+	color: var(--wa-text);
+	background: var(--wa-surface);
+	border-color: var(--wa-border);
 }
 
 @media (prefers-reduced-motion: reduce) {

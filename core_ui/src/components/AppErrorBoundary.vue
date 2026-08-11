@@ -43,7 +43,8 @@
 		place-content: center;
 		grid-template-columns: 52px minmax(0, 440px);
 		gap: 18px;
-		background: #f5f7f6;
+		color: var(--wa-text);
+		background: var(--wa-bg);
 	}
 	.fatal-error > span {
 		width: 52px;
@@ -51,8 +52,8 @@
 		display: grid;
 		place-items: center;
 		border-radius: 15px;
-		color: #b42318;
-		background: #fee4e2;
+		color: var(--wa-danger);
+		background: var(--wa-danger-soft);
 	}
 	.fatal-error p:first-child {
 		margin: 0;

@@ -5,7 +5,6 @@ import re
 import frappe
 from frappe.utils import now
 
-
 PACK_KEY = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 
 

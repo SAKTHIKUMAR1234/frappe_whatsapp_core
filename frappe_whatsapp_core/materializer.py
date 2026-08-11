@@ -3,8 +3,9 @@ import json
 from datetime import datetime, timezone
 
 import frappe
-from frappe.utils import get_datetime, now_datetime
+from frappe.utils import convert_utc_to_system_timezone, get_datetime, now_datetime
 
+from frappe_whatsapp_core.campaigns import refresh_campaigns_for_messages
 from frappe_whatsapp_core.delivery import advance_delivery_status
 from frappe_whatsapp_core.identity import (
 	get_or_create_identity as get_or_create_core_identity,
@@ -12,15 +13,19 @@ from frappe_whatsapp_core.identity import (
 from frappe_whatsapp_core.party_bindings import ensure_party_bindings
 
 
-def materialize_event(event, payload):
+def materialize_event(event, payload, channel_cache=None):
 	"""Project a raw provider event into the reusable messaging kernel."""
 	results = []
+	channel_cache = channel_cache if channel_cache is not None else {}
 	for entry in payload.get("entry", []):
 		for change in entry.get("changes", []):
 			value = change.get("value") or {}
 			phone_number_id = value.get("metadata", {}).get("phone_number_id")
 			if phone_number_id:
-				channel = get_or_create_channel(phone_number_id, entry.get("id"))
+				channel = channel_cache.get(str(phone_number_id))
+				if channel is None:
+					channel = get_or_create_channel(phone_number_id, entry.get("id"))
+					channel_cache[str(phone_number_id)] = channel
 				for message in value.get("messages") or []:
 					results.append(materialize_inbound_message(event, channel, message))
 				for message in value.get("message_echoes") or []:
@@ -44,6 +49,16 @@ def materialize_event(event, payload):
 
 
 def get_or_create_channel(phone_number_id, waba_id=None):
+	phone_number_id = str(phone_number_id or "").strip()
+	if not phone_number_id:
+		frappe.throw("Phone Number ID is required", frappe.ValidationError)
+	existing_name = frappe.db.get_value(
+		"WhatsApp Core Channel",
+		{"phone_number_id": phone_number_id},
+		"name",
+	)
+	if existing_name:
+		return frappe.get_doc("WhatsApp Core Channel", existing_name)
 	channel_key = f"meta:{phone_number_id}"
 	if frappe.db.exists("WhatsApp Core Channel", channel_key):
 		return frappe.get_doc("WhatsApp Core Channel", channel_key)
@@ -59,6 +74,13 @@ def get_or_create_channel(phone_number_id, waba_id=None):
 	try:
 		doc.insert(ignore_permissions=True)
 	except frappe.DuplicateEntryError:
+		existing_name = frappe.db.get_value(
+			"WhatsApp Core Channel",
+			{"phone_number_id": phone_number_id},
+			"name",
+		)
+		if existing_name:
+			return frappe.get_doc("WhatsApp Core Channel", existing_name)
 		return frappe.get_doc("WhatsApp Core Channel", channel_key)
 	return doc
 
@@ -137,6 +159,10 @@ def materialize_provider_message(event, channel, provider_message, direction="In
 	except frappe.DuplicateEntryError:
 		return {"kind": "message", "status": "duplicate", "name": message_key}
 	if direction == "Inbound":
+		# A customer reply starts (or resumes) an actionable conversation.  Keeping
+		# a previously resolved row resolved makes the new message disappear from
+		# the default Shared Inbox even though the webhook was processed correctly.
+		conversation.status = "Open"
 		conversation.last_inbound_at = provider_timestamp
 	conversation.last_message_at = provider_timestamp
 	conversation.save(ignore_permissions=True)
@@ -495,10 +521,28 @@ def inbound_message_body(message_type: str, content) -> str:
 				response = json.loads(response) if isinstance(response, str) else response
 			except (TypeError, ValueError):
 				pass
-			return f"Flow response: {json.dumps(response, ensure_ascii=False) if isinstance(response, (dict, list)) else response or 'received'}"
+			return _flow_response_summary(response)
 	if message_type == "location":
 		return str(content.get("name") or content.get("address") or f"Location: {content.get('latitude')}, {content.get('longitude')}")
 	return str(content.get("body") or f"[{message_type.replace('_', ' ').title()}]")
+
+
+def _flow_response_summary(response) -> str:
+	"""Keep inbox previews readable; the complete response stays in message content/ledger."""
+	if not isinstance(response, dict):
+		return "Flow response received"
+	values = []
+	for key, value in response.items():
+		if key in {"flow_token", "screen", "_core_action"} or key.startswith("__"):
+			continue
+		if isinstance(value, (dict, list)):
+			continue
+		label = key.replace("_", " ").replace("-", " ").strip().title()
+		if value not in (None, ""):
+			values.append(f"{label}: {value}")
+		if len(values) == 2:
+			break
+	return "Flow submitted" + (f" · {' · '.join(values)}" if values else "")
 
 
 def materialize_status(channel, provider_status, event=None):
@@ -532,6 +576,18 @@ def materialize_status(channel, provider_status, event=None):
 		"delivery_status",
 		advance_delivery_status(current, incoming),
 	)
+	if frappe.flags.whatsapp_core_batch_processing:
+		pending = getattr(
+			frappe.flags,
+			"whatsapp_core_campaign_message_names",
+			None,
+		)
+		if pending is None:
+			pending = set()
+			frappe.flags.whatsapp_core_campaign_message_names = pending
+		pending.add(message_name)
+	else:
+		refresh_campaigns_for_messages([message_name])
 	return {"kind": "status", "status": "updated", "name": message_name}
 
 
@@ -594,9 +650,19 @@ def normalize_phone(value, *, assume_local: bool = False, country_code: str = "9
 
 
 def parse_provider_timestamp(value):
-	"""Convert Meta's Unix-second timestamp without treating it as a date string."""
+	"""Convert provider timestamps to the naive system-timezone value Frappe stores.
+
+	Meta sends Unix seconds in UTC, while Frappe's ``now_datetime`` and database
+	Datetime fields use the site's system timezone.  Mixing the two makes a fresh
+	inbound message sort behind locally-created outbound messages.
+	"""
 	if value in (None, ""):
 		return now_datetime()
 	if isinstance(value, (int, float)) or str(value).strip().isdigit():
-		return datetime.fromtimestamp(int(value), tz=timezone.utc).replace(tzinfo=None)
-	return get_datetime(value)
+		parsed = datetime.fromtimestamp(int(value), tz=timezone.utc)
+	else:
+		parsed = get_datetime(value)
+		if parsed.tzinfo is None:
+			# A timezone-less provider value is already in the site's storage format.
+			return parsed
+	return convert_utc_to_system_timezone(parsed).replace(tzinfo=None)

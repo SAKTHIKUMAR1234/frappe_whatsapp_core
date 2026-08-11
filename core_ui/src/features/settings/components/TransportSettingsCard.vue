@@ -95,7 +95,7 @@
 				toast.add({
 					severity: 'success',
 					summary: 'Hub accounts refreshed',
-					detail: `${hubAccounts.value.length} tenant account${hubAccounts.value.length === 1 ? '' : 's'} available.`,
+					detail: `${hubAccounts.value.length} Integration account${hubAccounts.value.length === 1 ? '' : 's'} available.`,
 					life: 3000,
 				})
 			}
@@ -130,7 +130,7 @@
 			toast.add({
 				severity: 'success',
 				summary: 'Core transport saved',
-				detail: 'The site can now use the durable Integration Hub.',
+				detail: 'This workspace can now use the durable Integration Hub.',
 				life: 3000,
 			})
 		} catch (error) {
@@ -152,7 +152,7 @@
 			<div>
 				<div class="eyebrow">Core → Integration Hub</div>
 				<h2>Durable transport onboarding</h2>
-				<p>Each Core site maps its local channels to centrally managed Hub accounts.</p>
+				<p>Map local channels to centrally managed Integration Hub accounts.</p>
 			</div>
 			<span
 				:class="[
@@ -169,138 +169,142 @@
 			</span>
 		</header>
 
-		<div class="transport-form">
-			<label class="switch-field">
-				<ToggleSwitch v-model="form.enabled" :disabled="!canManage" />
-				<span
-					><strong>Enable WhatsApp Core</strong
-					><small>Receive and operate WhatsApp on this site.</small></span
-				>
-			</label>
-			<label class="switch-field">
-				<ToggleSwitch v-model="form.outbound_enabled" :disabled="!canManage" />
-				<span
-					><strong>Enable outbound</strong
-					><small>Allow UI, Flow Builder and MCP to queue messages.</small></span
-				>
-			</label>
-			<label>
-				<span>Integration Hub URL</span>
-				<InputText
-					v-model="form.hub_url"
-					:disabled="!canManage"
-					placeholder="https://whatsapp-hub.example.com"
-				/>
-			</label>
-			<label>
-				<span>Request timeout</span>
-				<InputNumber
-					v-model="form.request_timeout"
-					:disabled="!canManage"
-					:min="2"
-					:max="120"
-					suffix=" sec"
-				/>
-			</label>
-			<label>
-				<span>Default country calling code</span>
-				<InputText
-					v-model="form.default_country_calling_code"
-					:disabled="!canManage"
-					placeholder="91"
-				/>
-				<small
-					>Only used for local numbers; + or 00 international numbers are
-					preserved.</small
-				>
-			</label>
-			<label>
-				<span>Hub API key</span>
-				<Password
-					v-model="form.api_key"
-					:disabled="!canManage"
-					:feedback="false"
-					toggle-mask
-					placeholder="Leave blank to preserve"
-				/>
-			</label>
-			<label>
-				<span>Hub API secret</span>
-				<Password
-					v-model="form.api_secret"
-					:disabled="!canManage"
-					:feedback="false"
-					toggle-mask
-					placeholder="Leave blank to preserve"
-				/>
-			</label>
-		</div>
+		<form autocomplete="off" @submit.prevent="save">
+			<div class="transport-form">
+				<label class="switch-field">
+					<ToggleSwitch v-model="form.enabled" :disabled="!canManage" />
+					<span
+						><strong>Enable WhatsApp Core</strong
+						><small>Receive and operate WhatsApp in this workspace.</small></span
+					>
+				</label>
+				<label class="switch-field">
+					<ToggleSwitch v-model="form.outbound_enabled" :disabled="!canManage" />
+					<span
+						><strong>Enable outbound</strong
+						><small>Allow UI, Flow Builder and MCP to queue messages.</small></span
+					>
+				</label>
+				<label>
+					<span>Integration Hub URL</span>
+					<InputText
+						v-model="form.hub_url"
+						:disabled="!canManage"
+						placeholder="https://whatsapp-hub.example.com"
+					/>
+				</label>
+				<label>
+					<span>Request timeout</span>
+					<InputNumber
+						v-model="form.request_timeout"
+						:disabled="!canManage"
+						:min="2"
+						:max="120"
+						suffix=" sec"
+					/>
+				</label>
+				<label>
+					<span>Default country calling code</span>
+					<InputText
+						v-model="form.default_country_calling_code"
+						:disabled="!canManage"
+						placeholder="91"
+					/>
+					<small
+						>Only used for local numbers; + or 00 international numbers are
+						preserved.</small
+					>
+				</label>
+				<label>
+					<span>Hub API key</span>
+					<InputText
+						v-model="form.api_key"
+						:disabled="!canManage"
+						name="whatsapp-hub-api-key"
+						autocomplete="username"
+						placeholder="Leave blank to preserve"
+					/>
+				</label>
+				<label>
+					<span>Hub API secret</span>
+					<Password
+						v-model="form.api_secret"
+						:disabled="!canManage"
+						:feedback="false"
+						name="whatsapp-hub-api-secret"
+						:input-props="{ autocomplete: 'current-password' }"
+						toggle-mask
+						placeholder="Leave blank to preserve"
+					/>
+				</label>
+			</div>
 
-		<div class="account-heading">
-			<div>
-				<strong>Channel mappings</strong
-				><span>Local Core channel → central Hub account</span>
+			<div class="account-heading">
+				<div>
+					<strong>Channel mappings</strong
+					><span>Local Core channel → central Hub account</span>
+				</div>
+				<div v-if="canManage" class="account-actions">
+					<Button
+						label="Refresh Hub accounts"
+						text
+						size="small"
+						:loading="loadingAccounts"
+						:disabled="!workspace.transport?.credentials_configured"
+						@click="loadHubAccounts()"
+					>
+						<template #icon><RefreshCw :size="14" /></template>
+					</Button>
+					<Button label="Add mapping" text size="small" @click="addAccount">
+						<template #icon><Plus :size="14" /></template>
+					</Button>
+				</div>
 			</div>
-			<div v-if="canManage" class="account-actions">
-				<Button
-					label="Refresh Hub accounts"
-					text
-					size="small"
-					:loading="loadingAccounts"
-					:disabled="!workspace.transport?.credentials_configured"
-					@click="loadHubAccounts()"
-				>
-					<template #icon><RefreshCw :size="14" /></template>
-				</Button>
-				<Button label="Add mapping" text size="small" @click="addAccount">
-					<template #icon><Plus :size="14" /></template>
-				</Button>
+			<div class="account-list">
+				<div v-for="(account, index) in form.accounts" :key="index" class="account-row">
+					<Select
+						v-model="account.channel"
+						:options="workspace.channels"
+						option-label="display_name"
+						option-value="name"
+						:disabled="!canManage"
+						placeholder="Local channel"
+					/>
+					<Select
+						v-model="account.account_name"
+						:options="hubAccountOptions"
+						option-label="label"
+						option-value="name"
+						filter
+						:disabled="!canManage"
+						placeholder="Hub account"
+					/>
+					<label class="default-map"
+						><ToggleSwitch v-model="account.is_default" :disabled="!canManage" /><span
+							>Default</span
+						></label
+					>
+					<Button
+						v-if="canManage"
+						text
+						rounded
+						severity="danger"
+						aria-label="Remove mapping"
+						@click="removeAccount(index)"
+					>
+						<Trash2 :size="15" />
+					</Button>
+				</div>
+				<p v-if="!form.accounts.length" class="empty-copy">
+					No channel is mapped to the Integration Hub yet.
+				</p>
 			</div>
-		</div>
-		<div class="account-list">
-			<div v-for="(account, index) in form.accounts" :key="index" class="account-row">
-				<Select
-					v-model="account.channel"
-					:options="workspace.channels"
-					option-label="display_name"
-					option-value="name"
-					:disabled="!canManage"
-					placeholder="Local channel"
-				/>
-				<Select
-					v-model="account.account_name"
-					:options="hubAccountOptions"
-					option-label="label"
-					option-value="name"
-					filter
-					:disabled="!canManage"
-					placeholder="Hub account"
-				/>
-				<label class="default-map"
-					><ToggleSwitch v-model="account.is_default" :disabled="!canManage" /><span
-						>Default</span
-					></label
-				>
-				<Button
-					v-if="canManage"
-					text
-					rounded
-					severity="danger"
-					aria-label="Remove mapping"
-					@click="removeAccount(index)"
-				>
-					<Trash2 :size="15" />
+			<footer v-if="canManage">
+				<Button type="submit" label="Save transport" :loading="form.saving">
+					<template #icon><Save :size="15" /></template>
 				</Button>
-			</div>
-			<p v-if="!form.accounts.length" class="empty-copy">
-				No channel is mapped to the Integration Hub yet.
-			</p>
-		</div>
-		<footer v-if="canManage">
-			<Button label="Save transport" :loading="form.saving" @click="save">
-				<template #icon><Save :size="15" /></template>
-			</Button>
-		</footer>
+			</footer>
+		</form>
 	</section>
 </template>
 
@@ -329,7 +333,7 @@
 	header p {
 		margin: 4px 0 0;
 		color: var(--wa-muted);
-		font-size: 9px;
+		font-size: 12px;
 	}
 	.transport-state {
 		display: flex;
@@ -337,14 +341,14 @@
 		gap: 6px;
 		padding: 7px 10px;
 		border-radius: 20px;
-		color: #9a5b19;
-		background: #fff3dc;
-		font-size: 9px;
+		color: var(--wa-warning);
+		background: var(--wa-warning-soft);
+		font-size: 12px;
 		font-weight: 700;
 	}
 	.transport-state.ready {
-		color: #137153;
-		background: #e6f8ef;
+		color: var(--wa-success);
+		background: var(--wa-success-soft);
 	}
 	.transport-form {
 		padding: 17px 18px;
@@ -355,8 +359,8 @@
 	.transport-form > label {
 		display: grid;
 		gap: 6px;
-		color: #53635b;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 		font-weight: 700;
 	}
 	.transport-form :deep(input),
@@ -378,7 +382,7 @@
 	}
 	.switch-field small {
 		margin-top: 3px;
-		color: #7a8881;
+		color: var(--wa-muted);
 		font-weight: 400;
 	}
 	.account-heading strong,
@@ -397,8 +401,8 @@
 	}
 	.account-heading span {
 		margin-top: 3px;
-		color: #7a8881;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 	.account-list {
 		padding: 12px 18px 17px;
@@ -415,8 +419,8 @@
 		display: flex;
 		align-items: center;
 		gap: 7px;
-		color: #65756d;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 	footer {
 		justify-content: flex-end;

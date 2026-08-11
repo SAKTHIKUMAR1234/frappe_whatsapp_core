@@ -13,6 +13,7 @@
 	import { call, errorMessage, uploadFile } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
+	import { focusDialogControl } from '@/utils/focus'
 
 	const session = useSessionStore(),
 		loading = ref(false),
@@ -23,6 +24,9 @@
 		showSettings = ref(false),
 		showAction = ref(false),
 		showOutreach = ref(false)
+	const settingsDialog = ref(null)
+	const actionDialog = ref(null)
+	const outreachDialog = ref(null)
 	const workspace = ref({
 		accounts: [],
 		calls: [],
@@ -286,7 +290,10 @@
 		unsubscribeBatch = subscribe(
 			session.boot?.site,
 			'whatsapp_core_batch_committed',
-			scheduleRefresh,
+			(event) => {
+				const kinds = Array.isArray(event?.kinds) ? event.kinds : null
+				if (!kinds || kinds.includes('call')) scheduleRefresh()
+			},
 		)
 	})
 	onUnmounted(() => {
@@ -347,6 +354,7 @@
 				:options="workspace.accounts"
 				option-label="display_name"
 				option-value="account_name"
+				aria-label="WhatsApp account"
 				@change="load($event.value)"
 			/><Tag
 				:value="settingsStatus === 'ENABLED' ? 'Calling enabled' : 'Calling disabled'"
@@ -376,11 +384,17 @@
 				<span>or</span>
 				<InputText
 					v-model="permission.manual_number"
+					aria-label="WhatsApp number for call permission"
 					placeholder="Enter a WhatsApp number"
 					@input="permission.identity = ''"
 				/>
 			</div>
-			<Textarea v-model="permission.body_text" rows="2" />
+			<Textarea
+				v-model="permission.body_text"
+				rows="2"
+				aria-label="Call permission request message"
+				placeholder="Message shown with the call permission request"
+			/>
 			<div class="actions">
 				<Button
 					label="Check"
@@ -452,14 +466,17 @@
 		>
 	</section>
 	<Dialog
+		ref="settingsDialog"
 		v-model:visible="showSettings"
 		modal
 		header="Calling settings"
 		:style="{ width: 'min(48rem,calc(100vw - 2rem))' }"
+		@show="focusDialogControl(settingsDialog, '[role=combobox]')"
 		><div class="form">
 			<label
 				>Calling availability<Select
 					v-model="settingsStatus"
+					aria-label="Calling availability"
 					:options="[
 						{ label: 'Enabled', value: 'ENABLED' },
 						{ label: 'Disabled', value: 'DISABLED' },
@@ -477,7 +494,12 @@
 					Use this only for provider options not represented above. Enter the fields
 					inside Meta's <code>calling</code> object; status is managed separately.
 				</p>
-				<Textarea v-model="settingsJson" rows="14" class="json-editor" />
+				<Textarea
+					v-model="settingsJson"
+					rows="14"
+					aria-label="Advanced Meta calling settings"
+					class="json-editor"
+				/>
 			</details>
 		</div>
 		<template #footer
@@ -491,14 +513,17 @@
 				@click="saveSettings" /></template
 	></Dialog>
 	<Dialog
+		ref="actionDialog"
 		v-model:visible="showAction"
 		modal
 		header="WhatsApp call action"
 		:style="{ width: 'min(48rem,calc(100vw - 2rem))' }"
+		@show="focusDialogControl(actionDialog, '[role=combobox]')"
 		><div class="form">
 			<label
 				>Action<Select
 					v-model="form.action"
+					aria-label="WhatsApp call action"
 					:options="['connect', 'pre_accept', 'accept', 'reject', 'terminate']"
 			/></label>
 			<template v-if="form.action === 'connect'">
@@ -577,15 +602,18 @@
 				@click="executeAction" /></template
 	></Dialog>
 	<Dialog
+		ref="outreachDialog"
 		v-model:visible="showOutreach"
 		modal
 		header="WhatsApp call invitation"
 		:style="{ width: 'min(42rem,calc(100vw - 2rem))' }"
+		@show="focusDialogControl(outreachDialog, '[role=combobox]')"
 	>
 		<div class="form">
 			<label
 				>Invitation type<Select
 					v-model="outreach.operation"
+					aria-label="Call invitation type"
 					:options="[
 						{ label: 'Session call button', value: 'button' },
 						{ label: 'Approved template', value: 'template' },
@@ -691,7 +719,7 @@
 		border: 1px solid var(--wa-border);
 		border-radius: 14px;
 	}
-	.permission-card div:first-child {
+	.permission-card > div:first-child {
 		display: grid;
 		gap: 4px;
 	}
@@ -802,18 +830,20 @@
 		border-radius: 10px;
 	}
 	.error-banner {
-		background: #fff1f1;
-		color: #a52222;
+		background: color-mix(in srgb, var(--wa-danger, #c92a2a) 10%, var(--wa-surface));
+		color: var(--wa-danger, #c92a2a);
+		border: 1px solid color-mix(in srgb, var(--wa-danger, #c92a2a) 28%, var(--wa-border));
 	}
 	.success-banner {
-		background: #e8f8f1;
-		color: #076445;
+		background: color-mix(in srgb, var(--wa-success, #087f5b) 10%, var(--wa-surface));
+		color: var(--wa-success, #087f5b);
+		border: 1px solid color-mix(in srgb, var(--wa-success, #087f5b) 28%, var(--wa-border));
 		overflow-wrap: anywhere;
 	}
 	.empty {
 		padding: 48px;
 		text-align: center;
-		color: #7d8983;
+		color: var(--wa-muted);
 	}
 	@media (max-width: 1100px) {
 		.permission-card {

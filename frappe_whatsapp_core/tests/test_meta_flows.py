@@ -1,10 +1,11 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from frappe_whatsapp_core.hub_client import call_management
+from frappe_whatsapp_core.hub_client import _error_message, call_management
 from frappe_whatsapp_core.meta_flows import (
 	create_flow,
 	flow_endpoint_status,
@@ -19,6 +20,14 @@ from frappe_whatsapp_core.meta_flows import (
 
 
 class TestHubManagementClient(FrappeTestCase):
+	def test_error_message_extracts_safe_frappe_server_message(self):
+		result = {
+			"_server_messages": json.dumps(
+				[json.dumps({"message": "Meta access token expired", "title": "Request Failed"})]
+			)
+		}
+		self.assertEqual(_error_message(result), "Meta access token expired")
+
 	@patch("frappe_whatsapp_core.hub_client._session.post")
 	@patch("frappe_whatsapp_core.hub_client.get_settings")
 	def test_management_call_uses_hub_credentials(self, get_settings, post):
@@ -74,6 +83,34 @@ class TestMetaFlowProxy(FrappeTestCase):
 		self.assertFalse(result["configured"])
 		self.assertEqual(result["flows"], [])
 		self.assertIn("Hub not configured", result["error"])
+
+	@patch("frappe_whatsapp_core.meta_flows.connection_status", return_value={"enabled": True})
+	@patch("frappe_whatsapp_core.meta_flows._accounts")
+	def test_workspace_hides_raw_expired_token_response(self, accounts, status):
+		accounts.side_effect = frappe.ValidationError(
+			"Meta Graph API request failed (401): Error validating access token: Session has expired"
+		)
+		result = flow_workspace()
+		self.assertEqual(
+			result["error"],
+			"Meta access token expired. Update the account credential in Integration, then retry.",
+		)
+		self.assertNotIn("Graph API", result["error"])
+
+	def test_workspace_explains_groups_eligibility_failure(self):
+		from frappe_whatsapp_core.meta_flows import _public_workspace_error
+
+		message = _public_workspace_error(
+			Exception(
+				"Meta Graph API request failed (400): (#131215) This phone number is not "
+				"eligible to access Groups APIs"
+			)
+		)
+		self.assertEqual(
+			message,
+			"Meta Groups is unavailable for this phone number. Groups currently requires "
+			"an eligible Official Business Account (OBA) phone number.",
+		)
 
 	@patch("frappe_whatsapp_core.meta_flows._context", return_value={"waba_name": "WABA Doc"})
 	@patch("frappe_whatsapp_core.meta_flows._call")

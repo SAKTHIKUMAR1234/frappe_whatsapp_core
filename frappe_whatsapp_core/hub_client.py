@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import requests
+import json
 
 import frappe
+import requests
 
 _session = requests.Session()
 
@@ -226,7 +227,14 @@ def _request_timeout(settings) -> int:
 def _error_message(result) -> str:
 	if not isinstance(result, dict):
 		return "WhatsApp Hub request failed"
-	error = result.get("error") or result.get("message") or result.get("raw")
+	error = (
+		result.get("error")
+		or result.get("message")
+		or _server_message(result.get("_server_messages"))
+		or result.get("exception")
+		or result.get("exc_type")
+		or result.get("raw")
+	)
 	if isinstance(error, dict):
 		return (
 			error.get("message")
@@ -234,6 +242,26 @@ def _error_message(result) -> str:
 			or str(error)
 		)
 	return str(error or "WhatsApp Hub request failed")
+
+
+def _server_message(value) -> str:
+	"""Extract Frappe's user-safe server message without returning a traceback."""
+	if not value:
+		return ""
+	try:
+		messages = json.loads(value) if isinstance(value, str) else value
+	except (TypeError, ValueError):
+		return ""
+	if not isinstance(messages, list):
+		messages = [messages]
+	for item in messages:
+		try:
+			item = json.loads(item) if isinstance(item, str) else item
+		except (TypeError, ValueError):
+			continue
+		if isinstance(item, dict) and item.get("message"):
+			return str(item["message"])
+	return ""
 
 
 def _retryable_result(result: dict) -> bool:

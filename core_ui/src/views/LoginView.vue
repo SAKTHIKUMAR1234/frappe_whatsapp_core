@@ -21,7 +21,7 @@
 		route.query.expired
 			? 'Your session expired. Sign in again to continue.'
 			: route.query.unavailable
-				? 'The Frappe site could not be reached. Check the server and try again.'
+				? 'WhatsApp Core could not be reached. Check the server and try again.'
 				: '',
 	)
 
@@ -65,7 +65,7 @@
 		</section>
 		<section class="login-panel">
 			<form @submit.prevent="submit">
-				<div class="eyebrow">Company workspace</div>
+				<div class="eyebrow">Messaging workspace</div>
 				<h2>Welcome back</h2>
 				<p>Sign in with your Frappe account.</p>
 				<Message v-if="sessionNotice" severity="warn" :closable="false">{{
@@ -104,7 +104,7 @@
 					:loading="submitting"
 					fluid
 				/>
-				<small>Secured by your company’s Frappe site and role permissions.</small>
+				<small>Secured by your company account and role permissions.</small>
 			</form>
 		</section>
 	</main>
@@ -115,7 +115,7 @@
 		min-height: 100vh;
 		display: grid;
 		grid-template-columns: 1.15fr 0.85fr;
-		background: white;
+		background: var(--wa-surface);
 	}
 	.login-art {
 		position: relative;
@@ -225,14 +225,14 @@
 		margin: 14px 0;
 		padding: 9px 11px;
 		border-radius: 9px;
-		background: #fff0f0;
-		color: #b42318;
+		background: var(--wa-danger-soft);
+		color: var(--wa-danger);
 		font-size: 11px;
 	}
 	.field-error {
 		display: block;
 		margin-top: 6px;
-		color: #b42318;
+		color: var(--wa-danger);
 		font-size: 11px;
 	}
 	form :deep(.p-message) {
@@ -246,7 +246,7 @@
 		margin-top: 22px;
 		text-align: center;
 		color: #9aa49f;
-		font-size: 10px;
+		font-size: 12px;
 	}
 	@media (max-width: 800px) {
 		.login-page {

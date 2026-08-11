@@ -5,8 +5,8 @@ app_description = "Reusable, configurable WhatsApp business workflow foundation"
 app_email = "engineering@essdee.com"
 app_license = "mit"
 
-after_install = "frappe_whatsapp_core.setup.ensure_core_roles"
-after_migrate = "frappe_whatsapp_core.setup.ensure_core_roles"
+after_install = "frappe_whatsapp_core.setup.ensure_core_setup"
+after_migrate = "frappe_whatsapp_core.setup.ensure_core_setup"
 
 # Business applications register handlers here. The base app intentionally
 # contains no hospital, manufacturing, sales or Essdee-specific decisions.
@@ -31,11 +31,17 @@ whatsapp_core_outbound_preflight = []
 # one resolver is allowed; returning no value keeps Core's default number.
 whatsapp_core_recipient_phone_resolver = []
 
+# Business applications may customize how Core contacts are presented without
+# forking the inbox. Hooks receive one batched contact mapping and return
+# presentation-only overrides keyed by Core Identity name.
+whatsapp_core_contact_presenters = []
+
 # Flow nodes can invoke only registered, typed actions. A builder graph cannot
 # execute arbitrary Python, SQL or shell commands.
 whatsapp_core_flow_actions = {
 	"case.create": "frappe_whatsapp_core.flow_actions.create_case_action",
 	"context.set": "frappe_whatsapp_core.flow_actions.set_context_action",
+	"topic.upsert": "frappe_whatsapp_core.flow_actions.upsert_topic_action",
 }
 
 # Dynamic Meta-hosted Flows call Integration's encrypted endpoint. Integration
@@ -56,11 +62,20 @@ scheduler_events = {
 	"cron": {
 		"* * * * *": [
 			"frappe_whatsapp_core.campaigns.run_due_campaigns",
+			"frappe_whatsapp_core.campaigns.refresh_dirty_campaign_counts",
+			"frappe_whatsapp_core.dispatcher.retry_stale_events",
 			"frappe_whatsapp_core.outbound.retry_queued_messages",
 		],
 		"*/5 * * * *": [
 			"frappe_whatsapp_core.dispatcher.retry_failed_events",
 			"frappe_whatsapp_core.campaigns.refresh_active_campaigns",
+		],
+		"*/30 * * * *": [
+			"frappe_whatsapp_core.ai_summaries.queue_pending_summaries",
+			"frappe_whatsapp_core.summary_rollups.queue_summary_rollups",
+		],
+		"15 2 * * *": [
+			"frappe_whatsapp_core.summary_rollups.prune_summary_rollups",
 		],
 	},
 }

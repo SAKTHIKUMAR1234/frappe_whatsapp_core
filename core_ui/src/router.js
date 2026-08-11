@@ -54,6 +54,18 @@ const routes = [
 				component: () => import('@/features/workspaces/views/PollsView.vue'),
 			},
 			{
+				path: 'automation-flows',
+				name: 'automation-flows',
+				meta: { module: 'automation-flows' },
+				component: () => import('@/features/flows/views/AutomationFlowListView.vue'),
+			},
+			{
+				path: 'automation-flows/:flowName',
+				name: 'automation-flow-builder',
+				meta: { module: 'automation-flows' },
+				component: () => import('@/features/flows/views/AutomationFlowBuilderView.vue'),
+			},
+			{
 				path: 'flows',
 				name: 'flows',
 				meta: { module: 'flows' },
@@ -122,7 +134,8 @@ const router = createRouter({
 // current screen frozen on a failed navigation.
 router.onError((error) => {
 	const message = String(error?.message || error || '')
-	if (!/dynamically imported module|failed to fetch|importing a module script/i.test(message)) return
+	if (!/dynamically imported module|failed to fetch|importing a module script/i.test(message))
+		return
 	const reloadKey = 'whatsapp:asset-reload'
 	if (sessionStorage.getItem(reloadKey)) {
 		sessionStorage.removeItem(reloadKey)
@@ -132,6 +145,10 @@ router.onError((error) => {
 	const url = new URL(window.location.href)
 	url.searchParams.set('asset-reload', String(Date.now()))
 	window.location.replace(url.toString())
+})
+
+router.afterEach((_to, _from, failure) => {
+	if (!failure) sessionStorage.removeItem('whatsapp:asset-reload')
 })
 
 router.beforeEach(async (to) => {

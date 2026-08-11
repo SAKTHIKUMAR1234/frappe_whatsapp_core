@@ -10,6 +10,9 @@
 	import { useToast } from 'primevue/usetoast'
 	import {
 		MessageSquarePlus,
+		ArrowDown,
+		Download,
+		Info,
 		Paperclip,
 		ChevronLeft,
 		RefreshCw,
@@ -17,6 +20,8 @@
 		Send,
 		ShieldAlert,
 		Smile,
+		PanelRight,
+		Reply,
 		X,
 	} from 'lucide-vue-next'
 
@@ -25,9 +30,11 @@
 	import ConversationList from '@/features/inbox/components/ConversationList.vue'
 	import MessageBubble from '@/features/inbox/components/MessageBubble.vue'
 	import ContactSelect from '@/features/contacts/components/ContactSelect.vue'
+	import TemplateSendDialog from '@/features/templates/components/TemplateSendDialog.vue'
 	import { call, errorMessage, uploadFile } from '@/services/frappe'
-	import { subscribe } from '@/services/realtime'
+	import { subscribe, subscribeConnection } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
+	import { focusDialogControl } from '@/utils/focus'
 
 	const route = useRoute()
 	const router = useRouter()
@@ -41,17 +48,27 @@
 	const loadingOlder = ref(false)
 	const richSending = ref(false)
 	const search = ref('')
+	const category = ref('')
+	const categoryOptions = ref([])
 	const rows = ref([])
 	const listScrollTop = ref(Number(sessionStorage.getItem('whatsapp:inbox-scroll') || 0))
 	const detail = ref(null)
+	const contextOpen = ref(false)
 	const messagePage = ref({ has_more: false })
 	const messageSearchOpen = ref(false)
+	const messageSearchInput = ref(null)
 	const messageSearch = ref('')
 	const messageSearchRows = ref([])
 	const messageSearching = ref(false)
 	const draft = ref('')
 	const replyTo = ref(null)
+	const messageMenu = ref(null)
+	const messageMenuPosition = ref({ x: 0, y: 0 })
+	const messageInfo = ref(null)
+	const messageInfoOpen = ref(false)
+	const quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🙏']
 	const richDialog = ref(false)
+	const richDialogRef = ref(null)
 	const uploadingMedia = ref(false)
 	const blankContact = () => ({
 		formatted_name: '',
@@ -67,6 +84,7 @@
 	const richForm = ref({
 		type: 'image',
 		media: '',
+		local_file_url: '',
 		caption: '',
 		emoji: '👍',
 		latitude: '',
@@ -91,12 +109,20 @@
 		{ label: 'Contact', value: 'contacts' },
 		{ label: 'Meta Flow', value: 'interactive' },
 	]
-	let typingSentAt = 0
+	let typingActive = false
+	let typingDelayTimer = null
+	let typingIdleTimer = null
+	let typingRefreshTimer = null
 	let messageSearchTimer = null
 	const stream = ref(null)
+	const hasUnseenMessages = ref(false)
+	const messageScrollPositions = readMessageScrollPositions()
 	const newDialog = ref(false)
+	const newDialogRef = ref(null)
 	const starting = ref(false)
 	const catalog = ref({ templates: [] })
+	const templateDialog = ref(false)
+	const selectedTemplate = ref('')
 	const settings = ref({ channels: [] })
 	const newChatContacts = ref([])
 	const newChat = ref({
@@ -112,19 +138,52 @@
 	let olderRequest = 0
 	let messageSearchRequest = 0
 	let batchRefreshTimer = null
+	let pendingBatchEvents = []
+	let realtimeConnectedOnce = false
+	let restoringMessageScroll = false
+
+	function readMessageScrollPositions() {
+		try {
+			const stored = JSON.parse(sessionStorage.getItem('whatsapp:message-scrolls') || '{}')
+			return stored && typeof stored === 'object' ? stored : {}
+		} catch {
+			return {}
+		}
+	}
+
+	function isNearMessageBottom(threshold = 96) {
+		if (!stream.value) return true
+		const distance =
+			stream.value.scrollHeight - stream.value.clientHeight - stream.value.scrollTop
+		return distance <= threshold
+	}
+
+	function rememberMessageScroll(conversation = selectedName.value) {
+		if (!conversation || !stream.value || restoringMessageScroll) return
+		const distanceFromBottom = Math.max(
+			0,
+			stream.value.scrollHeight - stream.value.clientHeight - stream.value.scrollTop,
+		)
+		messageScrollPositions[conversation] = {
+			distanceFromBottom,
+			atBottom: distanceFromBottom <= 96,
+		}
+		try {
+			sessionStorage.setItem(
+				'whatsapp:message-scrolls',
+				JSON.stringify(messageScrollPositions),
+			)
+		} catch {
+			// A full sessionStorage must not interrupt inbox navigation.
+		}
+	}
 
 	const selectedName = computed(() => route.params.conversation || '')
 	const filteredRows = computed(() => {
 		const query = search.value.trim().toLowerCase()
 		if (!query) return rows.value
 		return rows.value.filter((row) =>
-			[
-				row.display_name,
-				row.phone_number,
-				row.party_binding?.party_name,
-				row.party_binding?.party_role,
-				row.latest_message?.body,
-			]
+			[row.display_name, row.phone_number, row.latest_message?.body]
 				.join(' ')
 				.toLowerCase()
 				.includes(query),
@@ -133,6 +192,24 @@
 	const messageMap = computed(
 		() => new Map((detail.value?.messages || []).map((message) => [message.name, message])),
 	)
+	const providerMessageMap = computed(
+		() =>
+			new Map(
+				(detail.value?.messages || [])
+					.filter((message) => message.provider_message_id)
+					.map((message) => [message.provider_message_id, message]),
+			),
+	)
+	const readersByMessage = computed(() => {
+		const result = new Map()
+		for (const reader of detail.value?.readers || []) {
+			if (!reader.last_read_message || !messageMap.value.has(reader.last_read_message)) continue
+			const rows = result.get(reader.last_read_message) || []
+			rows.push(reader)
+			result.set(reader.last_read_message, rows)
+		}
+		return result
+	})
 	const topics = computed(() =>
 		(detail.value?.topics || []).map((topic) => ({
 			...topic,
@@ -156,7 +233,10 @@
 		if (!silent) loading.value = true
 		listError.value = ''
 		try {
-			const loaded = await call('frappe_whatsapp_core.inbox.conversations', { limit: 500 })
+			const loaded = await call('frappe_whatsapp_core.inbox.conversations', {
+				limit: 500,
+				category: category.value || null,
+			})
 			if (request !== listRequest) return
 			rows.value = loaded
 		} catch (error) {
@@ -169,6 +249,21 @@
 
 	async function loadDetail(name, { silent = false } = {}) {
 		const request = ++detailRequest
+		const preservedPosition =
+			silent && stream.value
+				? {
+						distanceFromBottom: Math.max(
+							0,
+							stream.value.scrollHeight -
+								stream.value.clientHeight -
+								stream.value.scrollTop,
+						),
+						atBottom: isNearMessageBottom(),
+					}
+				: null
+		const hadUnread =
+			Number(rows.value.find((item) => item.name === name)?.unread_count || 0) > 0
+		let resumeMessage = null
 		olderRequest += 1
 		messageSearchRequest += 1
 		if (!name) {
@@ -178,30 +273,85 @@
 			loadingOlder.value = false
 			return
 		}
-		if (!silent) detailLoading.value = true
+		if (!silent) {
+			detailLoading.value = true
+			detail.value = null
+		}
 		detailError.value = ''
-		detail.value = null
 		try {
 			const loaded = await call('frappe_whatsapp_core.inbox.conversation', { name })
 			if (request !== detailRequest) return
 			detail.value = loaded
+			resumeMessage = loaded.resume_message || null
 			messagePage.value = detail.value.message_page || { has_more: false }
 			const latest = detail.value.messages.at(-1)?.name
 			if (latest) {
-				await call('frappe_whatsapp_core.inbox.read_conversation', {
+				const readState = await call('frappe_whatsapp_core.inbox.read_conversation', {
 					name,
 					message: latest,
 				})
 				if (request !== detailRequest) return
+				updateConversationReader(readState)
 				const row = rows.value.find((item) => item.name === name)
 				if (row) row.unread_count = 0
 			}
-			await scrollToBottom()
 		} catch (error) {
-			if (request === detailRequest)
+			if (request === detailRequest && !silent)
 				detailError.value = errorMessage(error, 'Unable to load this conversation.')
 		} finally {
-			if (request === detailRequest && !silent) detailLoading.value = false
+			if (request === detailRequest) {
+				if (!silent) detailLoading.value = false
+				await restoreMessageScroll(name, {
+					forceBottom: !resumeMessage,
+					fallback: preservedPosition,
+					resumeMessage,
+					preferResume: hadUnread,
+				})
+			}
+		}
+	}
+
+	async function restoreMessageScroll(
+		name,
+		{ forceBottom = false, fallback = null, resumeMessage = null, preferResume = false } = {},
+	) {
+		await nextTick()
+		if (!stream.value || name !== selectedName.value) return
+		const saved = fallback || messageScrollPositions[name]
+		if (resumeMessage && (preferResume || !saved)) {
+			const target = [...stream.value.querySelectorAll('[data-message-name]')].find(
+				(element) => element.dataset.messageName === resumeMessage,
+			)
+			if (target) {
+				target.closest('details')?.setAttribute('open', '')
+				await nextTick()
+				stream.value.scrollTop = Math.max(0, target.offsetTop - 48)
+				return
+			}
+		}
+		if (forceBottom || !saved || saved.atBottom) {
+			await scrollToBottom()
+			return
+		}
+		restoringMessageScroll = true
+		try {
+			const desiredDistance = Math.max(0, Number(saved.distanceFromBottom || 0))
+			let pages = 0
+			while (
+				messagePage.value.has_more &&
+				stream.value.scrollHeight - stream.value.clientHeight < desiredDistance &&
+				pages < 20
+			) {
+				await loadOlderMessages()
+				pages += 1
+				await nextTick()
+			}
+			stream.value.scrollTop = Math.max(
+				0,
+				stream.value.scrollHeight - stream.value.clientHeight - desiredDistance,
+			)
+		} finally {
+			restoringMessageScroll = false
 		}
 	}
 
@@ -246,11 +396,14 @@
 	}
 
 	function handleStreamScroll() {
+		if (isNearMessageBottom()) hasUnseenMessages.value = false
+		rememberMessageScroll()
 		if (stream.value?.scrollTop <= 64) loadOlderMessages()
 	}
 
 	function selectConversation(name) {
 		if (name === selectedName.value) return
+		rememberMessageScroll()
 		router.push({
 			name: 'inbox',
 			params: { conversation: name },
@@ -259,6 +412,7 @@
 	}
 
 	function closeMobileConversation() {
+		rememberMessageScroll()
 		if (window.history.state?.fromInbox) router.back()
 		else router.replace({ name: 'inbox' })
 	}
@@ -272,7 +426,7 @@
 		const request = ++messageSearchRequest
 		const query = messageSearch.value.trim()
 		const conversation = selectedName.value
-		if (!query || !conversation) {
+		if ((!query && !category.value) || !conversation) {
 			messageSearchRows.value = []
 			messageSearching.value = false
 			return
@@ -282,6 +436,7 @@
 			const result = await call('frappe_whatsapp_core.workspace_api.list_messages', {
 				conversation,
 				search: query,
+				category: category.value || null,
 				limit: 100,
 			})
 			if (request !== messageSearchRequest || conversation !== selectedName.value) return
@@ -307,6 +462,16 @@
 		messageSearchRows.value = []
 	}
 
+	async function toggleMessageSearch() {
+		if (messageSearchOpen.value) {
+			closeMessageSearch()
+			return
+		}
+		messageSearchOpen.value = true
+		await nextTick()
+		messageSearchInput.value?.$el?.focus()
+	}
+
 	function newClientMessageId() {
 		if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
 		return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
@@ -328,12 +493,18 @@
 			provider_timestamp: new Date().toISOString(),
 			delivery_status: 'Queued',
 			client_message_id: clientMessageId,
+			owner: session.user?.name || '',
+			sender_name: session.user?.full_name || session.user?.name || 'You',
 			optimistic: true,
 		}
 	}
 
 	function reconcileMessage(message, conversation = selectedName.value) {
 		if (!detail.value || !message || conversation !== selectedName.value) return
+		if (message.message_type === 'reaction') {
+			applyReactionMessage(message)
+			return
+		}
 		const index = detail.value.messages.findIndex(
 			(item) =>
 				item.name === message.name ||
@@ -342,6 +513,44 @@
 		)
 		if (index >= 0) detail.value.messages.splice(index, 1, message)
 		else detail.value.messages.push(message)
+	}
+
+	function reactionPayload(message) {
+		let content = message?.content || {}
+		if (typeof content === 'string') {
+			try {
+				content = JSON.parse(content)
+			} catch {
+				content = {}
+			}
+		}
+		return content.reaction || content.payload?.reaction || content.payload || {}
+	}
+
+	function applyReactionMessage(message) {
+		if (!detail.value || message?.conversation !== selectedName.value) return
+		const reaction = reactionPayload(message)
+		const target = detail.value.messages.find(
+			(row) => row.provider_message_id === reaction.message_id,
+		)
+		if (!target) return
+		const actorKey = `${message.direction}:${message.owner || 'remote'}`
+		const existing = (target.reactions || []).filter((item) => item.actor_key !== actorKey)
+		if (reaction.emoji) {
+			existing.push({
+				message: message.name,
+				emoji: reaction.emoji,
+				direction: message.direction,
+				actor_key: actorKey,
+				owner: message.owner || '',
+				actor:
+					message.direction === 'Outbound'
+						? message.sender_name || message.owner || 'You'
+						: 'Contact',
+				provider_timestamp: message.provider_timestamp,
+			})
+		}
+		target.reactions = existing
 	}
 
 	async function queueText(body, contextMessageId = '') {
@@ -378,6 +587,7 @@
 		const contextMessageId = replyTo.value?.provider_message_id || ''
 		draft.value = ''
 		replyTo.value = null
+		stopTypingSession()
 		await queueText(body, contextMessageId)
 	}
 
@@ -390,27 +600,124 @@
 		replyTo.value = message
 	}
 
-	async function toggleBookmark(message) {
-		try {
-			const result = await call('frappe_whatsapp_core.inbox.toggle_message_bookmark', {
-				message: message.name,
+	async function openQuotedMessage(message) {
+		if (!message?.name || !stream.value) return
+		if (messageSearchOpen.value) closeMessageSearch()
+		let target = null
+		for (let page = 0; page < 20; page += 1) {
+			await nextTick()
+			target = [...stream.value.querySelectorAll('[data-message-name]')].find(
+				(element) => element.dataset.messageName === message.name,
+			)
+			if (target || !messagePage.value.has_more) break
+			await loadOlderMessages()
+		}
+		if (!target) return
+		target.closest('details')?.setAttribute('open', '')
+		target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+		target.classList.remove('quote-highlight')
+		void target.offsetWidth
+		target.classList.add('quote-highlight')
+		window.setTimeout(() => target?.classList.remove('quote-highlight'), 1300)
+	}
+
+	function openMessageMenu({ message, x, y }) {
+		const menuWidth = 250
+		const menuHeight = 330
+		messageMenuPosition.value = {
+			x: Math.max(10, Math.min(Number(x) || 10, window.innerWidth - menuWidth - 10)),
+			y: Math.max(10, Math.min(Number(y) || 10, window.innerHeight - menuHeight - 10)),
+		}
+		messageMenu.value = message
+	}
+
+	function closeMessageMenu() {
+		messageMenu.value = null
+	}
+
+	function replyFromMenu() {
+		if (!messageMenu.value) return
+		selectReply(messageMenu.value)
+		closeMessageMenu()
+	}
+
+	function showMessageInfo() {
+		if (!messageMenu.value) return
+		messageInfo.value = messageMenu.value
+		messageInfoOpen.value = true
+		closeMessageMenu()
+	}
+
+	function isMediaMessage(message) {
+		return ['audio', 'document', 'image', 'sticker', 'video'].includes(
+			String(message?.message_type || '').toLowerCase(),
+		)
+	}
+
+	function downloadMedia(message = messageMenu.value) {
+		if (!message?.media_url) return
+		const link = document.createElement('a')
+		const url = new URL(message.media_url, window.location.origin)
+		if (url.origin === window.location.origin) url.searchParams.set('download', '1')
+		link.href = url.toString()
+		link.download = ''
+		link.rel = 'noreferrer'
+		document.body.appendChild(link)
+		link.click()
+		link.remove()
+		closeMessageMenu()
+	}
+
+	async function reactToMessage(emoji) {
+		const target = messageMenu.value
+		if (!target?.provider_message_id || target.provider_message_id.startsWith('local:')) {
+			toast.add({
+				severity: 'warn',
+				summary: 'Reaction unavailable',
+				detail: 'Wait until this message has been accepted by WhatsApp.',
+				life: 3500,
 			})
-			message.bookmarked = result.bookmarked
+			return
+		}
+		closeMessageMenu()
+		try {
+			const message = await call('frappe_whatsapp_core.outbound.queue_rich', {
+				conversation_name: selectedName.value,
+				message_type: 'reaction',
+				payload: { message_id: target.provider_message_id, emoji },
+			})
+			applyReactionMessage(message)
 		} catch (error) {
 			toast.add({
 				severity: 'error',
-				summary: 'Bookmark not updated',
+				summary: 'Reaction not queued',
 				detail: errorMessage(error),
-				life: 4500,
+				life: 5000,
 			})
 		}
 	}
 
-	async function showTyping() {
-		const current = Date.now()
-		const conversation = selectedName.value
-		if (!conversation || current - typingSentAt < 25000) return
-		typingSentAt = current
+	function formatInfoTime(value) {
+		if (!value) return '—'
+		const date = new Date(String(value).replace(' ', 'T'))
+		if (Number.isNaN(date.getTime())) return value
+		return new Intl.DateTimeFormat('en-GB', {
+			day: '2-digit',
+			month: '2-digit',
+			year: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit',
+			second: '2-digit',
+			hour12: true,
+		}).format(date)
+	}
+
+	function handleGlobalKeydown(event) {
+		if (event.key === 'Escape') closeMessageMenu()
+	}
+
+	async function publishTypingIndicator(conversation) {
+		if (!typingActive || conversation !== selectedName.value || !draft.value.trim()) return
 		try {
 			await call('frappe_whatsapp_core.conversation_reads.show_typing', {
 				conversation,
@@ -420,9 +727,41 @@
 		}
 	}
 
+	async function startTypingSession() {
+		const conversation = selectedName.value
+		if (!conversation || typingActive || !draft.value.trim()) return
+		typingActive = true
+		await publishTypingIndicator(conversation)
+		window.clearInterval(typingRefreshTimer)
+		typingRefreshTimer = window.setInterval(() => publishTypingIndicator(conversation), 10_000)
+	}
+
+	function noteTyping() {
+		window.clearTimeout(typingDelayTimer)
+		window.clearTimeout(typingIdleTimer)
+		if (!draft.value.trim()) {
+			stopTypingSession()
+			return
+		}
+		// Do not light up the customer's typing indicator merely because the
+		// composer received focus. Start only after actual, settled input.
+		typingDelayTimer = window.setTimeout(startTypingSession, 350)
+		typingIdleTimer = window.setTimeout(stopTypingSession, 1800)
+	}
+
+	function stopTypingSession() {
+		window.clearTimeout(typingDelayTimer)
+		window.clearTimeout(typingIdleTimer)
+		window.clearInterval(typingRefreshTimer)
+		typingDelayTimer = null
+		typingIdleTimer = null
+		typingRefreshTimer = null
+		typingActive = false
+	}
+
 	function addEmoji() {
 		draft.value += '😊'
-		showTyping()
+		noteTyping()
 	}
 
 	function richPayload() {
@@ -486,6 +825,7 @@
 			})
 			return { contacts, context_message_id }
 		}
+		const flowActionPayload = { screen: richForm.value.flow_screen }
 		return {
 			type: 'flow',
 			body: { text: richForm.value.flow_body || 'Please complete this form.' },
@@ -497,10 +837,7 @@
 					flow_token: richForm.value.flow_token,
 					flow_cta: richForm.value.flow_cta || 'Open',
 					flow_action: 'navigate',
-					flow_action_payload: {
-						screen: richForm.value.flow_screen,
-						data: {},
-					},
+					flow_action_payload: flowActionPayload,
 				},
 			},
 			context_message_id,
@@ -517,8 +854,10 @@
 			const uploaded = await call('frappe_whatsapp_core.outbound.upload_media', {
 				conversation_name: conversation,
 				file_url: stored.file_url,
+				media_type: richForm.value.type,
 			})
 			richForm.value.media = uploaded.media_id
+			richForm.value.local_file_url = uploaded.file_url
 			toast.add({
 				severity: 'success',
 				summary: 'Media ready',
@@ -563,12 +902,14 @@
 		scrollToBottom()
 		richDialog.value = false
 		replyTo.value = null
+		stopTypingSession()
 		try {
 			const message = await call('frappe_whatsapp_core.outbound.queue_rich', {
 				conversation_name: conversation,
 				message_type: type,
 				payload,
 				client_message_id: optimistic.client_message_id,
+				local_file_url: richForm.value.local_file_url || null,
 			})
 			reconcileMessage(message, conversation)
 		} catch (error) {
@@ -586,16 +927,19 @@
 		}
 	}
 
-	async function sendTemplate(templateName) {
-		if (!templateName) return
+	async function sendTemplate(payload) {
+		if (!payload?.template) return
 		const conversation = selectedName.value
 		richSending.value = true
 		try {
 			const message = await call('frappe_whatsapp_core.outbound.queue_template', {
 				conversation_name: conversation,
-				template: templateName,
+				template: payload.template,
+				language_code: payload.language_code,
+				components: payload.components,
 			})
 			appendMessage({ conversation, message })
+			templateDialog.value = false
 		} catch (error) {
 			toast.add({
 				severity: 'error',
@@ -611,15 +955,12 @@
 	async function startConversation() {
 		starting.value = true
 		try {
+			const openingTemplate = newChat.value.template
 			const started = await call('frappe_whatsapp_core.outbound.start_conversation', {
 				channel: newChat.value.channel,
 				identity: newChat.value.identity || null,
 				phone_number: newChat.value.phone_number,
 				display_name: newChat.value.display_name,
-			})
-			await call('frappe_whatsapp_core.outbound.queue_template', {
-				conversation_name: started.conversation,
-				template: newChat.value.template,
 			})
 			newDialog.value = false
 			newChat.value = {
@@ -631,6 +972,9 @@
 			}
 			await loadRows()
 			selectConversation(started.conversation)
+			await nextTick()
+			selectedTemplate.value = openingTemplate
+			templateDialog.value = true
 		} catch (error) {
 			toast.add({
 				severity: 'error',
@@ -673,9 +1017,15 @@
 
 	function appendMessage(event) {
 		if (!event?.conversation || !event.message) return
+		if (event.message.message_type === 'reaction') {
+			applyReactionMessage(event.message)
+			return
+		}
 		if (event.conversation === selectedName.value && detail.value) {
+			const shouldStickToBottom = isNearMessageBottom()
 			reconcileMessage(event.message)
-			scrollToBottom()
+			if (shouldStickToBottom) scrollToBottom()
+			else if (event.message.direction === 'Inbound') hasUnseenMessages.value = true
 		}
 		const row = rows.value.find((item) => item.name === event.conversation)
 		if (row) {
@@ -702,18 +1052,154 @@
 		}
 	}
 
+	function updateConversationReader(event) {
+		if (event?.conversation !== selectedName.value || !detail.value || !event.user) return
+		const previous = (detail.value.readers || []).find((reader) => reader.user === event.user)
+		const readers = (detail.value.readers || []).filter((reader) => reader.user !== event.user)
+		detail.value.readers = [
+			{
+				...previous,
+				user: event.user,
+				last_read_message: event.last_read_message || null,
+				last_read_at: event.last_read_at,
+				last_read_creation: event.last_read_creation || null,
+				full_name:
+					previous?.full_name ||
+					(session.user?.name === event.user ? session.user?.full_name : '') ||
+					event.user,
+			},
+			...readers,
+		]
+	}
+
+	function mergeCommittedMessage(message) {
+		if (!detail.value || !message || message.conversation !== selectedName.value) return
+		if (message.message_type === 'reaction') {
+			applyReactionMessage(message)
+			return
+		}
+		const index = detail.value.messages.findIndex((item) => item.name === message.name)
+		if (index >= 0) {
+			detail.value.messages.splice(index, 1, {
+				...detail.value.messages[index],
+				...message,
+			})
+		} else {
+			detail.value.messages.push({ bookmarked: false, ...message })
+		}
+	}
+
+	function isNewerMessage(message, current) {
+		if (!current) return true
+		const incoming = new Date(message.provider_timestamp || message.creation || 0).getTime()
+		const existing = new Date(current.provider_timestamp || current.creation || 0).getTime()
+		return !Number.isFinite(existing) || (Number.isFinite(incoming) && incoming >= existing)
+	}
+
 	function refreshCommittedBatch(event) {
+		pendingBatchEvents.push(event || {})
 		window.clearTimeout(batchRefreshTimer)
 		batchRefreshTimer = window.setTimeout(async () => {
+			const shouldStickToBottom = isNearMessageBottom()
+			const events = pendingBatchEvents.splice(0)
+			const changesByMessage = new Map()
+			const kinds = new Set()
+			const conversations = new Set()
+			let needsCompatibilityReload = false
+			for (const batch of events) {
+				if (!Array.isArray(batch?.message_changes)) needsCompatibilityReload = true
+				for (const kind of batch?.kinds || []) kinds.add(kind)
+				for (const conversation of batch?.conversations || [])
+					conversations.add(conversation)
+				for (const change of batch?.message_changes || []) {
+					const name = change?.message?.name
+					if (!name) continue
+					const previous = changesByMessage.get(name)
+					changesByMessage.set(name, {
+						...previous,
+						...change,
+						status:
+							previous?.status === 'created' || change.status === 'created'
+								? 'created'
+								: change.status,
+						message: { ...previous?.message, ...change.message },
+					})
+				}
+			}
+			const changes = [...changesByMessage.values()]
+			if (changes.length) {
+				let needsListReload = false
+				let selectedChanged = false
+				let latestSelectedInbound = null
+				for (const change of changes) {
+					const message = change?.message
+					if (!message?.conversation) continue
+					if (message.message_type === 'reaction') {
+						if (message.conversation === selectedName.value)
+							applyReactionMessage(message)
+						continue
+					}
+					if (message.conversation === selectedName.value) {
+						mergeCommittedMessage(message)
+						selectedChanged = true
+						if (change.status === 'created' && message.direction === 'Inbound')
+							latestSelectedInbound = message
+					}
+					const row = rows.value.find((item) => item.name === message.conversation)
+					if (!row) {
+						needsListReload = true
+						continue
+					}
+					if (isNewerMessage(message, row.latest_message)) {
+						row.latest_message = { ...row.latest_message, ...message }
+						row.last_message_at = message.provider_timestamp || message.creation
+						rows.value = [row, ...rows.value.filter((item) => item.name !== row.name)]
+					}
+					if (
+						change.status === 'created' &&
+						message.direction === 'Inbound' &&
+						message.conversation !== selectedName.value
+					)
+						row.unread_count = Number(row.unread_count || 0) + 1
+				}
+				if (needsListReload) await loadRows({ silent: true })
+				if (latestSelectedInbound) {
+					await call('frappe_whatsapp_core.inbox.read_conversation', {
+						name: selectedName.value,
+						message: latestSelectedInbound.name,
+					})
+					const row = rows.value.find((item) => item.name === selectedName.value)
+					if (row) row.unread_count = 0
+				}
+				if (selectedChanged && shouldStickToBottom) await scrollToBottom()
+				else if (latestSelectedInbound) hasUnseenMessages.value = true
+				if (!needsCompatibilityReload) return
+			}
+			if (
+				kinds.size &&
+				![...kinds].some((kind) => ['message', 'status', 'edit', 'revoke'].includes(kind))
+			)
+				return
+			// Compatibility for events from an older worker during rolling deploys.
 			await loadRows({ silent: true })
 			if (
 				selectedName.value &&
-				(!event?.conversations?.length || event.conversations.includes(selectedName.value))
+				(!conversations.size || conversations.has(selectedName.value))
 			) {
+				const knownMessages = new Set(
+					(detail.value?.messages || []).map((message) => message.name),
+				)
 				await loadDetail(selectedName.value, { silent: true })
-				scrollToBottom()
+				if (
+					!shouldStickToBottom &&
+					(detail.value?.messages || []).some(
+						(message) =>
+							message.direction === 'Inbound' && !knownMessages.has(message.name),
+					)
+				)
+					hasUnseenMessages.value = true
 			}
-		}, 100)
+		}, 120)
 	}
 
 	async function updateStatus(status) {
@@ -737,34 +1223,87 @@
 		}
 	}
 
-	async function scrollToBottom() {
-		await nextTick()
-		if (stream.value) stream.value.scrollTop = stream.value.scrollHeight
+	async function refreshContactSummary() {
+		const identity = detail.value?.identity?.name
+		if (!identity) return
+		try {
+			const summary = await call('frappe_whatsapp_core.frontend_api.contact_summary', {
+				identity,
+				refresh: 1,
+			})
+			if (detail.value?.identity?.name === identity) detail.value.contact_summary = summary
+			toast.add({ severity: 'success', summary: 'Contact summary updated', life: 2500 })
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Summary not updated',
+				detail: errorMessage(error, 'Unable to refresh the contact summary.'),
+				life: 5000,
+			})
+		}
 	}
 
-	watch(selectedName, loadDetail)
-	watch(selectedName, () => {
+	async function scrollToBottom() {
+		await nextTick()
+		if (stream.value) {
+			stream.value.scrollTop = stream.value.scrollHeight
+			hasUnseenMessages.value = false
+			rememberMessageScroll()
+		}
+	}
+
+	watch(selectedName, (name, previousName) => {
+		rememberMessageScroll(previousName)
+		hasUnseenMessages.value = false
+		loadDetail(name)
 		replyTo.value = null
-		typingSentAt = 0
+		contextOpen.value = false
+		stopTypingSession()
 		closeMessageSearch()
 	})
 	watch(messageSearch, () => {
 		clearTimeout(messageSearchTimer)
 		messageSearchTimer = setTimeout(runMessageSearch, 300)
 	})
-	onMounted(async () => {
+	watch(category, async () => {
 		await loadRows()
+		if (category.value) messageSearchOpen.value = true
+		if (selectedName.value) await runMessageSearch()
+	})
+	onMounted(async () => {
+		window.addEventListener('keydown', handleGlobalKeydown)
+		const [categories] = await Promise.all([
+			call('frappe_whatsapp_core.inbox.category_catalog'),
+			loadRows(),
+		])
+		categoryOptions.value = categories
 		if (selectedName.value) await loadDetail(selectedName.value)
 		const site = session.boot?.site
 		unsubscribers.push(
 			subscribe(site, 'whatsapp_core_message', appendMessage),
 			subscribe(site, 'whatsapp_core_message_status', updateMessageStatus),
+			subscribe(site, 'whatsapp_core_conversation_read', updateConversationReader),
 			subscribe(site, 'whatsapp_core_batch_committed', refreshCommittedBatch),
+			subscribeConnection(site, async (status) => {
+				if (status !== 'connected') return
+				if (!realtimeConnectedOnce) {
+					realtimeConnectedOnce = true
+					return
+				}
+				// Socket.IO does not replay events missed while a browser was offline.
+				// Reconcile from durable Core projections after every reconnect.
+				await loadRows({ silent: true })
+				if (selectedName.value) await loadDetail(selectedName.value, { silent: true })
+			}),
 		)
 	})
 	onBeforeUnmount(() => {
+		window.removeEventListener('keydown', handleGlobalKeydown)
+		rememberMessageScroll()
 		clearTimeout(messageSearchTimer)
+		stopTypingSession()
 		window.clearTimeout(batchRefreshTimer)
+		pendingBatchEvents = []
 		unsubscribers.forEach((unsubscribe) => unsubscribe())
 	})
 </script>
@@ -773,7 +1312,7 @@
 	<div class="inbox-page">
 		<header class="inbox-heading">
 			<div>
-				<div class="eyebrow">Site-wide WhatsApp</div>
+				<div class="eyebrow">Realtime WhatsApp</div>
 				<h1>Shared Inbox</h1>
 				<p>Instant local updates with durable delivery through the Go relay.</p>
 			</div>
@@ -792,12 +1331,28 @@
 			</div>
 		</header>
 
-		<section :class="['inbox-workbench', 'surface-card', { 'mobile-chat-open': detail }]">
+		<section
+			:class="[
+				'inbox-workbench',
+				'surface-card',
+				{ 'mobile-chat-open': detail, 'context-open': detail && contextOpen },
+			]"
+		>
 			<aside class="list-panel">
 				<label class="conversation-search">
 					<Search :size="16" />
 					<InputText v-model="search" placeholder="Search people or messages" />
 				</label>
+				<Select
+					v-model="category"
+					class="category-filter"
+					:options="categoryOptions"
+					option-label="category_name"
+					option-value="name"
+					placeholder="All message categories"
+					show-clear
+					aria-label="Filter conversations by message category"
+				/>
 				<div v-if="loading" class="list-skeleton" aria-label="Loading conversations">
 					<div v-for="index in 7" :key="index" class="conversation-skeleton">
 						<Skeleton shape="circle" size="42px" />
@@ -842,7 +1397,7 @@
 					<MessageSquarePlus :size="38" />
 					<strong>Select or start a conversation</strong>
 					<span
-						>Core works independently; no company-specific frontend is required.</span
+						>Core works independently; no business-specific frontend is required.</span
 					>
 				</div>
 				<template v-else>
@@ -865,17 +1420,29 @@
 								text
 								rounded
 								aria-label="Search this conversation"
-								@click="messageSearchOpen = !messageSearchOpen"
+								@click="toggleMessageSearch"
 							>
 								<Search :size="16" />
+							</Button>
+							<Button
+								text
+								rounded
+								:aria-label="
+									contextOpen
+										? 'Hide conversation details'
+										: 'Show conversation details'
+								"
+								@click="contextOpen = !contextOpen"
+							>
+								<PanelRight :size="16" />
 							</Button>
 						</div>
 					</header>
 					<div v-if="messageSearchOpen" class="message-search-bar">
 						<Search :size="15" />
 						<InputText
+							ref="messageSearchInput"
 							v-model="messageSearch"
-							autofocus
 							placeholder="Search messages in this conversation"
 						/>
 						<Button
@@ -888,7 +1455,7 @@
 						</Button>
 					</div>
 					<div ref="stream" class="message-stream" @scroll.passive="handleStreamScroll">
-						<div v-if="messageSearch.trim()" class="search-results">
+					<div v-if="messageSearch.trim() || category" class="search-results">
 							<div v-if="messageSearching" class="older-loading">Searching…</div>
 							<div v-else-if="!messageSearchRows.length" class="search-empty">
 								No matching messages
@@ -897,9 +1464,13 @@
 								v-for="message in messageSearchRows"
 								:key="message.name"
 								:message="message"
+								:message-index="providerMessageMap"
+								:contact-name="detail.display_name"
+								:readers="readersByMessage.get(message.name) || []"
 								@reply="selectReply"
-								@bookmark="toggleBookmark"
+								@quote="openQuotedMessage"
 								@retry="retryMessage"
+								@menu="openMessageMenu"
 							/>
 						</div>
 						<template v-else>
@@ -932,9 +1503,13 @@
 										v-for="message in topic.messageRows"
 										:key="message.name"
 										:message="message"
+										:message-index="providerMessageMap"
+										:contact-name="detail.display_name"
+										:readers="readersByMessage.get(message.name) || []"
 										@reply="selectReply"
-										@bookmark="toggleBookmark"
+										@quote="openQuotedMessage"
 										@retry="retryMessage"
+										@menu="openMessageMenu"
 									/>
 								</div>
 							</details>
@@ -946,13 +1521,26 @@
 									v-for="message in ungrouped"
 									:key="message.name"
 									:message="message"
+									:message-index="providerMessageMap"
+									:contact-name="detail.display_name"
+									:readers="readersByMessage.get(message.name) || []"
 									@reply="selectReply"
-									@bookmark="toggleBookmark"
+									@quote="openQuotedMessage"
 									@retry="retryMessage"
+									@menu="openMessageMenu"
 								/>
 							</div>
 						</template>
 					</div>
+					<button
+						v-if="hasUnseenMessages"
+						class="new-messages-button"
+						type="button"
+						@click="scrollToBottom"
+					>
+						<ArrowDown :size="15" />
+						New messages
+					</button>
 					<footer v-if="textReady" class="composer">
 						<div v-if="replyTo" class="reply-preview">
 							<span
@@ -983,8 +1571,8 @@
 							rows="1"
 							placeholder="Write a message"
 							@keydown.enter.exact.prevent="sendText"
-							@focus="showTyping"
-							@input="showTyping"
+							@input="noteTyping"
+							@blur="stopTypingSession"
 						/>
 						<Button :disabled="!draft.trim()" rounded @click="sendText">
 							<Send :size="18" />
@@ -999,36 +1587,46 @@
 								'The 24-hour service window is closed.'
 							}}</span>
 						</div>
-						<Select
-							:options="detail.templates"
-							option-label="template_name"
-							option-value="name"
-							placeholder="Send approved template"
-							@change="sendTemplate($event.value)"
+						<Button
+							label="Choose template"
+							:loading="richSending"
+							@click="templateDialog = true"
 						/>
 					</footer>
 				</template>
 			</main>
 
 			<ConversationContext
-				v-if="detail"
+				v-if="detail && contextOpen"
 				:data="detail"
 				:can-manage="canManage"
 				@status="updateStatus"
+				@refresh-summary="refreshContactSummary"
 			/>
-			<aside v-else class="context-placeholder"></aside>
 		</section>
 
+		<TemplateSendDialog
+			v-if="detail"
+			v-model:visible="templateDialog"
+			:templates="detail.templates"
+			:loading="richSending"
+			:initial-template="selectedTemplate"
+			@send="sendTemplate"
+		/>
+
 		<Dialog
+			ref="newDialogRef"
 			v-model:visible="newDialog"
 			modal
 			header="Start WhatsApp conversation"
 			class="new-chat-dialog"
+			@show="focusDialogControl(newDialogRef, '[role=combobox]')"
 		>
 			<div class="dialog-form">
 				<label
 					>Channel<Select
 						v-model="newChat.channel"
+						aria-label="WhatsApp channel"
 						:options="settings.channels.filter((item) => item.enabled)"
 						option-label="display_name"
 						option-value="name"
@@ -1076,15 +1674,18 @@
 		</Dialog>
 
 		<Dialog
+			ref="richDialogRef"
 			v-model:visible="richDialog"
 			modal
 			header="Send a WhatsApp message"
 			class="rich-dialog"
+			@show="focusDialogControl(richDialogRef, '[role=combobox]')"
 		>
 			<div class="dialog-form">
 				<label
 					>Type<Select
 						v-model="richForm.type"
+						aria-label="WhatsApp message type"
 						:options="richTypes"
 						option-label="label"
 						option-value="value"
@@ -1145,13 +1746,103 @@
 				<Button label="Queue message" :loading="richSending" @click="sendRich" />
 			</template>
 		</Dialog>
+
+		<Dialog
+			v-model:visible="messageInfoOpen"
+			modal
+			header="Message info"
+			class="message-info-dialog"
+		>
+			<div v-if="messageInfo" class="message-info-grid">
+				<div>
+					<span>Direction</span><strong>{{ messageInfo.direction || '—' }}</strong>
+				</div>
+				<div>
+					<span>Type</span><strong>{{ messageInfo.message_type || '—' }}</strong>
+				</div>
+				<div>
+					<span>Status</span><strong>{{ messageInfo.delivery_status || '—' }}</strong>
+				</div>
+				<div>
+					<span>Time</span>
+					<strong>{{ formatInfoTime(messageInfo.provider_timestamp) }}</strong>
+				</div>
+				<div v-if="messageInfo.direction === 'Outbound'">
+					<span>Sent by</span>
+					<strong>{{
+						messageInfo.sender_name || messageInfo.owner || 'Team member'
+					}}</strong>
+				</div>
+				<div class="message-info-id">
+					<span>WhatsApp message ID</span>
+					<strong>{{ messageInfo.provider_message_id || 'Pending assignment' }}</strong>
+				</div>
+			</div>
+			<template #footer>
+				<Button label="Close" @click="messageInfoOpen = false" />
+			</template>
+		</Dialog>
+
+		<Teleport to="body">
+			<div
+				v-if="messageMenu"
+				class="message-menu-layer"
+				role="presentation"
+				@click.self="closeMessageMenu"
+				@contextmenu.prevent
+			>
+				<div
+					class="message-action-menu"
+					role="menu"
+					aria-label="Message actions"
+					:style="{
+						left: `${messageMenuPosition.x}px`,
+						top: `${messageMenuPosition.y}px`,
+					}"
+				>
+					<div class="quick-reactions" aria-label="React to message">
+						<button
+							v-for="emoji in quickReactions"
+							:key="emoji"
+							type="button"
+							:aria-label="`React with ${emoji}`"
+							@click="reactToMessage(emoji)"
+						>
+							{{ emoji }}
+						</button>
+					</div>
+					<button
+						v-if="
+							messageMenu.provider_message_id &&
+							!messageMenu.provider_message_id.startsWith('local:')
+						"
+						type="button"
+						role="menuitem"
+						@click="replyFromMenu"
+					>
+						<Reply :size="17" /><span>Reply</span>
+					</button>
+					<button type="button" role="menuitem" @click="showMessageInfo">
+						<Info :size="17" /><span>Message info</span>
+					</button>
+					<button
+						v-if="isMediaMessage(messageMenu) && messageMenu.media_url"
+						type="button"
+						role="menuitem"
+						@click="downloadMedia()"
+					>
+						<Download :size="17" /><span>Download</span>
+					</button>
+				</div>
+			</div>
+		</Teleport>
 	</div>
 </template>
 
 <style scoped>
 	.inbox-page {
-		height: calc(100vh - 68px);
-		padding: 22px 26px 26px;
+		height: calc(100vh - 56px);
+		padding: 14px;
 		display: flex;
 		flex-direction: column;
 	}
@@ -1160,16 +1851,16 @@
 		align-items: flex-start;
 		justify-content: space-between;
 		gap: 18px;
-		margin-bottom: 16px;
+		margin-bottom: 10px;
 	}
 	.inbox-heading h1 {
 		margin: 3px 0 0;
-		font-size: 25px;
+		font-size: 21px;
 	}
 	.inbox-heading p {
 		margin: 4px 0 0;
-		color: #718078;
-		font-size: 11px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 	.heading-actions {
 		display: flex;
@@ -1179,33 +1870,48 @@
 		min-height: 0;
 		flex: 1;
 		display: grid;
-		grid-template-columns: minmax(260px, 30%) minmax(420px, 1fr) minmax(210px, 25%);
+		grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
 		overflow: hidden;
 	}
+	.inbox-workbench.context-open {
+		grid-template-columns: minmax(280px, 320px) minmax(0, 1fr) minmax(250px, 290px);
+	}
 	.list-panel,
+	.chat-panel {
+		position: relative;
+		min-width: 0;
+	}
 	.chat-panel {
 		min-height: 0;
 		display: flex;
 		flex-direction: column;
 	}
 	.list-panel {
-		border-right: 1px solid #e2e9e5;
+		min-height: 0;
+		display: grid;
+		grid-template-rows: auto auto minmax(0, 1fr);
+		overflow: hidden;
+		border-right: 1px solid var(--wa-border);
 	}
 	.conversation-search {
 		display: flex;
 		align-items: center;
 		gap: 8px;
 		padding: 11px 12px;
-		border-bottom: 1px solid #e2e9e5;
-		color: #819087;
-		background: #fbfcfb;
+		border-bottom: 1px solid var(--wa-border);
+		color: var(--wa-muted);
+		background: var(--wa-surface);
 	}
 	.conversation-search :deep(input) {
 		width: 100%;
 		border: 0;
 		box-shadow: none;
 		background: transparent;
-		font-size: 11px;
+		font-size: 13px;
+	}
+	.category-filter {
+		width: calc(100% - 20px);
+		margin: 8px 10px;
 	}
 	.list-skeleton {
 		padding: 3px 0;
@@ -1217,7 +1923,7 @@
 		align-items: center;
 		gap: 11px;
 		padding: 12px 14px;
-		border-bottom: 1px solid #edf1ef;
+		border-bottom: 1px solid var(--wa-border-soft);
 	}
 	.conversation-skeleton span {
 		display: grid;
@@ -1230,7 +1936,7 @@
 		flex-direction: column;
 		gap: 14px;
 		padding: 80px 22px 22px;
-		background: #f2f6f3;
+		background: var(--wa-surface-muted);
 	}
 	.detail-skeleton > :nth-child(2) {
 		align-self: flex-end;
@@ -1242,8 +1948,8 @@
 		place-content: center;
 		justify-items: center;
 		gap: 8px;
-		color: #7b8982;
-		font-size: 11px;
+		color: var(--wa-muted);
+		font-size: 13px;
 	}
 	.panel-error {
 		min-height: 240px;
@@ -1271,7 +1977,7 @@
 		color: var(--wa-danger);
 	}
 	.empty-chat strong {
-		color: #34443d;
+		color: var(--wa-text);
 		font-size: 13px;
 	}
 	.empty-chat span {
@@ -1285,15 +1991,15 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		border-bottom: 1px solid #e2e9e5;
-		background: #fbfcfb;
+		border-bottom: 1px solid var(--wa-border);
+		background: var(--wa-surface);
 	}
 	.mobile-back {
 		display: none;
 		padding: 5px;
 		border: 0;
 		background: transparent;
-		color: #45564e;
+		color: var(--wa-text);
 		cursor: pointer;
 	}
 	.chat-heading strong,
@@ -1311,9 +2017,9 @@
 	.message-search-bar {
 		gap: 8px;
 		padding: 7px 11px;
-		border-bottom: 1px solid #e2e9e5;
-		color: #718078;
-		background: #fff;
+		border-bottom: 1px solid var(--wa-border);
+		color: var(--wa-muted);
+		background: var(--wa-surface);
 	}
 	.message-search-bar :deep(input) {
 		min-width: 0;
@@ -1322,38 +2028,60 @@
 		box-shadow: none;
 	}
 	.chat-heading strong {
-		font-size: 12px;
+		font-size: 14px;
 	}
 	.chat-heading span {
 		margin-top: 3px;
-		color: #7a8981;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 11px;
 	}
 	.message-stream {
 		min-height: 0;
 		flex: 1;
 		padding: 18px;
+		overflow-x: hidden;
 		overflow-y: auto;
-		background-color: #f2f6f3;
-		background-image: radial-gradient(#dce8e1 0.7px, transparent 0.7px);
+		background-color: var(--wa-surface-muted);
+		background-image: radial-gradient(var(--wa-border) 0.65px, transparent 0.65px);
 		background-size: 14px 14px;
+	}
+	.new-messages-button {
+		position: absolute;
+		right: 18px;
+		bottom: 76px;
+		z-index: 3;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 7px 11px;
+		border: 1px solid color-mix(in srgb, var(--wa-green) 35%, var(--wa-border));
+		border-radius: 999px;
+		background: var(--wa-surface);
+		box-shadow: 0 6px 18px rgba(16, 35, 29, 0.16);
+		color: var(--wa-success);
+		font: inherit;
+		font-size: 12px;
+		font-weight: 700;
+		cursor: pointer;
 	}
 	.ungrouped,
 	.topic-messages,
 	.search-results {
+		min-width: 0;
 		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		gap: 8px;
 	}
 	.search-empty {
 		margin: auto;
 		padding: 20px;
-		color: #6d7d75;
+		color: var(--wa-muted);
 		font-size: 11px;
 	}
 	.section-label {
 		margin: 8px 0;
-		color: #6d7d75;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 		text-align: center;
 		text-transform: uppercase;
 	}
@@ -1364,19 +2092,19 @@
 		padding: 5px 10px;
 		border: 0;
 		border-radius: 999px;
-		color: #60726a;
-		background: rgba(255, 255, 255, 0.92);
+		color: var(--wa-muted);
+		background: color-mix(in srgb, var(--wa-surface) 92%, transparent);
 		font: inherit;
-		font-size: 9px;
+		font-size: 12px;
 	}
 	.older-button {
 		cursor: pointer;
 	}
 	.topic-group {
 		margin-bottom: 12px;
-		border: 1px solid #d7e4dd;
+		border: 1px solid var(--wa-border);
 		border-radius: 13px;
-		background: rgba(255, 255, 255, 0.94);
+		background: color-mix(in srgb, var(--wa-surface) 94%, transparent);
 	}
 	.topic-group summary {
 		padding: 11px 13px;
@@ -1391,8 +2119,8 @@
 	}
 	.topic-group small,
 	.topic-group em {
-		color: #17805f;
-		font-size: 8px;
+		color: var(--wa-success);
+		font-size: 12px;
 		font-style: normal;
 		text-transform: uppercase;
 	}
@@ -1402,12 +2130,12 @@
 	}
 	.topic-group p {
 		margin: 3px 0 0;
-		color: #6f7d76;
-		font-size: 9px;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 	.topic-messages {
 		padding: 12px;
-		border-top: 1px solid #e5ece8;
+		border-top: 1px solid var(--wa-border-soft);
 	}
 	.composer,
 	.template-gate {
@@ -1415,8 +2143,8 @@
 		display: flex;
 		align-items: center;
 		gap: 9px;
-		border-top: 1px solid #dfe7e2;
-		background: #fff;
+		border-top: 1px solid var(--wa-border);
+		background: var(--wa-surface);
 	}
 	.composer {
 		flex-wrap: wrap;
@@ -1427,9 +2155,9 @@
 		justify-content: space-between;
 		flex: 1 0 100%;
 		padding: 6px 9px;
-		border-left: 3px solid #168a62;
+		border-left: 3px solid var(--wa-success);
 		border-radius: 6px;
-		background: #edf8f3;
+		background: var(--wa-success-soft);
 		font-size: 11px;
 	}
 	.reply-preview span {
@@ -1444,12 +2172,13 @@
 		cursor: pointer;
 	}
 	.composer :deep(textarea) {
+		min-width: 0;
 		flex: 1;
 		max-height: 110px;
 	}
 	.template-gate {
-		color: #a56314;
-		background: #fff9ed;
+		color: var(--wa-warning);
+		background: var(--wa-warning-soft);
 	}
 	.template-gate div {
 		min-width: 0;
@@ -1460,15 +2189,12 @@
 		display: block;
 	}
 	.template-gate strong {
-		font-size: 10px;
+		font-size: 12px;
 	}
 	.template-gate span {
 		margin-top: 2px;
-		color: #927344;
-		font-size: 8px;
-	}
-	.context-placeholder {
-		background: #fbfcfb;
+		color: var(--wa-warning);
+		font-size: 12px;
 	}
 	.dialog-form {
 		width: min(480px, 80vw);
@@ -1478,32 +2204,136 @@
 	.dialog-form label {
 		display: grid;
 		gap: 6px;
-		color: #53635b;
-		font-size: 10px;
+		color: var(--wa-text);
+		font-size: 12px;
 		font-weight: 700;
 	}
 	.media-upload input[type='file'] {
 		padding: 8px;
-		border: 1px dashed #bdd0c6;
+		border: 1px dashed var(--wa-border);
 		border-radius: 8px;
-		background: #f7faf8;
+		background: var(--wa-surface-muted);
 	}
 	.dialog-form :deep(.p-select),
 	.dialog-form :deep(input) {
 		width: 100%;
 	}
-	@media (max-width: 1120px) {
-		.inbox-workbench {
-			grid-template-columns: minmax(250px, 34%) 1fr;
+	.message-menu-layer {
+		position: fixed;
+		inset: 0;
+		z-index: 12000;
+	}
+	.message-action-menu {
+		position: fixed;
+		width: 244px;
+		padding: 7px;
+		border: 1px solid var(--wa-border);
+		border-radius: 12px;
+		background: var(--wa-surface);
+		box-shadow: 0 12px 36px rgba(15, 23, 42, 0.2);
+		animation: message-menu-in 120ms ease-out;
+	}
+	.message-action-menu > button {
+		width: 100%;
+		min-height: 40px;
+		padding: 8px 10px;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		border: 0;
+		border-radius: 8px;
+		background: transparent;
+		color: var(--wa-text);
+		font: inherit;
+		font-size: 13px;
+		text-align: left;
+		cursor: pointer;
+	}
+	.message-action-menu > button:hover,
+	.message-action-menu > button:focus-visible {
+		outline: none;
+		background: var(--wa-surface-muted);
+	}
+	.message-action-menu .danger-action {
+		color: var(--wa-danger);
+	}
+	.quick-reactions {
+		padding: 5px 4px 9px;
+		display: grid;
+		grid-template-columns: repeat(6, 1fr);
+		gap: 2px;
+		border-bottom: 1px solid var(--wa-border-soft);
+		margin-bottom: 4px;
+	}
+	.quick-reactions button {
+		min-width: 0;
+		min-height: 34px;
+		padding: 2px;
+		border: 0;
+		border-radius: 8px;
+		background: transparent;
+		font-size: 19px;
+		cursor: pointer;
+		transition:
+			transform 100ms ease,
+			background 100ms ease;
+	}
+	.quick-reactions button:hover,
+	.quick-reactions button:focus-visible {
+		outline: none;
+		background: var(--wa-surface-muted);
+		transform: scale(1.12);
+	}
+	.message-info-grid {
+		width: min(470px, 78vw);
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 12px;
+	}
+	.message-info-grid > div {
+		min-width: 0;
+		padding: 11px;
+		border: 1px solid var(--wa-border-soft);
+		border-radius: 9px;
+		background: var(--wa-surface-muted);
+	}
+	.message-info-grid span,
+	.message-info-grid strong {
+		display: block;
+	}
+	.message-info-grid span {
+		margin-bottom: 4px;
+		color: var(--wa-muted);
+		font-size: 11px;
+	}
+	.message-info-grid strong {
+		overflow-wrap: anywhere;
+		font-size: 13px;
+	}
+	.message-info-id {
+		grid-column: 1 / -1;
+	}
+	@keyframes message-menu-in {
+		from {
+			opacity: 0;
+			transform: translateY(-4px) scale(0.98);
 		}
-		.inbox-workbench > :deep(.context-panel),
-		.context-placeholder {
+		to {
+			opacity: 1;
+			transform: translateY(0) scale(1);
+		}
+	}
+	@media (max-width: 1120px) {
+		.inbox-workbench.context-open {
+			grid-template-columns: minmax(250px, 320px) minmax(0, 1fr);
+		}
+		.inbox-workbench.context-open > :deep(.context-panel) {
 			display: none;
 		}
 	}
 	@media (max-width: 760px) {
 		.inbox-page {
-			height: calc(100dvh - 60px);
+			height: calc(100dvh - 56px);
 			padding: 0;
 		}
 		.inbox-workbench {
@@ -1517,6 +2347,35 @@
 		}
 		.mobile-chat-open .chat-panel {
 			display: flex;
+			width: 100%;
+			min-width: 0;
+		}
+		.chat-heading {
+			min-width: 0;
+			padding-inline: 10px;
+		}
+		.chat-heading > div:first-of-type {
+			min-width: 0;
+			overflow: hidden;
+		}
+		.chat-heading strong,
+		.chat-heading span {
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+		.chat-heading-actions {
+			flex: 0 0 auto;
+		}
+		.composer,
+		.template-gate {
+			min-width: 0;
+		}
+		.template-gate {
+			flex-wrap: wrap;
+		}
+		.template-gate :deep(.p-select) {
+			width: 100%;
 		}
 		.mobile-back {
 			display: inline-flex;
@@ -1529,10 +2388,54 @@
 			font-size: 20px;
 		}
 		.inbox-heading {
-			padding: 4px 2px 0;
+			min-height: 52px;
+			padding: 8px 12px 6px;
+			align-items: center;
+			margin-bottom: 0;
 		}
 		.dialog-form {
 			width: 100%;
+		}
+		.message-stream {
+			padding: 12px 9px;
+		}
+		.message-menu-layer {
+			background: rgba(15, 23, 42, 0.28);
+		}
+		.message-action-menu {
+			inset: auto 8px max(8px, env(safe-area-inset-bottom)) 8px !important;
+			width: auto;
+			padding: 9px;
+			border-radius: 16px;
+			animation-name: message-sheet-in;
+		}
+		.message-action-menu > button {
+			min-height: 46px;
+			font-size: 14px;
+		}
+		.quick-reactions {
+			padding: 5px 3px 10px;
+		}
+		.quick-reactions button {
+			min-height: 42px;
+			font-size: 22px;
+		}
+		.message-info-grid {
+			width: 100%;
+			grid-template-columns: 1fr;
+		}
+		.message-info-id {
+			grid-column: auto;
+		}
+	}
+	@keyframes message-sheet-in {
+		from {
+			opacity: 0;
+			transform: translateY(20px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
 		}
 	}
 </style>
