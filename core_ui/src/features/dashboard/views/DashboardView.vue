@@ -110,7 +110,6 @@
 		<div>
 			<div class="eyebrow">Operations workspace</div>
 			<h1>WhatsApp operations</h1>
-			<p>Operate conversations, campaigns and Meta-hosted customer experiences.</p>
 		</div>
 		<div class="heading-actions">
 			<Button
@@ -223,7 +222,6 @@
 					><div class="quick-icon"><component :is="action.icon" :size="20" /></div>
 					<div>
 						<strong>{{ action.title }}</strong>
-						<p>{{ action.text }}</p>
 					</div>
 					<ArrowRight :size="17"
 				/></RouterLink>

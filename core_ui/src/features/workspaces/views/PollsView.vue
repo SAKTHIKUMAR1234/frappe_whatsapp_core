@@ -11,6 +11,7 @@
 	import FlowResponseCard from '@/features/flows/components/FlowResponseCard.vue'
 	import { flowWorkspace } from '@/features/flows/services/flowService'
 	import { call, errorMessage } from '@/services/frappe'
+	import { formatDateTime } from '@/utils/datetime'
 
 	const router = useRouter()
 	const loading = ref(true)
@@ -130,7 +131,9 @@
 						/>
 					</template>
 				</Column>
-				<Column field="creation" header="Received" />
+				<Column field="creation" header="Received">
+					<template #body="{ data }">{{ formatDateTime(data.creation) }}</template>
+				</Column>
 				<Column header="Response">
 					<template #body="{ data }">
 						<FlowResponseCard

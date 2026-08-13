@@ -4,7 +4,7 @@
 	import Checkbox from 'primevue/checkbox'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
-	import Dialog from 'primevue/dialog'
+	import AppDialog from '@/components/AppDialog.vue'
 	import InputText from 'primevue/inputtext'
 	import Select from 'primevue/select'
 	import Tag from 'primevue/tag'
@@ -13,6 +13,7 @@
 	import { call, errorMessage, uploadFile } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
+	import { formatDateTime } from '@/utils/datetime'
 	import { focusDialogControl } from '@/utils/focus'
 
 	const session = useSessionStore(),
@@ -27,6 +28,7 @@
 	const settingsDialog = ref(null)
 	const actionDialog = ref(null)
 	const outreachDialog = ref(null)
+	const voicemailInput = ref(null)
 	const workspace = ref({
 		accounts: [],
 		calls: [],
@@ -304,16 +306,12 @@
 </script>
 
 <template>
-	<div class="page-heading">
+	<div class="page-heading calling-heading">
 		<div>
 			<div class="eyebrow">WhatsApp Business Calling API</div>
 			<h1>Calling</h1>
-			<p>
-				Manage permissions, Meta signaling and call lifecycle logs. Audio media uses your
-				configured WebRTC or SIP infrastructure.
-			</p>
 		</div>
-		<div class="actions">
+		<div class="actions calling-actions">
 			<Button
 				label="Call invitation"
 				icon="pi pi-send"
@@ -321,16 +319,22 @@
 				:disabled="!workspace.available"
 				@click="showOutreach = true"
 			/>
-			<label class="upload-button">
-				<input
-					type="file"
-					accept="audio/ogg,.ogg"
-					:disabled="!workspace.available"
-					@change="uploadVoicemail"
-				/>
-				<span class="pi pi-upload" />
-				{{ action === 'voicemail' ? 'Uploading…' : 'Voicemail audio' }}
-			</label>
+			<input
+				ref="voicemailInput"
+				class="voicemail-input"
+				type="file"
+				accept="audio/ogg,.ogg"
+				:disabled="!workspace.available"
+				@change="uploadVoicemail"
+			/>
+			<Button
+				label="Voicemail audio"
+				icon="pi pi-upload"
+				outlined
+				:disabled="!workspace.available"
+				:loading="action === 'voicemail'"
+				@click="voicemailInput?.click()"
+			/>
 			<Button
 				label="Settings"
 				icon="pi pi-cog"
@@ -415,7 +419,9 @@
 				<small>Current permission</small>
 				<strong>{{ permissionResult.status }}</strong>
 			</div>
-			<span v-if="permissionResult.expiresAt">Expires {{ permissionResult.expiresAt }}</span>
+			<span v-if="permissionResult.expiresAt"
+				>Expires {{ formatDateTime(permissionResult.expiresAt) }}</span
+			>
 		</div>
 		<DataTable
 			:value="workspace.calls || []"
@@ -428,10 +434,13 @@
 			/><Column field="remote_number" header="Remote party" /><Column
 				field="status"
 				header="Status"
-			/><Column field="started_at" header="Started" /><Column
-				field="ended_at"
-				header="Ended"
-			/><Column header="Artifacts"
+			/><Column field="started_at" header="Started"
+				><template #body="{ data }">{{
+					formatDateTime(data.started_at)
+				}}</template></Column
+			><Column field="ended_at" header="Ended"
+				><template #body="{ data }">{{ formatDateTime(data.ended_at) }}</template></Column
+			><Column header="Artifacts"
 				><template #body="{ data }"
 					><div class="artifact-actions">
 						<Button
@@ -465,7 +474,7 @@
 			></DataTable
 		>
 	</section>
-	<Dialog
+	<AppDialog
 		ref="settingsDialog"
 		v-model:visible="showSettings"
 		modal
@@ -511,8 +520,8 @@
 				label="Save settings"
 				:loading="action === 'settings'"
 				@click="saveSettings" /></template
-	></Dialog>
-	<Dialog
+	></AppDialog>
+	<AppDialog
 		ref="actionDialog"
 		v-model:visible="showAction"
 		modal
@@ -600,8 +609,8 @@
 					(['connect', 'pre_accept', 'accept'].includes(form.action) && !form.sdp.trim())
 				"
 				@click="executeAction" /></template
-	></Dialog>
-	<Dialog
+	></AppDialog>
+	<AppDialog
 		ref="outreachDialog"
 		v-model:visible="showOutreach"
 		modal
@@ -683,7 +692,7 @@
 				@click="sendOutreach"
 			/>
 		</template>
-	</Dialog>
+	</AppDialog>
 </template>
 <style scoped>
 	.panel {
@@ -707,6 +716,15 @@
 		gap: 10px;
 		align-items: center;
 		flex-wrap: wrap;
+	}
+	.calling-actions :deep(.p-button) {
+		min-height: 44px;
+		justify-content: center;
+		white-space: nowrap;
+	}
+	.calling-heading {
+		flex-direction: column;
+		gap: 14px;
 	}
 	.permission-card {
 		display: grid;
@@ -805,19 +823,7 @@
 		align-items: center;
 		flex-wrap: wrap;
 	}
-	.upload-button {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		min-height: 40px;
-		padding: 0 14px;
-		border: 1px solid var(--wa-border);
-		border-radius: 8px;
-		cursor: pointer;
-		font-size: 14px;
-		font-weight: 600;
-	}
-	.upload-button input {
+	.voicemail-input {
 		display: none;
 	}
 	.json-editor {

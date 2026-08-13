@@ -7,6 +7,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import now_datetime
 
+from frappe_whatsapp_core.conversation_reads import mark_messages_read
 from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS, manifest
 from frappe_whatsapp_core.message_media import (
 	cache_message_media_batch,
@@ -15,10 +16,13 @@ from frappe_whatsapp_core.message_media import (
 )
 from frappe_whatsapp_core.workspace_api import (
 	_outbound_handler,
+	add_team_member,
 	get_conversation,
 	list_conversations,
 	list_messages,
+	remove_team_member,
 	send_text,
+	team_member_page,
 	team_workspace,
 	upsert_team,
 )
@@ -43,10 +47,10 @@ class TestCoreRoleBoundary(FrappeTestCase):
 		self.assertEqual(boot["default_module"], "dashboard")
 		self.assertIn("campaigns", boot["modules"])
 		self.assertIn("flows", boot["modules"])
-		self.assertIn("automation-flows", boot["modules"])
+		self.assertNotIn("automation-flows", boot["modules"])
 		self.assertIn("ai-queue", boot["modules"])
 
-	def test_flow_user_sees_only_custom_flow_builder(self):
+	def test_flow_user_has_mcp_authoring_without_a_duplicate_visual_builder(self):
 		from frappe_whatsapp_core import frontend_api
 
 		with patch.object(frontend_api.frappe, "get_roles", return_value=["WhatsApp Flow User"]):
@@ -54,8 +58,8 @@ class TestCoreRoleBoundary(FrappeTestCase):
 		self.assertTrue(boot["authorized"])
 		self.assertTrue(boot["can_build_flows"])
 		self.assertFalse(boot["can_manage"])
-		self.assertEqual(boot["default_module"], "automation-flows")
-		self.assertEqual(boot["modules"], ["automation-flows"])
+		self.assertEqual(boot["default_module"], "access-denied")
+		self.assertEqual(boot["modules"], [])
 
 	def test_flow_user_mcp_manifest_stops_at_approval(self):
 		from frappe_whatsapp_core import mcp_tools
@@ -150,6 +154,17 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.conversation.save(ignore_permissions=True)
 
 	def test_conversation_and_message_pagination_contract(self):
+		# Provider callbacks can share both timestamp fields. The message name is
+		# the final stable keyset component and must prevent gaps between pages.
+		shared_creation = self.messages[0].creation
+		frappe.db.set_value(
+			"WhatsApp Core Message",
+			self.messages[1].name,
+			"creation",
+			shared_creation,
+			update_modified=False,
+		)
+		self.messages[1].creation = shared_creation
 		result = list_conversations(search=self.identity.display_value, limit=10)
 		self.assertTrue(
 			any(row.name == self.conversation.name for row in result["rows"])
@@ -165,6 +180,7 @@ class TestWorkspaceAPI(FrappeTestCase):
 			self.conversation.name,
 			before=page["next_before"],
 			before_creation=page["next_before_creation"],
+			before_name=page["next_before_name"],
 			limit=1,
 		)
 		self.assertEqual(older["rows"][0].body, "Message 0")
@@ -172,8 +188,67 @@ class TestWorkspaceAPI(FrappeTestCase):
 		from frappe_whatsapp_core.inbox import conversation
 
 		inbox_page = conversation(self.conversation.name, message_limit=1)
-		self.assertEqual(inbox_page["messages"][0].body, "Message 1")
-		self.assertTrue(inbox_page["message_page"]["has_more"])
+		self.assertEqual(inbox_page["messages"][0].body, "Message 0")
+		self.assertEqual(inbox_page["resume_message"], self.messages[0].name)
+		self.assertFalse(inbox_page["message_page"]["has_more"])
+		self.assertTrue(inbox_page["message_page"]["has_more_newer"])
+
+	@patch(
+		"frappe_whatsapp_core.conversation_reads._latest_inbound_provider_message",
+		return_value=None,
+	)
+	def test_exact_message_reads_are_idempotent_and_drive_unread_count(self, _latest):
+		first = mark_messages_read(
+			self.conversation.name,
+			[message.name for message in self.messages],
+		)
+		second = mark_messages_read(
+			self.conversation.name,
+			[message.name for message in self.messages],
+		)
+
+		self.assertEqual(first["processed"], 2)
+		self.assertEqual(first["recorded"], 2)
+		self.assertEqual(second["recorded"], 0)
+		page = list_messages(self.conversation.name, limit=20)
+		for message in page["rows"]:
+			self.assertIn(
+				frappe.session.user,
+				[reader["user"] for reader in message.read_by],
+			)
+		conversation_row = next(
+			row
+			for row in list_conversations(search=self.identity.display_value, limit=10)["rows"]
+			if row.name == self.conversation.name
+		)
+		self.assertEqual(conversation_row.unread_count, 0)
+
+	def test_inbound_reactions_do_not_inflate_unread_count(self):
+		frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": f"reaction-{frappe.generate_hash(length=8)}",
+			"conversation": self.conversation.name,
+			"channel": self.channel.name,
+			"provider_message_id": f"wamid.reaction.{frappe.generate_hash(length=8)}",
+			"direction": "Inbound",
+			"message_type": "reaction",
+			"body": "👍",
+			"content": json.dumps({
+				"reaction": {
+					"message_id": self.messages[0].provider_message_id,
+					"emoji": "👍",
+				},
+			}),
+			"provider_timestamp": now_datetime(),
+			"delivery_status": "Received",
+		}).insert(ignore_permissions=True)
+
+		conversation_row = next(
+			row
+			for row in list_conversations(search=self.identity.display_value, limit=10)["rows"]
+			if row.name == self.conversation.name
+		)
+		self.assertEqual(conversation_row.unread_count, 2)
 
 	def test_reply_includes_original_message_preview_outside_page(self):
 		reply = frappe.get_doc({
@@ -359,8 +434,16 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertEqual(team["icon"], "building-2")
 		workspace = team_workspace()
 		self.assertTrue(any(row["name"] == team["name"] for row in workspace["teams"]))
-		administrator = next(row for row in workspace["users"] if row["name"] == "Administrator")
-		self.assertTrue(administrator["label"])
+		self.assertEqual(workspace["users"], [])
+		self.assertEqual(workspace["contacts"], [])
+		page = team_member_page(team["name"], limit=1)
+		self.assertEqual(page["rows"][0]["user"], "Administrator")
+		upsert_team(team_name=team["name"], description="Metadata-only edit")
+		self.assertEqual(team_member_page(team["name"])["rows"][0]["user"], "Administrator")
+		remove_team_member(team["name"], "Administrator")
+		self.assertEqual(team_member_page(team["name"])["rows"], [])
+		add_team_member(team["name"], "Administrator", "Manager")
+		self.assertEqual(team_member_page(team["name"])["rows"][0]["team_role"], "Manager")
 
 		with patch(
 			"frappe_whatsapp_core.workspace_api._outbound_handler"

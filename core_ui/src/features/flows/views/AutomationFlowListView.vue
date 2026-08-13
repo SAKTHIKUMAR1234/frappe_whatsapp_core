@@ -4,7 +4,7 @@
 	import Button from 'primevue/button'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
-	import Dialog from 'primevue/dialog'
+	import AppDialog from '@/components/AppDialog.vue'
 	import InputText from 'primevue/inputtext'
 	import Skeleton from 'primevue/skeleton'
 	import Tag from 'primevue/tag'
@@ -15,6 +15,7 @@
 		listAutomationFlows,
 	} from '@/features/flows/services/automationFlowService'
 	import { errorMessage } from '@/services/frappe'
+	import { formatDateTime } from '@/utils/datetime'
 	import { focusDialogControl } from '@/utils/focus'
 
 	const router = useRouter()
@@ -97,7 +98,6 @@
 		<div>
 			<div class="eyebrow">Visual automation</div>
 			<h1>Flow Builder</h1>
-			<p>Build connected WhatsApp journeys, decisions and business actions visually.</p>
 		</div>
 		<Button label="Create flow" @click="dialog = true">
 			<template #icon><Plus :size="16" /></template>
@@ -148,7 +148,9 @@
 			<Column field="active_version" header="Active version">
 				<template #body="{ data }">{{ data.active_version || '—' }}</template>
 			</Column>
-			<Column field="modified" header="Last updated" />
+			<Column field="modified" header="Last updated">
+				<template #body="{ data }">{{ formatDateTime(data.modified) }}</template>
+			</Column>
 			<Column>
 				<template #body="{ data }">
 					<Button
@@ -171,7 +173,7 @@
 		</DataTable>
 	</section>
 
-	<Dialog
+	<AppDialog
 		ref="dialogRef"
 		v-model:visible="dialog"
 		modal
@@ -209,7 +211,7 @@
 				@click="createFlow"
 			/>
 		</template>
-	</Dialog>
+	</AppDialog>
 </template>
 
 <style scoped>

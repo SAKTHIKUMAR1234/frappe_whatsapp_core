@@ -98,6 +98,7 @@ class TestRichMessages(FrappeTestCase):
 			),
 		]
 		settings = MagicMock()
+		settings.relay_url = ""
 		settings.get_account_name.return_value = "Hub Account"
 		get_settings.return_value = settings
 		call_management.return_value = {"success": True, "media_id": "MEDIA-1"}
@@ -109,15 +110,21 @@ class TestRichMessages(FrappeTestCase):
 
 
 class TestProviderPresence(FrappeTestCase):
-	@patch("frappe_whatsapp_core.hub_client.call_management")
+	@patch("frappe_whatsapp_core.hub_client.send_raw")
 	@patch("frappe_whatsapp_core.hub_client.get_settings")
-	def test_read_and_typing_use_mapped_account(self, get_settings, call_management):
+	def test_read_and_typing_use_direct_relay_data_plane(self, get_settings, send_raw):
 		settings = MagicMock()
-		settings.get_account_name.return_value = "Hub Account"
+		settings.relay_url = "https://relay.example.test"
 		get_settings.return_value = settings
-		call_management.return_value = {"success": True}
+		send_raw.return_value = {
+			"accepted": True,
+			"result": {"success": True, "status": "queued"},
+		}
 
 		result = mark_message_read("Channel", "wamid.inbound", typing_indicator=True)
+
 		self.assertTrue(result["success"])
-		self.assertEqual(call_management.call_args.args[1]["account_name"], "Hub Account")
-		self.assertEqual(call_management.call_args.args[1]["typing_indicator"], 1)
+		payload = send_raw.call_args.args[1]
+		self.assertEqual(payload["status"], "read")
+		self.assertEqual(payload["typing_indicator"], {"type": "text"})
+		self.assertTrue(send_raw.call_args.args[2].startswith("typing:wamid.inbound:"))

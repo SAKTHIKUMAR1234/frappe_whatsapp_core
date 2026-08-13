@@ -18,6 +18,7 @@ from frappe_whatsapp_core.campaigns import (
 from frappe_whatsapp_core.materializer import materialize_status
 from frappe_whatsapp_core.outbound import queue_campaign_recipient, retry_queued_messages
 from frappe_whatsapp_core.template_catalog import sync_template_projection
+from frappe_whatsapp_core.frontend_api import campaign_recipient_page
 
 
 def blocked_campaign_preflight(_context):
@@ -113,6 +114,37 @@ class TestCampaigns(FrappeTestCase):
 			2,
 		)
 
+	def test_recipient_ledger_is_permission_checked_and_paginated(self):
+		prepare_campaign(self.campaign.name, [identity.name for identity in self.identities])
+		failed = frappe.get_all(
+			"WhatsApp Core Campaign Recipient",
+			filters={"campaign": self.campaign.name},
+			pluck="name",
+			order_by="creation desc",
+			limit_page_length=1,
+		)[0]
+		frappe.db.set_value(
+			"WhatsApp Core Campaign Recipient",
+			failed,
+			{"status": "Failed", "last_error": "provider rejected destination"},
+		)
+
+		page = campaign_recipient_page(self.campaign.name, limit=1)
+		self.assertEqual(page["total"], 2)
+		self.assertEqual(len(page["rows"]), 1)
+		self.assertTrue(page["has_more"])
+		self.assertEqual(page["counts"]["Failed"], 1)
+
+		filtered = campaign_recipient_page(
+			self.campaign.name,
+			search="rejected destination",
+			status="Failed",
+		)
+		self.assertEqual(filtered["total"], 1)
+		self.assertEqual(filtered["rows"][0].name, failed)
+		with self.assertRaises(frappe.ValidationError):
+			campaign_recipient_page(self.campaign.name, status="Unknown")
+
 	def test_send_authorization_is_separate_and_explicit(self):
 		prepare_campaign(
 			self.campaign.name,
@@ -189,6 +221,44 @@ class TestCampaigns(FrappeTestCase):
 			"Prepared",
 		)
 
+	def test_running_campaign_keeps_launch_template_snapshot(self):
+		prepare_campaign(self.campaign.name, [self.identities[0].name])
+		authorize_campaign(
+			self.campaign.name,
+			f"AUTHORIZE {self.campaign.campaign_key}",
+		)
+		with patch("frappe_whatsapp_core.campaigns.frappe.enqueue"):
+			launch_campaign(self.campaign.name)
+		campaign = frappe.get_doc("WhatsApp Core Campaign", self.campaign.name)
+		snapshot = frappe.parse_json(campaign.template_snapshot)
+		self.assertEqual(snapshot["body_text"], "Hello {{1}}")
+
+		template = frappe.get_doc("WhatsApp Core Template", self.template)
+		template.body_text = "Changed after launch {{1}}"
+		template.components = '[{"type":"BODY","text":"Changed after launch {{1}}"}]'
+		template.approval_status = "IN_REVIEW"
+		template.enabled = 0
+		template.save(ignore_permissions=True)
+
+		recipient = frappe.get_doc(
+			"WhatsApp Core Campaign Recipient",
+			{"campaign": campaign.name},
+		)
+		with (
+			patch(
+				"frappe_whatsapp_core.outbound.get_or_create_conversation",
+				return_value=SimpleNamespace(name="SNAPSHOT-CONVERSATION"),
+			),
+			patch(
+				"frappe_whatsapp_core.outbound.queue_template_internal",
+				return_value=SimpleNamespace(name="SNAPSHOT-MESSAGE"),
+			) as queue_template,
+		):
+			queue_campaign_recipient(campaign, recipient)
+		frozen = queue_template.call_args.kwargs["_template_doc"]
+		self.assertEqual(frozen.body_text, "Hello {{1}}")
+		self.assertEqual(frozen.approval_status, "APPROVED")
+
 	def test_campaign_worker_never_exceeds_relay_batch_limit(self):
 		self.campaign.status = "Running"
 		self.campaign.save(ignore_permissions=True)
@@ -199,6 +269,22 @@ class TestCampaigns(FrappeTestCase):
 		):
 			process_campaign_batch(self.campaign.name, batch_size=500)
 		self.assertEqual(get_all.call_args.kwargs["limit_page_length"], 40)
+
+	def test_campaign_worker_retries_complete_batch_after_deadlock(self):
+		with (
+			patch(
+				"frappe_whatsapp_core.campaigns._process_campaign_batch_once",
+				side_effect=[frappe.QueryDeadlockError("deadlock"), None],
+			) as process_once,
+			patch("frappe_whatsapp_core.campaigns.frappe.db.rollback") as rollback,
+			patch("frappe_whatsapp_core.campaigns.time.sleep") as sleep,
+			patch("frappe_whatsapp_core.campaigns.random.uniform", return_value=0),
+		):
+			process_campaign_batch(self.campaign.name)
+
+		self.assertEqual(process_once.call_count, 2)
+		rollback.assert_called_once_with()
+		sleep.assert_called_once()
 
 	def test_campaign_locks_are_sorted_before_recipient_updates(self):
 		with patch("frappe_whatsapp_core.campaigns.frappe.db.sql") as sql:

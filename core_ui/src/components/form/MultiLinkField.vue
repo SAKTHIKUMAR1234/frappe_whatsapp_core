@@ -15,17 +15,25 @@
 		maxSelectedLabels: { type: Number, default: 8 },
 	})
 	defineEmits(['update:modelValue', 'change'])
-	const available = ref([...props.options])
+	function normalizeOption(option) {
+		if (option && typeof option === 'object') return option
+		return {
+			[props.optionLabel]: String(option ?? ''),
+			[props.optionValue]: option,
+		}
+	}
+	const available = ref(props.options.map(normalizeOption))
 	const searching = ref(false)
 	const searchError = ref('')
 	let timer = null
 	let sequence = 0
 
 	function setOptions(rows) {
+		const normalizedRows = (rows || []).map(normalizeOption)
 		const selected = available.value.filter((option) =>
 			props.modelValue.includes(option?.[props.optionValue]),
 		)
-		available.value = [...selected, ...(rows || [])].filter(
+		available.value = [...selected, ...normalizedRows].filter(
 			(option, index, values) =>
 				values.findIndex(
 					(candidate) => candidate?.[props.optionValue] === option?.[props.optionValue],

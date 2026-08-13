@@ -1,5 +1,6 @@
 <script setup>
 	import { computed, onBeforeUnmount } from 'vue'
+	import Button from 'primevue/button'
 	import {
 		Check,
 		CheckCheck,
@@ -10,7 +11,9 @@
 		MoreVertical,
 	} from 'lucide-vue-next'
 	import FlowResponseCard from '@/features/flows/components/FlowResponseCard.vue'
+	import TemplateMessageCard from '@/features/inbox/components/TemplateMessageCard.vue'
 	import { flowReplyFromContent } from '@/features/flows/utils/flowResponse'
+	import { formatTime } from '@/utils/datetime'
 
 	const props = defineProps({
 		message: { type: Object, required: true },
@@ -78,6 +81,7 @@
 		return content.value.payload || content.value[type] || {}
 	})
 	const flowReply = computed(() => flowReplyFromContent(content.value))
+	const templateSnapshot = computed(() => content.value.template_snapshot || {})
 	const hasFlowResponse = computed(
 		() =>
 			props.message.message_type === 'interactive' &&
@@ -166,23 +170,15 @@
 		return [...groups.values()]
 	})
 
-	function formatTime(value) {
-		if (!value) return ''
-		const date = new Date(String(value).replace(' ', 'T'))
-		if (Number.isNaN(date.getTime())) return value
-		const pad = (part) => String(part).padStart(2, '0')
-		const period = date.getHours() >= 12 ? 'PM' : 'AM'
-		const hour = date.getHours() % 12 || 12
-		return `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ${pad(hour)}:${pad(date.getMinutes())}:${pad(date.getSeconds())} ${period}`
-	}
-
 	function readerInitials(reader) {
 		const label = String(reader.full_name || reader.user || '').trim()
-		return label
-			.split(/\s+/)
-			.slice(0, 2)
-			.map((part) => part.charAt(0).toUpperCase())
-			.join('') || '?'
+		return (
+			label
+				.split(/\s+/)
+				.slice(0, 2)
+				.map((part) => part.charAt(0).toUpperCase())
+				.join('') || '?'
+		)
 	}
 </script>
 
@@ -196,21 +192,21 @@
 		@pointerup="clearLongPress"
 		@pointercancel="clearLongPress"
 	>
-		<button
+		<Button
 			class="message-menu-trigger"
-			type="button"
+			unstyled
 			aria-label="Message actions"
 			@click="openMenu"
 		>
 			<MoreVertical :size="15" />
-		</button>
+		</Button>
 		<div v-if="message.direction === 'Outbound'" class="message-sender">
 			{{ message.sender_name || message.owner || 'Team member' }}
 		</div>
-		<button
+		<Button
 			v-if="quotedMessageId"
 			class="quoted-message"
-			type="button"
+			unstyled
 			:disabled="!quotedMessage"
 			:aria-label="`Open replied message from ${quotedSender}`"
 			@click.stop="quotedMessage && emit('quote', quotedMessage)"
@@ -225,8 +221,11 @@
 				:alt="quotedBody"
 				class="quoted-thumbnail"
 			/>
-		</button>
-		<small v-if="message.message_type !== 'text' && !hasFlowResponse" class="message-kind">
+		</Button>
+		<small
+			v-if="!['text', 'template'].includes(message.message_type) && !hasFlowResponse"
+			class="message-kind"
+		>
 			{{ message.message_type?.replaceAll('_', ' ') }}
 		</small>
 		<img
@@ -275,6 +274,13 @@
 			:subtitle="flowReply.body"
 			status="Submitted"
 		/>
+		<TemplateMessageCard
+			v-else-if="message.message_type === 'template'"
+			:snapshot="templateSnapshot"
+			:fallback="message.body"
+			:media-url="mediaUrl"
+			:media-type="richContent.mime_type"
+		/>
 		<p v-else>{{ message.body || 'Media or interactive message' }}</p>
 		<div v-if="message.ai_insight?.categories?.length" class="message-categories">
 			<span
@@ -305,31 +311,31 @@
 		</div>
 		<footer>
 			<time>{{ formatTime(message.provider_timestamp) }}</time>
-			<button
+			<Button
 				v-if="
 					message.direction === 'Outbound' &&
 					message.delivery_status === 'Failed' &&
 					message.message_type === 'text'
 				"
 				class="reply-button retry-button"
-				type="button"
+				unstyled
 				aria-label="Retry message"
 				@click="$emit('retry', message)"
 			>
 				<RefreshCw :size="13" />
-			</button>
-			<button
+			</Button>
+			<Button
 				v-if="
 					message.provider_message_id &&
 					!message.provider_message_id.startsWith('local:')
 				"
 				class="reply-button"
-				type="button"
+				unstyled
 				aria-label="Reply to message"
 				@click="$emit('reply', message)"
 			>
 				<Reply :size="13" />
-			</button>
+			</Button>
 			<span
 				v-if="message.direction === 'Outbound'"
 				:class="['delivery-mark', message.delivery_status?.toLowerCase()]"
@@ -360,11 +366,12 @@
 		min-width: 0;
 		max-width: min(72%, 620px);
 		overflow-wrap: anywhere;
-		padding: 10px 12px 7px;
-		border: 1px solid var(--wa-border);
-		border-radius: 14px 14px 14px 4px;
+		padding: 7px 36px 5px 9px;
+		border: 0;
+		border-radius: 8px 8px 8px 2px;
 		background: var(--wa-message-in);
-		box-shadow: 0 2px 8px rgba(16, 35, 29, 0.05);
+		box-shadow: 0 1px 1px rgba(11, 20, 26, 0.16);
+		animation: message-enter 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
 	}
 	.message-menu-trigger {
 		position: absolute;
@@ -398,8 +405,7 @@
 	}
 	.message-bubble.outbound {
 		justify-self: end;
-		border-color: color-mix(in srgb, var(--wa-green) 35%, var(--wa-border));
-		border-radius: 14px 14px 4px 14px;
+		border-radius: 8px 8px 2px 8px;
 		background: var(--wa-message-out);
 	}
 	.message-insight {
@@ -536,8 +542,8 @@
 	p {
 		margin: 0;
 		white-space: pre-wrap;
-		font-size: 13px;
-		line-height: 1.5;
+		font-size: 14.2px;
+		line-height: 1.42;
 	}
 	.message-reactions {
 		position: absolute;
@@ -585,7 +591,7 @@
 		gap: 8px;
 		margin-top: 5px;
 		color: var(--wa-muted);
-		font-size: 12px;
+		font-size: 11px;
 	}
 	footer span {
 		display: inline-flex;
@@ -647,6 +653,16 @@
 	.retry-button {
 		color: var(--wa-danger);
 	}
+	@keyframes message-enter {
+		from {
+			opacity: 0;
+			transform: translateY(5px) scale(0.995);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0) scale(1);
+		}
+	}
 	@media (hover: none), (max-width: 760px) {
 		.message-menu-trigger {
 			opacity: 1;
@@ -655,7 +671,7 @@
 	@media (max-width: 760px) {
 		.message-bubble {
 			max-width: 91%;
-			padding: 9px 11px 7px;
+			padding: 9px 38px 7px 11px;
 		}
 		.message-media {
 			width: 100%;

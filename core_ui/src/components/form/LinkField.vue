@@ -1,6 +1,8 @@
 <script setup>
-	import { onBeforeUnmount, ref, watch } from 'vue'
-	import Select from 'primevue/select'
+	import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+	import AutoComplete from 'primevue/autocomplete'
+
+	defineOptions({ inheritAttrs: false })
 
 	const props = defineProps({
 		modelValue: { type: String, default: '' },
@@ -14,91 +16,210 @@
 		searchDebounceMs: { type: Number, default: 250 },
 		filterFields: { type: Array, default: () => ['label', 'value', 'description'] },
 	})
-	defineEmits(['update:modelValue', 'change'])
-	const available = ref([...props.options])
+	const emit = defineEmits(['update:modelValue', 'change'])
+	const autocompleteRef = ref(null)
+	const query = ref('')
+	const suggestions = ref([])
+	const selected = ref(null)
 	const searching = ref(false)
 	const searchError = ref('')
+	const focused = ref(false)
 	let timer = null
 	let sequence = 0
+	let blurTimer = null
 
-	function selectedOption() {
-		return available.value.find((option) => option?.[props.optionValue] === props.modelValue)
+	function optionValue(option) {
+		return option?.[props.optionValue]
 	}
-	function setOptions(rows) {
-		const selected = selectedOption()
-		available.value = [...(selected ? [selected] : []), ...(rows || [])].filter(
-			(option, index, values) =>
-				values.findIndex(
-					(candidate) => candidate?.[props.optionValue] === option?.[props.optionValue],
-				) === index,
+
+	function displayLabel(option) {
+		return option?.[props.optionLabel] || optionValue(option) || ''
+	}
+
+	function selectedOption(rows = props.options) {
+		return (rows || []).find((option) => optionValue(option) === props.modelValue)
+	}
+
+	function restoreCommittedValue() {
+		const option = selected.value || selectedOption(suggestions.value) || selectedOption()
+		query.value = option || props.modelValue || ''
+	}
+
+	function localOptions(searchQuery) {
+		const normalized = searchQuery.toLocaleLowerCase()
+		if (!normalized) return [...props.options]
+		const fields = new Set([props.optionLabel, props.optionValue, ...props.filterFields])
+		return props.options.filter((option) =>
+			[...fields].some((field) =>
+				String(option?.[field] || '')
+					.toLocaleLowerCase()
+					.includes(normalized),
+			),
 		)
 	}
-	function filterOptions(event) {
+
+	function complete(event) {
 		window.clearTimeout(timer)
-		const query = String(event.value || '').trim()
-		if (!query || !props.search) {
-			sequence += 1
-			searching.value = false
-			searchError.value = ''
-			setOptions(props.options)
+		const searchQuery = String(event?.query || '').trim()
+		const request = ++sequence
+		searchError.value = ''
+		if (!props.search) {
+			suggestions.value = localOptions(searchQuery)
 			return
 		}
-		const request = ++sequence
 		searching.value = true
-		searchError.value = ''
-		timer = window.setTimeout(async () => {
-			try {
-				const rows = await props.search(query)
-				if (request === sequence) setOptions(rows)
-			} catch {
-				if (request === sequence) searchError.value = 'Search is temporarily unavailable.'
-			} finally {
-				if (request === sequence) searching.value = false
-			}
-		}, props.searchDebounceMs)
+		timer = window.setTimeout(
+			async () => {
+				try {
+					const rows = await props.search(searchQuery)
+					if (request === sequence && focused.value) suggestions.value = rows || []
+				} catch {
+					if (request === sequence)
+						searchError.value = 'Search is temporarily unavailable.'
+				} finally {
+					if (request === sequence) searching.value = false
+				}
+			},
+			searchQuery ? props.searchDebounceMs : 0,
+		)
 	}
+
+	function selectOption(event) {
+		window.clearTimeout(blurTimer)
+		selected.value = event.value || null
+		query.value = selected.value || ''
+		emit('update:modelValue', optionValue(selected.value) || '')
+		emit('change', selected.value)
+		nextTick(() => focus())
+	}
+
+	function updateQuery(value) {
+		if (value && typeof value === 'object') {
+			selected.value = value
+			query.value = value
+			return
+		}
+		if (value == null) {
+			if (props.modelValue) restoreCommittedValue()
+			else query.value = ''
+			return
+		}
+		query.value = String(value)
+	}
+
+	function clear() {
+		selected.value = null
+		query.value = ''
+		emit('update:modelValue', '')
+		emit('change', null)
+	}
+
+	function open(event) {
+		if (props.disabled || autocompleteRef.value?.overlayVisible) return
+		const visibleQuery = typeof query.value === 'string' ? query.value : ''
+		autocompleteRef.value?.search?.(event, visibleQuery, 'click')
+	}
+
+	function optionMouseDown(event, option) {
+		if (props.disabled || event.button !== 0) return
+		autocompleteRef.value?.onOptionSelect?.(event, option)
+		autocompleteRef.value?.hide?.(true)
+	}
+
+	function focus() {
+		const root = autocompleteRef.value?.$el
+		;(root?.querySelector?.('input') || root)?.focus?.()
+	}
+
+	function onFocus() {
+		window.clearTimeout(blurTimer)
+		focused.value = true
+	}
+
+	function onBlur() {
+		focused.value = false
+		sequence += 1
+		window.clearTimeout(timer)
+		blurTimer = window.setTimeout(() => {
+			suggestions.value = []
+			searching.value = false
+			autocompleteRef.value?.hide?.()
+		}, 150)
+	}
+
 	watch(
-		() => props.options,
-		(rows) => setOptions(rows),
-		{ deep: true },
+		() => [props.modelValue, props.options],
+		() => {
+			if (!props.modelValue) {
+				selected.value = null
+				query.value = ''
+				return
+			}
+			const option = selectedOption(suggestions.value) || selectedOption()
+			selected.value = option || null
+			query.value = option || props.modelValue
+		},
+		{ immediate: true, deep: true },
 	)
-	onBeforeUnmount(() => window.clearTimeout(timer))
+
+	onBeforeUnmount(() => {
+		window.clearTimeout(timer)
+		window.clearTimeout(blurTimer)
+	})
+
+	defineExpose({ focus })
 </script>
 
 <template>
-	<Select
-		:model-value="modelValue"
-		:options="available"
-		:option-label="optionLabel"
-		:option-value="optionValue"
-		filter
-		:loading="searching"
-		:filter-fields="filterFields"
-		:show-clear="showClear"
+	<AutoComplete
+		v-bind="$attrs"
+		ref="autocompleteRef"
+		:model-value="query"
+		:suggestions="suggestions"
+		:option-label="props.optionLabel"
 		:placeholder="placeholder"
 		:disabled="disabled"
-		class="core-link-field"
+		:show-clear="showClear"
+		:loading="searching"
+		:min-length="0"
+		:complete-on-focus="false"
+		:auto-option-focus="true"
+		force-selection
 		fluid
-		@filter="filterOptions"
-		@update:model-value="$emit('update:modelValue', $event)"
-		@change="$emit('change', $event)"
+		class="core-link-field"
+		@complete="complete"
+		@item-select="selectOption"
+		@update:model-value="updateQuery"
+		@clear="clear"
+		@focus="onFocus"
+		@click="open"
+		@blur="onBlur"
 	>
 		<template #option="{ option }">
-			<div class="core-link-field__option">
-				<strong>{{ option[optionLabel] }}</strong>
+			<div
+				class="core-link-field__option"
+				@mousedown.left.prevent.stop="optionMouseDown($event, option)"
+				@click.prevent.stop
+			>
+				<strong>{{ displayLabel(option) }}</strong>
 				<small v-if="option.description">{{ option.description }}</small>
 			</div>
 		</template>
 		<template #empty>
-			<div class="core-link-field__empty">{{ searchError || 'No matching records.' }}</div>
+			<div class="core-link-field__empty">
+				{{ searchError || 'No matching records.' }}
+			</div>
 		</template>
-	</Select>
+	</AutoComplete>
 </template>
 
 <style scoped>
 	.core-link-field {
 		width: 100%;
 		min-width: 0;
+	}
+	.core-link-field :deep(input) {
+		width: 100%;
 	}
 	.core-link-field__option {
 		display: grid;

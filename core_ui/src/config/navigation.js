@@ -1,15 +1,12 @@
 import {
 	Activity,
 	Bot,
-	GitBranch,
 	PhoneCall,
 	MessagesSquare,
 	LayoutDashboard,
 	Megaphone,
 	MessageCircleMore,
 	MessageSquareText,
-	PlugZap,
-	Settings,
 	ShieldCheck,
 	UsersRound,
 } from 'lucide-vue-next'
@@ -40,22 +37,9 @@ export const navigation = [
 			},
 			{ label: 'Bulk Messaging', route: 'campaigns', module: 'campaigns', icon: Megaphone },
 			{ label: 'AI Queue', route: 'ai-queue', module: 'ai-queue', icon: Bot },
-			{ label: 'Forms & Surveys', route: 'polls', module: 'polls', icon: Activity },
 			{ label: 'Groups', route: 'groups', module: 'groups', icon: MessagesSquare },
 			{ label: 'Calling', route: 'calling', module: 'calling', icon: PhoneCall },
-		],
-	},
-	{
-		label: 'Automate',
-		items: [
-			{
-				label: 'Flow Builder',
-				route: 'automation-flows',
-				module: 'automation-flows',
-				icon: GitBranch,
-			},
 			{ label: 'Meta Flows', route: 'flows', module: 'flows', icon: Activity },
-			{ label: 'Connectors', route: 'connectors', module: 'connectors', icon: PlugZap },
 		],
 	},
 	{
@@ -63,7 +47,6 @@ export const navigation = [
 		items: [
 			{ label: 'Teams', route: 'teams', module: 'teams', icon: UsersRound },
 			{ label: 'Audit & Health', route: 'health', module: 'health', icon: ShieldCheck },
-			{ label: 'Settings', route: 'settings', module: 'settings', icon: Settings },
 		],
 	},
 ]

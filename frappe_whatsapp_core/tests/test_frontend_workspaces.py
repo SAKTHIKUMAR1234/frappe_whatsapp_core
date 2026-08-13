@@ -10,6 +10,7 @@ from frappe.utils import now_datetime
 from frappe_whatsapp_core.frontend_api import (
 	_validated_hub_account_mappings,
 	ai_queue_workspace,
+	bootstrap,
 	classify_messages,
 	connectors_workspace,
 	contact_source_doctypes,
@@ -129,6 +130,28 @@ class TestFrontendWorkspaces(FrappeTestCase):
 				"failed_messages",
 			},
 		)
+
+	def test_operational_manager_cannot_read_backend_configuration(self):
+		email = f"whatsapp-manager-{self.suffix}@example.com"
+		user = frappe.get_doc({
+			"doctype": "User",
+			"email": email,
+			"first_name": "WhatsApp Manager",
+			"enabled": 1,
+			"send_welcome_email": 0,
+		}).insert(ignore_permissions=True)
+		user.add_roles("WhatsApp Manager")
+		frappe.set_user(user.name)
+		with self.assertRaises(frappe.PermissionError):
+			settings_workspace()
+		frappe.set_user("Administrator")
+
+	def test_bootstrap_exposes_operations_not_configuration_builders(self):
+		boot = bootstrap()
+		self.assertTrue({"inbox", "templates", "campaigns", "groups", "calling"} <= set(boot["modules"]))
+		self.assertFalse(
+			{"settings", "connectors", "polls", "automation-flows"} & set(boot["modules"])
+		)
 		settings = settings_workspace()
 		self.assertEqual(settings["site"], frappe.local.site)
 		self.assertIn("ai_summary", settings)
@@ -142,6 +165,45 @@ class TestFrontendWorkspaces(FrappeTestCase):
 				"messages",
 			},
 		)
+
+	def test_shared_fields_and_dialogs_are_used_instead_of_runtime_primevue_variants(self):
+		ui_root = Path(__file__).resolve().parents[2] / "core_ui" / "src"
+		vue_files = list(ui_root.rglob("*.vue"))
+		allowed = {
+			ui_root / "components" / "AppDialog.vue",
+			ui_root / "components" / "form" / "LinkField.vue",
+			ui_root / "components" / "form" / "MultiLinkField.vue",
+		}
+		violations = []
+		for path in vue_files:
+			if path in allowed:
+				continue
+			content = path.read_text()
+			for import_path in (
+				"primevue/dialog",
+				"primevue/autocomplete",
+				"primevue/multiselect",
+			):
+				if import_path in content:
+					violations.append(f"{path.relative_to(ui_root)} imports {import_path}")
+		self.assertEqual(violations, [])
+
+	def test_inbox_marks_only_the_settled_visible_message_window(self):
+		inbox = (
+			Path(__file__).resolve().parents[2]
+			/ "core_ui"
+			/ "src"
+			/ "features"
+			/ "inbox"
+			/ "views"
+			/ "InboxView.vue"
+		).read_text()
+		self.assertIn("pendingReadMessages.set(conversation, visibleNames)", inbox)
+		self.assertIn("window.setTimeout(flushReadBatch, 400)", inbox)
+		self.assertIn("document.visibilityState !== 'visible'", inbox)
+		self.assertIn("async function loadLatestMessages()", inbox)
+		self.assertIn("'Scroll to bottom'", inbox)
+		self.assertNotIn("row.unread_count = 0", inbox)
 
 	def test_ai_summary_settings_require_a_frappe_tools_action(self):
 		with self.assertRaises(frappe.ValidationError):

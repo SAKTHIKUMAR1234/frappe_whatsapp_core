@@ -5,9 +5,10 @@
 	import DataTable from 'primevue/datatable'
 	import Skeleton from 'primevue/skeleton'
 	import Tag from 'primevue/tag'
-	import { BadgeCheck, Ban, MessageSquareText, RefreshCw } from 'lucide-vue-next'
+	import { BadgeCheck, Ban, MessageSquareText, Pencil, Plus, RefreshCw } from 'lucide-vue-next'
 
 	import AsyncState from '@/components/AsyncState.vue'
+	import TemplateEditorDialog from '@/features/templates/components/TemplateEditorDialog.vue'
 	import { call, errorMessage } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
@@ -18,6 +19,8 @@
 	let loadSequence = 0
 	const loading = ref(true)
 	const loadError = ref('')
+	const editorVisible = ref(false)
+	const selectedTemplate = ref(null)
 	const catalog = ref({
 		templates: [],
 		metrics: {},
@@ -46,6 +49,19 @@
 		return 'secondary'
 	}
 
+	function openEditor(template = null) {
+		selectedTemplate.value = template
+		editorVisible.value = true
+	}
+
+	function canEdit(template) {
+		return ['DRAFT', 'APPROVED', 'REJECTED'].includes(template.approval_status)
+	}
+
+	function templateSaved() {
+		load({ silent: true })
+	}
+
 	onMounted(() => {
 		load()
 		unsubscribeTemplate = subscribe(session.boot?.site, 'whatsapp_core_template', () => {
@@ -65,9 +81,14 @@
 		<div>
 			<h1>Available Templates</h1>
 		</div>
-		<Button label="Refresh view" outlined @click="load">
-			<template #icon><RefreshCw :size="16" /></template>
-		</Button>
+		<div class="heading-actions">
+			<Button label="Refresh view" outlined @click="load">
+				<template #icon><RefreshCw :size="16" /></template>
+			</Button>
+			<Button label="Create template" @click="openEditor()">
+				<template #icon><Plus :size="16" /></template>
+			</Button>
+		</div>
 	</div>
 	<AsyncState v-if="loadError" :error="loadError" @retry="load" />
 	<template v-else>
@@ -136,6 +157,14 @@
 						/>
 					</template>
 				</Column>
+				<Column header="Actions">
+					<template #body="{ data }">
+						<Button v-if="canEdit(data)" label="Edit" text @click="openEditor(data)">
+							<template #icon><Pencil :size="15" /></template>
+						</Button>
+						<span v-else class="pending-copy">Await Meta review</span>
+					</template>
+				</Column>
 				<template #empty>
 					<div class="empty">
 						<MessageSquareText :size="30" />
@@ -146,6 +175,11 @@
 			</DataTable>
 		</section>
 	</template>
+	<TemplateEditorDialog
+		v-model="editorVisible"
+		:template="selectedTemplate"
+		@saved="templateSaved"
+	/>
 </template>
 
 <style scoped>
@@ -181,6 +215,17 @@
 		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 14px;
 		margin-bottom: 16px;
+	}
+
+	.heading-actions {
+		display: flex;
+		align-items: center;
+		gap: 9px;
+	}
+
+	.pending-copy {
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 
 	.summary-grid article {
@@ -276,6 +321,15 @@
 	@media (max-width: 850px) {
 		.summary-grid {
 			grid-template-columns: 1fr;
+		}
+
+		.heading-actions {
+			width: 100%;
+		}
+
+		.heading-actions :deep(.p-button) {
+			min-height: 44px;
+			flex: 1;
 		}
 	}
 </style>

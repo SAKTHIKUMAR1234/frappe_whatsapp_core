@@ -23,7 +23,7 @@ from frappe.utils.file_manager import save_file
 from frappe_whatsapp_core.hub_client import call_management, get_settings
 from frappe_whatsapp_core.permissions import require_core_access
 
-MEDIA_MESSAGE_TYPES = {"audio", "document", "image", "sticker", "video"}
+MEDIA_MESSAGE_TYPES = {"audio", "document", "image", "sticker", "template", "video"}
 MEDIA_METHOD = "frappe_whatsapp_core.message_media.download_message_media"
 HUB_DOWNLOAD_METHOD = (
 	"frappe_whatsapp_integration.frappe_whatsapp_hub.api.media.download_media"

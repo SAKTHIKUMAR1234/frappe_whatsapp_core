@@ -29,7 +29,9 @@ from frappe_whatsapp_core.permissions import (
 	CORE_APP_ROLES,
 	FLOW_BUILDER_ROLES,
 	require_core_access,
+	require_document_permission,
 	require_flow_builder_access,
+	require_system_manager,
 )
 from frappe_whatsapp_core.topics import unclassified_messages, upsert_topic
 from frappe_whatsapp_core.ai_summaries import (
@@ -57,21 +59,15 @@ def bootstrap():
 			"templates",
 			"campaigns",
 			"ai-queue",
-			"polls",
-			"automation-flows",
 			"flows",
 			"groups",
 			"calling",
-			"connectors",
 			"health",
-			"settings",
 			"teams",
 		]
 	else:
 		if can_use_inbox:
 			modules.append("inbox")
-		if can_build_flows:
-			modules.append("automation-flows")
 	return {
 		"authenticated": True,
 		"authorized": authorized,
@@ -88,8 +84,6 @@ def bootstrap():
 			if can_manage
 			else "inbox"
 			if can_use_inbox
-			else "automation-flows"
-			if can_build_flows
 			else "access-denied"
 		),
 		"modules": modules,
@@ -118,6 +112,23 @@ def dashboard():
 def search_contact_options(search=None, limit=50):
 	"""Frappe-style remote contact lookup without loading the whole address book."""
 	return contact_options(limit=limit, search=search)
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def new_conversation_options():
+	"""Return only the operational records needed to start a conversation."""
+	return {
+		"channels": frappe.get_list(
+			"WhatsApp Core Channel",
+			filters={"enabled": 1},
+			fields=["name", "display_name", "phone_number_id"],
+			order_by="display_name asc",
+			limit_page_length=100,
+		),
+		"templates": template_catalog()["templates"],
+		"contacts": contact_options(limit=50),
+	}
 
 
 @frappe.whitelist()
@@ -210,9 +221,153 @@ def campaign_workspace():
 
 
 @frappe.whitelist()
+@require_core_access(manage=True)
+@require_document_permission(
+	"WhatsApp Core Campaign", "read", name_argument="campaign_name"
+)
+def campaign_recipient_page(
+	campaign_name: str,
+	search: str | None = None,
+	status: str | None = None,
+	limit: int = 50,
+	offset: int = 0,
+):
+	"""Return one bounded recipient ledger page for an operational campaign view."""
+	if not frappe.get_list(
+		"WhatsApp Core Campaign",
+		filters={"name": campaign_name},
+		fields=["name"],
+		limit_page_length=1,
+	):
+		frappe.throw("Campaign not found", frappe.DoesNotExistError)
+
+	limit = max(1, min(cint(limit), 100))
+	offset = max(0, cint(offset))
+	status = (status or "").strip()
+	valid_statuses = {"Prepared", "Queued", "Sent", "Delivered", "Read", "Failed", "Skipped"}
+	if status and status not in valid_statuses:
+		frappe.throw("Invalid recipient status", frappe.ValidationError)
+
+	filters = {"campaign": campaign_name}
+	if status:
+		filters["status"] = status
+	search = (search or "").strip()
+	or_filters = None
+	if search:
+		pattern = f"%{search[:120]}%"
+		identity_names = frappe.get_list(
+			"WhatsApp Core Identity",
+			or_filters={
+				"name": ["like", pattern],
+				"display_value": ["like", pattern],
+				"normalized_value": ["like", pattern],
+			},
+			pluck="name",
+			limit_page_length=100,
+		)
+		or_filters = [
+			["WhatsApp Core Campaign Recipient", "identity", "in", identity_names or ["__none__"]],
+			["WhatsApp Core Campaign Recipient", "last_error", "like", pattern],
+		]
+
+	rows = frappe.get_list(
+		"WhatsApp Core Campaign Recipient",
+		filters=filters,
+		or_filters=or_filters,
+		fields=[
+			"name",
+			"identity",
+			"status",
+			"attempts",
+			"last_error",
+			"queued_at",
+			"completed_at",
+			"core_message",
+		],
+		order_by="creation desc, name desc",
+		limit_start=offset,
+		limit_page_length=limit + 1,
+	)
+	has_more = len(rows) > limit
+	rows = rows[:limit]
+	total_row = frappe.get_list(
+		"WhatsApp Core Campaign Recipient",
+		filters=filters,
+		or_filters=or_filters,
+		fields=["count(name) as count"],
+		limit_page_length=1,
+	)
+	total = cint(total_row[0].count) if total_row else 0
+
+	identity_names = [row.identity for row in rows]
+	identities = {
+		row.name: row
+		for row in frappe.get_list(
+			"WhatsApp Core Identity",
+			filters={"name": ["in", identity_names]},
+			fields=["name", "display_value", "normalized_value"],
+			limit_page_length=max(1, len(identity_names)),
+		)
+	} if identity_names else {}
+	message_names = [row.core_message for row in rows if row.core_message]
+	messages = {
+		row.name: row
+		for row in frappe.get_list(
+			"WhatsApp Core Message",
+			filters={"name": ["in", message_names]},
+			fields=[
+				"name",
+				"provider_message_id",
+				"provider_timestamp",
+				"delivery_status",
+				"failure",
+			],
+			limit_page_length=max(1, len(message_names)),
+		)
+	} if message_names else {}
+	presentations = present_identity_names(
+		identity_names,
+		context={"surface": "campaign_recipients", "campaign": campaign_name},
+	)
+	for row in rows:
+		identity = identities.get(row.identity) or {}
+		message = messages.get(row.core_message) or {}
+		presentation = presentations.get(row.identity) or {}
+		row.display_name = (
+			presentation.get("display_name")
+			or identity.get("display_value")
+			or identity.get("normalized_value")
+			or row.identity
+		)
+		row.secondary_text = presentation.get("secondary_text") or identity.get("normalized_value") or ""
+		row.status = message.get("delivery_status") or row.status
+		row.provider_message_id = message.get("provider_message_id")
+		row.provider_timestamp = message.get("provider_timestamp")
+		row.failure = message.get("failure")
+
+	counts = {
+		row.status: row.count
+		for row in frappe.get_list(
+			"WhatsApp Core Campaign Recipient",
+			filters={"campaign": campaign_name},
+			fields=["status", "count(name) as count"],
+			group_by="status",
+			limit_page_length=20,
+		)
+	}
+	return {
+		"rows": rows,
+		"total": total,
+		"loaded": offset + len(rows),
+		"has_more": has_more,
+		"counts": counts,
+	}
+
+
+@frappe.whitelist()
 @require_core_access()
 def template_catalog():
-	templates = frappe.get_all(
+	templates = frappe.get_list(
 		"WhatsApp Core Template",
 		fields=[
 			"name",
@@ -221,6 +376,7 @@ def template_catalog():
 			"category",
 			"approval_status",
 			"enabled",
+			"hub_template_name",
 			"header_type",
 			"header_content",
 			"body_text",
@@ -531,7 +687,7 @@ def health_workspace():
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_system_manager()
 def settings_workspace():
 	settings = frappe.get_single("WhatsApp Core Settings")
 	return {
@@ -623,7 +779,7 @@ def settings_workspace():
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_system_manager()
 def discover_hub_accounts():
 	"""Return tenant-scoped Hub accounts without exposing Meta credentials."""
 	result = call_management(
@@ -654,7 +810,7 @@ def _contact_sources() -> list[dict]:
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_system_manager()
 def contact_source_doctypes(search: str = "") -> list[dict]:
 	filters = {"istable": 0, "issingle": 0}
 	if search:
@@ -669,7 +825,7 @@ def contact_source_doctypes(search: str = "") -> list[dict]:
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_system_manager()
 def contact_source_fields(source_doctype: str) -> dict:
 	if not frappe.db.exists("DocType", source_doctype):
 		frappe.throw("Select a valid source DocType", frappe.ValidationError)
@@ -713,7 +869,7 @@ def contact_source_fields(source_doctype: str) -> dict:
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_system_manager()
 def save_contact_source(source):
 	payload = frappe.parse_json(source) if isinstance(source, str) else source
 	if not isinstance(payload, dict):
@@ -754,11 +910,12 @@ def save_contact_source(source):
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_system_manager()
 def save_core_settings(
 	enabled=0,
 	outbound_enabled=0,
 	hub_url: str = "",
+	relay_url: str = "",
 	accounts=None,
 	request_timeout: int = 30,
 	default_country_calling_code: str = "91",
@@ -769,6 +926,7 @@ def save_core_settings(
 	settings.enabled = int(bool(cint(enabled)))
 	settings.outbound_enabled = int(bool(cint(outbound_enabled)))
 	settings.hub_url = str(hub_url or "").strip()
+	settings.relay_url = str(relay_url or "").strip()
 	settings.request_timeout = max(2, min(int(request_timeout or 30), 120))
 	settings.default_country_calling_code = str(default_country_calling_code or "91")
 	accounts = _validated_hub_account_mappings(accounts)
@@ -782,7 +940,7 @@ def save_core_settings(
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_system_manager()
 def save_ai_summary_settings(
 	enabled=0,
 	action: str = "",

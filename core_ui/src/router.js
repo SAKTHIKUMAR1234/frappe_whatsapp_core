@@ -48,24 +48,6 @@ const routes = [
 				component: () => import('@/features/workspaces/views/AIQueueView.vue'),
 			},
 			{
-				path: 'polls',
-				name: 'polls',
-				meta: { module: 'polls' },
-				component: () => import('@/features/workspaces/views/PollsView.vue'),
-			},
-			{
-				path: 'automation-flows',
-				name: 'automation-flows',
-				meta: { module: 'automation-flows' },
-				component: () => import('@/features/flows/views/AutomationFlowListView.vue'),
-			},
-			{
-				path: 'automation-flows/:flowName',
-				name: 'automation-flow-builder',
-				meta: { module: 'automation-flows' },
-				component: () => import('@/features/flows/views/AutomationFlowBuilderView.vue'),
-			},
-			{
 				path: 'flows',
 				name: 'flows',
 				meta: { module: 'flows' },
@@ -90,12 +72,6 @@ const routes = [
 				component: () => import('@/features/workspaces/views/CallingView.vue'),
 			},
 			{
-				path: 'connectors',
-				name: 'connectors',
-				meta: { module: 'connectors' },
-				component: () => import('@/features/workspaces/views/ConnectorsView.vue'),
-			},
-			{
 				path: 'teams',
 				name: 'teams',
 				meta: { module: 'teams' },
@@ -106,12 +82,6 @@ const routes = [
 				name: 'health',
 				meta: { module: 'health' },
 				component: () => import('@/features/workspaces/views/HealthView.vue'),
-			},
-			{
-				path: 'settings',
-				name: 'settings',
-				meta: { module: 'settings' },
-				component: () => import('@/features/workspaces/views/SettingsView.vue'),
 			},
 		],
 	},

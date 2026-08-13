@@ -139,7 +139,7 @@ def category_counts_for_teams(team_names: list[str]) -> dict[str, list[dict]]:
 		if frappe.db.exists("DocType", "WhatsApp Core Message Category Assignment")
 		else "`tabWhatsApp Core Message Insight`"
 	)
-	category_field = "assignment.category" if "Assignment" in assignment_table else "assignment.category"
+	category_field = "assignment.category"
 	identity_field = "assignment.identity"
 	rows = frappe.db.sql(
 		f"""
@@ -151,7 +151,7 @@ def category_counts_for_teams(team_names: list[str]) -> dict[str, list[dict]]:
 			AND team_contact.parentfield = 'contacts'
 			AND team_contact.enabled = 1
 			AND team_contact.parent IN %(teams)s
-		GROUP BY team_contact.parent, insight.category
+		GROUP BY team_contact.parent, {category_field}
 		""",
 		{"teams": tuple(names)},
 		as_dict=True,

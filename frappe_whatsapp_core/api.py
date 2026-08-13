@@ -1,5 +1,7 @@
 import hashlib
 import json
+import random
+import time
 
 import frappe
 from frappe.utils import now_datetime
@@ -105,73 +107,28 @@ def _apply_outbound_result(
 	attempt=0,
 	**_provider_metadata,
 ):
-	"""Idempotently apply the relay's final provider result to a local message."""
-	idempotency_key = str(idempotency_key or "").strip()
-	if not idempotency_key:
-		frappe.throw("idempotency_key is required")
-	status = str(status or "").strip().lower()
-	if status not in {"sent", "failed"}:
-		frappe.throw("Only final sent/failed relay results are accepted")
-	# Read receipts and typing indicators travel through the durable relay, but
-	# they do not create chat-message rows in Core. Acknowledge their provider
-	# result so the relay does not retry and dead-letter a successful control
-	# operation while looking for a message that intentionally does not exist.
-	if idempotency_key.startswith(CONTROL_RESULT_PREFIXES):
-		return {"status": "ignored", "reason": "control_operation"}
-
-	message_name = frappe.db.get_value(
+	"""Apply one result through the same locked path used by relay batches."""
+	result = _apply_outbound_result_batch([{
+		"idempotency_key": idempotency_key,
+		"status": status,
+		"success": success,
+		"event_id": event_id,
+		"meta_message_id": meta_message_id,
+		"status_code": status_code,
+		"error": error,
+		"attempt": attempt,
+		**_provider_metadata,
+	}])[0]
+	if result.get("status") != "applied" or not result.get("message"):
+		return result
+	message = frappe.db.get_value(
 		"WhatsApp Core Message",
-		{"idempotency_key": idempotency_key},
-		"name",
+		result["message"],
+		["name", "conversation", "delivery_status", "provider_message_id"],
+		as_dict=True,
 	)
-	if not message_name and frappe.db.exists(
-		"WhatsApp Core Message",
-		idempotency_key,
-	):
-		message_name = idempotency_key
-	if not message_name:
-		frappe.throw(
-			f"Outbound message not found for idempotency key {idempotency_key}",
-			frappe.DoesNotExistError,
-		)
-
-	message = frappe.get_doc("WhatsApp Core Message", message_name)
-	incoming = "Sent" if status == "sent" and _as_bool(success) else "Failed"
-	provider_owner = _provider_message_id_owner(meta_message_id, message.name)
-	if provider_owner:
-		incoming = "Failed"
-	message.delivery_status = advance_delivery_status(
-		message.delivery_status,
-		incoming,
-	)
-	if meta_message_id and not provider_owner:
-		message.provider_message_id = meta_message_id
-	if provider_owner:
-		message.failure = _provider_id_collision_failure(
-			meta_message_id,
-			provider_owner,
-			{
-				"status_code": status_code,
-				"attempt": attempt,
-				"event_id": event_id,
-			},
-		)
-	elif incoming == "Failed":
-		message.failure = json.dumps(
-			{
-				"error": error or "Provider send failed",
-				"status_code": status_code,
-				"attempt": int(attempt or 0),
-				"relay_event": event_id,
-			},
-			separators=(",", ":"),
-		)
-	else:
-		message.failure = None
-	message.save(ignore_permissions=True)
-	if not frappe.flags.whatsapp_core_result_batch:
+	if message:
 		enqueue_campaign_refresh_for_messages([message.name])
-	if not frappe.flags.whatsapp_core_result_batch:
 		frappe.publish_realtime(
 			"whatsapp_core_message_status",
 			{
@@ -182,11 +139,7 @@ def _apply_outbound_result(
 			},
 			after_commit=True,
 		)
-	return {
-		"status": "applied",
-		"message": message.name,
-		"delivery_status": message.delivery_status,
-	}
+	return result
 
 
 @frappe.whitelist()
@@ -199,24 +152,35 @@ def receive_outbound_results(results):
 		frappe.throw("results must contain between 1 and 100 items", frappe.ValidationError)
 	if any(not isinstance(result, dict) for result in results):
 		frappe.throw("Every outbound result must be an object", frappe.ValidationError)
+	for attempt in range(6):
+		try:
+			return _receive_outbound_results_once(results)
+		except frappe.QueryDeadlockError:
+			# MyRocks can reject a row after a concurrent status callback changes it,
+			# even though the batch took ordered FOR UPDATE locks. Restart the entire
+			# result window from committed state instead of returning 500 to JetStream.
+			frappe.db.rollback()
+			if attempt == 5:
+				raise
+			time.sleep(min(1.5, 0.04 * (2**attempt)) + random.uniform(0, 0.02))
 
-	# Relay workers deliberately coalesce provider results.  Loading and saving
-	# one Document at a time makes a 100-result callback hold the web worker for
-	# several seconds and lets WA_CALLBACKS grow without bound under a campaign.
-	# Keep the single-result path (and its exact API contract) for interactive
-	# calls, while applying real relay batches with one locked read and one bulk
-	# update.  The row locks make the Python monotonic-state calculation safe
-	# against a concurrent delivered/read webhook.
-	applied = (
-		_apply_outbound_result_batch(results)
-		if len(results) > 1
-		else [_apply_outbound_result(**results[0])]
-	)
+
+def _receive_outbound_results_once(results):
+	"""Apply one validated relay result window in a single transaction."""
+
+	# One and many results intentionally use the same ordered lock/update path.
+	# A special one-document save path races status callbacks and reintroduces the
+	# timestamp mismatch that batching is intended to remove.
+	applied = _apply_outbound_result_batch(results)
 	enqueue_waiting_status_events(
 		[result.get("meta_message_id") for result in results],
 		enqueue_after_commit=True,
 	)
-	message_names = [row["message"] for row in applied if row.get("message")]
+	message_names = list(dict.fromkeys(
+		row["message"]
+		for row in applied
+		if row.get("status") == "applied" and row.get("message")
+	))
 	message_rows = (
 		frappe.get_all(
 			"WhatsApp Core Message",
@@ -255,18 +219,21 @@ def receive_outbound_results(results):
 			},
 			after_commit=True,
 		)
-	ignored = len(applied) - len(message_names)
+	ignored = sum(row.get("status") == "ignored" for row in applied)
+	unchanged = sum(row.get("status") == "noop" for row in applied)
 	return {
 		"status": "applied",
 		"count": len(message_names),
 		"ignored": ignored,
+		"unchanged": unchanged,
 		"results": applied,
 	}
 
 
 def _apply_outbound_result_batch(results: list[dict]) -> list[dict]:
 	controls = {}
-	provider_results = []
+	provider_candidates = []
+	last_result_by_key = {}
 	for index, result in enumerate(results):
 		idempotency_key = str(result.get("idempotency_key") or "").strip()
 		if not idempotency_key:
@@ -277,7 +244,22 @@ def _apply_outbound_result_batch(results: list[dict]) -> list[dict]:
 		if idempotency_key.startswith(CONTROL_RESULT_PREFIXES):
 			controls[index] = {"status": "ignored", "reason": "control_operation"}
 			continue
-		provider_results.append((index, idempotency_key, status, result))
+		provider_candidates.append((index, idempotency_key, status, result))
+		last_result_by_key[idempotency_key] = index
+
+	# Relay retries can place the same idempotency key in one callback window.
+	# Apply only the last observation so contradictory duplicates cannot overwrite
+	# the same bulk-update entry in input-order-dependent ways.
+	provider_results = []
+	for item in provider_candidates:
+		index, idempotency_key, _status, _result = item
+		if last_result_by_key[idempotency_key] != index:
+			controls[index] = {
+				"status": "ignored",
+				"reason": "superseded_in_batch",
+			}
+			continue
+		provider_results.append(item)
 
 	if not provider_results:
 		return [controls[index] for index in range(len(results))]
@@ -286,7 +268,9 @@ def _apply_outbound_result_batch(results: list[dict]) -> list[dict]:
 	placeholders = ", ".join(["%s"] * len(keys))
 	rows = frappe.db.sql(
 		f"""
-		SELECT name, idempotency_key, delivery_status, conversation, provider_message_id
+		SELECT
+			name, idempotency_key, delivery_status, conversation,
+			provider_message_id, failure
 			FROM `tabWhatsApp Core Message`
 			WHERE idempotency_key IN ({placeholders}) OR name IN ({placeholders})
 			ORDER BY name
@@ -331,18 +315,19 @@ def _apply_outbound_result_batch(results: list[dict]) -> list[dict]:
 		if provider_owner and provider_owner != row.name:
 			incoming = "Failed"
 		next_status = advance_delivery_status(row.delivery_status, incoming)
-		values = {"delivery_status": next_status}
+		desired_provider_id = row.provider_message_id
 		if provider_id and not provider_owner:
-			values["provider_message_id"] = provider_id
+			desired_provider_id = provider_id
 			provider_owners[provider_id] = row.name
-		if provider_owner and provider_owner != row.name:
-			values["failure"] = _provider_id_collision_failure(
+		desired_failure = row.failure
+		if provider_owner and provider_owner != row.name and next_status == "Failed":
+			desired_failure = _provider_id_collision_failure(
 				provider_id,
 				provider_owner,
 				result,
 			)
-		elif incoming == "Failed":
-			values["failure"] = json.dumps(
+		elif incoming == "Failed" and next_status == "Failed":
+			desired_failure = json.dumps(
 				{
 					"error": result.get("error") or "Provider send failed",
 					"status_code": result.get("status_code"),
@@ -351,22 +336,45 @@ def _apply_outbound_result_batch(results: list[dict]) -> list[dict]:
 				},
 				separators=(",", ":"),
 			)
-		else:
-			values["failure"] = None
+		elif incoming == "Sent" and next_status == "Sent":
+			desired_failure = None
+		values = {
+			"delivery_status": next_status,
+			"provider_message_id": desired_provider_id,
+			"failure": desired_failure,
+		}
+		changed = any(
+			(current or None) != (values[fieldname] or None)
+			for fieldname, current in {
+				"delivery_status": row.delivery_status,
+				"provider_message_id": row.provider_message_id,
+				"failure": row.failure,
+			}.items()
+		)
+		if not changed:
+			applied[index] = {
+				"status": "noop",
+				"message": row.name,
+				"delivery_status": row.delivery_status,
+			}
+			continue
 		updates[row.name] = values
 		row.delivery_status = next_status
+		row.provider_message_id = desired_provider_id
+		row.failure = desired_failure
 		applied[index] = {
 			"status": "applied",
 			"message": row.name,
 			"delivery_status": next_status,
 		}
 
-	frappe.db.bulk_update(
-		"WhatsApp Core Message",
-		updates,
-		chunk_size=100,
-		update_modified=False,
-	)
+	if updates:
+		frappe.db.bulk_update(
+			"WhatsApp Core Message",
+			updates,
+			chunk_size=100,
+			update_modified=False,
+		)
 	for message_name in updates:
 		frappe.clear_document_cache("WhatsApp Core Message", message_name)
 	return [applied[index] for index in range(len(results))]
@@ -395,7 +403,7 @@ def receive_one(payload):
 		return {"status": "duplicate", "event_id": event_id}
 
 	if _requires_immediate_projection(event):
-		result = process_event_batch([event_id])[0]
+		result = process_event_batch([event_id], retry_deadlocks=False)[0]
 		if result.get("status") != "completed":
 			frappe.throw(
 				"Inbound WhatsApp message could not be projected",
@@ -477,7 +485,10 @@ def receive_batch(payloads):
 		immediate_results = []
 		for offset in range(0, len(immediate_ids), 100):
 			immediate_results.extend(
-				process_event_batch(immediate_ids[offset : offset + 100])
+				process_event_batch(
+					immediate_ids[offset : offset + 100],
+					retry_deadlocks=False,
+				)
 			)
 		if any(result.get("status") != "completed" for result in immediate_results):
 			frappe.throw(

@@ -1,7 +1,7 @@
 <script setup>
 	import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 	import Button from 'primevue/button'
-	import Dialog from 'primevue/dialog'
+	import AppDialog from '@/components/AppDialog.vue'
 	import InputText from 'primevue/inputtext'
 	import Message from 'primevue/message'
 	import Select from 'primevue/select'
@@ -18,8 +18,8 @@
 	} from 'lucide-vue-next'
 	import { useToast } from 'primevue/usetoast'
 	import AsyncState from '@/components/AsyncState.vue'
-	import ContactMultiSelect from '@/features/contacts/components/ContactMultiSelect.vue'
-	import UserMultiSelect from '@/features/teams/components/UserMultiSelect.vue'
+	import TeamContactTable from '@/features/teams/components/TeamContactTable.vue'
+	import TeamMemberTable from '@/features/teams/components/TeamMemberTable.vue'
 	import { call, errorMessage } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
@@ -28,22 +28,19 @@
 	const toast = useToast()
 	const session = useSessionStore()
 	const teams = ref([])
-	const userOptions = ref([])
-	const contactOptions = ref([])
 	const loading = ref(false)
 	const saving = ref(false)
 	const loadError = ref('')
 	const submitError = ref('')
 	const attempted = ref(false)
 	const visible = ref(false)
+	const editingTeam = ref('')
 	const dialogRef = ref(null)
 	const form = reactive({
 		team_name: '',
 		icon: 'users-round',
 		description: '',
 		enabled: true,
-		members: [],
-		contacts: [],
 	})
 	const iconOptions = [
 		{ label: 'People', value: 'users-round', component: UsersRound },
@@ -59,14 +56,6 @@
 	let unsubscribe = () => {}
 	let refreshTimer = null
 	let loadSequence = 0
-	const userByName = computed(() =>
-		Object.fromEntries(userOptions.value.map((user) => [user.name, user])),
-	)
-
-	function memberLabel(user) {
-		return userByName.value[user]?.full_name || user
-	}
-
 	function teamIcon(icon) {
 		return iconComponents[icon] || UsersRound
 	}
@@ -76,11 +65,9 @@
 		if (!silent) loading.value = true
 		loadError.value = ''
 		try {
-			const workspace = await call('frappe_whatsapp_core.workspace_api.team_workspace')
+			const workspace = await call('frappe_whatsapp_core.workspace_api.list_teams')
 			if (request !== loadSequence) return
-			teams.value = workspace.teams || []
-			userOptions.value = workspace.users || []
-			contactOptions.value = workspace.contacts || []
+			teams.value = workspace || []
 		} catch (error) {
 			if (request === loadSequence)
 				loadError.value = errorMessage(error, 'Unable to load teams.')
@@ -94,12 +81,11 @@
 	}
 
 	function open(team = null) {
+		editingTeam.value = team?.name || ''
 		form.team_name = team?.team_name || ''
 		form.icon = team?.icon || 'users-round'
 		form.description = team?.description || ''
 		form.enabled = team ? Boolean(team.enabled) : true
-		form.members = (team?.members || []).map((member) => member.user)
-		form.contacts = (team?.contacts || []).map((contact) => contact.identity)
 		attempted.value = false
 		submitError.value = ''
 		visible.value = true
@@ -111,14 +97,13 @@
 		if (!form.team_name.trim()) return
 		saving.value = true
 		try {
-			await call('frappe_whatsapp_core.workspace_api.upsert_team', {
+			const saved = await call('frappe_whatsapp_core.workspace_api.upsert_team', {
 				team_name: form.team_name,
 				icon: form.icon,
 				description: form.description,
 				enabled: form.enabled ? 1 : 0,
-				members: form.members.map((user) => ({ user, team_role: 'Agent', enabled: 1 })),
-				contacts: form.contacts.map((identity) => ({ identity, enabled: 1 })),
 			})
+			editingTeam.value = saved.name
 			visible.value = false
 			await load()
 			toast.add({ severity: 'success', summary: 'Team saved', life: 2500 })
@@ -150,7 +135,6 @@
 		<div>
 			<div class="eyebrow">Ownership and routing</div>
 			<h1>Teams</h1>
-			<p>Group Frappe users so conversations can be assigned and handled together.</p>
 		</div>
 		<Button v-if="canManage" label="Create team" @click="open()">
 			<template #icon><Plus :size="16" /></template>
@@ -178,40 +162,12 @@
 			<h2>{{ team.team_name }}</h2>
 			<p>{{ team.description || 'No description' }}</p>
 			<div class="members">
-				<strong
-					>{{ team.members.length }}
-					{{ team.members.length === 1 ? 'member' : 'members' }}</strong
-				>
-				<div class="member-list">
-					<span v-for="member in team.members.slice(0, 5)" :key="member.user">
-						<i>{{ memberLabel(member.user).slice(0, 1).toUpperCase() }}</i>
-						{{ memberLabel(member.user) }}
-					</span>
-					<small v-if="team.members.length > 5"
-						>+{{ team.members.length - 5 }} more</small
-					>
-				</div>
+				<strong>{{ team.member_count || 0 }} members</strong>
+				<small>Membership is assigned manually by a WhatsApp Manager.</small>
 			</div>
 			<div class="contact-count">
-				<strong>{{ team.contacts.length }}</strong>
-				<span>{{
-					team.contacts.length === 1 ? 'categorized contact' : 'categorized contacts'
-				}}</span>
-			</div>
-			<div class="category-summary">
-				<div>
-					<strong>{{ team.categorized_messages || 0 }}</strong>
-					<span>categorized messages</span>
-				</div>
-				<div v-if="team.categories?.length" class="category-list">
-					<span v-for="category in team.categories.slice(0, 5)" :key="category.category">
-						{{ category.category }} <strong>{{ category.count }}</strong>
-					</span>
-					<small v-if="team.categories.length > 5">
-						+{{ team.categories.length - 5 }} more categories
-					</small>
-				</div>
-				<small v-else>No categorized messages yet.</small>
+				<strong>{{ team.contact_count || 0 }}</strong>
+				<span>{{ team.contact_count === 1 ? 'team contact' : 'team contacts' }}</span>
 			</div>
 			<footer>
 				<Button
@@ -224,12 +180,12 @@
 			</footer>
 		</article>
 	</section>
-	<Dialog
+	<AppDialog
 		ref="dialogRef"
 		v-model:visible="visible"
 		modal
 		header="WhatsApp team"
-		:style="{ width: '440px', maxWidth: '94vw' }"
+		:style="{ width: '760px', maxWidth: '94vw' }"
 		@show="focusDialogControl(dialogRef, '#team-name')"
 	>
 		<Message v-if="submitError" severity="error" :closable="false">{{ submitError }}</Message>
@@ -268,22 +224,16 @@
 		</Select>
 		<label for="team-description">Description</label
 		><Textarea id="team-description" v-model="form.description" rows="3" fluid />
-		<label id="team-members-label">Members</label>
-		<UserMultiSelect
-			v-model="form.members"
-			:options="userOptions"
-			aria-labelledby="team-members-label"
-		/>
-		<label id="team-contacts-label">Contacts</label>
-		<ContactMultiSelect
-			v-model="form.contacts"
-			:options="contactOptions"
-			placeholder="Search and assign contacts"
-			aria-labelledby="team-contacts-label"
-		/>
+		<div v-if="editingTeam" class="assignment-sections">
+			<TeamMemberTable :team="editingTeam" @changed="load({ silent: true })" />
+			<TeamContactTable :team="editingTeam" @changed="load({ silent: true })" />
+		</div>
+		<small v-else class="field-help"
+			>Save this team, then reopen it to assign members and contacts.</small
+		>
 		<small class="field-help">
-			Categorized contacts are visible only to members of at least one assigned team.
-			Uncategorized contacts remain visible to every WhatsApp User.
+			Team contacts are visible only to users sharing an enabled team. A user with no team
+			sees only contacts that also have no enabled team.
 		</small>
 		<div class="enabled">
 			<ToggleSwitch input-id="team-enabled" v-model="form.enabled" />
@@ -298,7 +248,7 @@
 				@click="save"
 			/>
 		</template>
-	</Dialog>
+	</AppDialog>
 </template>
 
 <style scoped>
@@ -455,6 +405,11 @@
 		color: var(--wa-muted);
 		font-size: 11px;
 		line-height: 1.45;
+	}
+	.assignment-sections {
+		display: grid;
+		gap: 14px;
+		margin-top: 18px;
 	}
 	.icon-option {
 		display: inline-flex;

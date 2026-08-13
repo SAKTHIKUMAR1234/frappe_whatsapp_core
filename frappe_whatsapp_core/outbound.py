@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
+import re
 import uuid
 from base64 import b64encode
 from copy import deepcopy
@@ -317,6 +318,28 @@ def queue_rich(
 	client_message_id: str | None = None,
 	local_file_url: str | None = None,
 ) -> dict:
+	return queue_rich_internal(
+		conversation_name,
+		message_type,
+		payload,
+		body,
+		source,
+		client_message_id=client_message_id,
+		local_file_url=local_file_url,
+	)
+
+
+def queue_rich_internal(
+	conversation_name: str,
+	message_type: str,
+	payload: dict | str,
+	body: str = "",
+	source: str = "Core",
+	*,
+	client_message_id: str | None = None,
+	local_file_url: str | None = None,
+	enqueue_delivery: bool = True,
+) -> dict:
 	"""Queue a supported native Cloud API message without exposing its recipient.
 
 	The caller supplies only the type-specific object (for example ``image`` or
@@ -339,6 +362,7 @@ def queue_rich(
 		preview,
 		{"payload": normalized, "source": source},
 		client_message_id=client_message_id,
+		enqueue_delivery=enqueue_delivery,
 	)
 	if local_file:
 		local_file.attached_to_doctype = "WhatsApp Core Message"
@@ -351,6 +375,14 @@ def queue_rich(
 @frappe.whitelist()
 @require_core_access()
 def upload_media(conversation_name: str, file_url: str, media_type: str | None = None) -> dict:
+	return upload_media_internal(conversation_name, file_url, media_type)
+
+
+def upload_media_internal(
+	conversation_name: str,
+	file_url: str,
+	media_type: str | None = None,
+) -> dict:
 	"""Upload a private Core file to the mapped Meta account and return its ID."""
 	assert_conversation_access(conversation_name)
 	conversation = frappe.get_doc("WhatsApp Core Conversation", conversation_name)
@@ -447,20 +479,160 @@ def queue_template_internal(
 		or template_doc.language_code
 		or "en"
 	)
+	snapshot = template_message_snapshot(template_doc, components)
 	return _queue_message(
 		conversation_name,
 		"template",
-		template_doc.template_name,
+		snapshot.get("body") or snapshot.get("header") or template_doc.template_name,
 		{
 			"template": template_doc.template_name,
 			"template_record": template_doc.name,
 			"language": language_code,
 			"components": components,
+			"template_snapshot": snapshot,
 			"source": source,
 		},
 		enqueue_delivery=enqueue_delivery,
 		_batch_context=_batch_context,
 	)
+
+
+def template_message_snapshot(template_doc, supplied_components: list | None = None) -> dict:
+	"""Freeze the human-visible template content at send time.
+
+	Meta transport still receives the canonical template name and component values, while
+	the inbox renders this immutable snapshot.  Editing or re-syncing a template later must
+	not change what operators believe was sent.
+	"""
+	definitions = _json_list(getattr(template_doc, "components", None))
+	supplied = supplied_components if isinstance(supplied_components, list) else []
+	header_definition = _template_component(definitions, "HEADER")
+	body_definition = _template_component(definitions, "BODY")
+	footer_definition = _template_component(definitions, "FOOTER")
+	buttons_definition = _template_component(definitions, "BUTTONS")
+
+	header_type = str(
+		getattr(template_doc, "header_type", "")
+		or header_definition.get("format")
+		or "TEXT"
+	).upper()
+	header = str(
+		getattr(template_doc, "header_content", "")
+		or header_definition.get("text")
+		or ""
+	).strip()
+	body = str(
+		getattr(template_doc, "body_text", "")
+		or body_definition.get("text")
+		or ""
+	).strip()
+	footer = str(
+		getattr(template_doc, "footer_text", "")
+		or footer_definition.get("text")
+		or ""
+	).strip()
+
+	header_parameters = _template_supplied_parameters(supplied, "header")
+	body_parameters = _template_supplied_parameters(supplied, "body")
+	if header_type == "TEXT":
+		header = _render_template_text(header, header_parameters)
+	body = _render_template_text(body, body_parameters)
+
+	buttons = []
+	for index, button in enumerate(buttons_definition.get("buttons") or []):
+		if not isinstance(button, dict):
+			continue
+		label = str(button.get("text") or "").strip()
+		if not label:
+			continue
+		button_type = str(button.get("type") or "").upper()
+		button_parameters = _template_supplied_parameters(
+			supplied,
+			"button",
+			index=index,
+		)
+		url = str(button.get("url") or "").strip()
+		if url:
+			url = _render_template_text(url, button_parameters)
+		buttons.append({
+			"label": label,
+			"type": button_type,
+			"url": url,
+		})
+
+	media = None
+	if header_type in {"IMAGE", "VIDEO", "DOCUMENT"} and header_parameters:
+		parameter = header_parameters[0]
+		value = parameter.get(header_type.lower()) if isinstance(parameter, dict) else None
+		if isinstance(value, dict):
+			media = value.get("link") or value.get("id")
+
+	return {
+		"header": header if header_type == "TEXT" else "",
+		"header_type": header_type,
+		"header_media": media,
+		"body": body,
+		"footer": footer,
+		"buttons": buttons,
+	}
+
+
+def _template_component(components: list, component_type: str) -> dict:
+	return next(
+		(
+			component
+			for component in components
+			if isinstance(component, dict)
+			and str(component.get("type") or "").upper() == component_type
+		),
+		{},
+	)
+
+
+def _template_supplied_parameters(
+	components: list,
+	component_type: str,
+	*,
+	index: int | None = None,
+) -> list[dict]:
+	for component in components:
+		if not isinstance(component, dict):
+			continue
+		if str(component.get("type") or "").lower() != component_type:
+			continue
+		if index is not None and str(component.get("index")) != str(index):
+			continue
+		parameters = component.get("parameters") or []
+		return parameters if isinstance(parameters, list) else []
+	return []
+
+
+def _render_template_text(text: str, parameters: list[dict]) -> str:
+	values = [_template_parameter_text(parameter) for parameter in parameters]
+
+	def replace(match):
+		position = int(match.group(1)) - 1
+		return values[position] if 0 <= position < len(values) else match.group(0)
+
+	return re.sub(r"\{\{\s*(\d+)\s*\}\}", replace, str(text or ""))
+
+
+def _template_parameter_text(parameter) -> str:
+	if not isinstance(parameter, dict):
+		return str(parameter or "")
+	if parameter.get("text") is not None:
+		return str(parameter.get("text"))
+	if isinstance(parameter.get("currency"), dict):
+		currency = parameter["currency"]
+		return str(
+			currency.get("fallback_value")
+			or currency.get("amount_1000")
+			or currency.get("code")
+			or ""
+		)
+	if isinstance(parameter.get("date_time"), dict):
+		return str(parameter["date_time"].get("fallback_value") or "")
+	return ""
 
 
 def queue_choice(
@@ -509,11 +681,14 @@ def queue_campaign_recipient(campaign, recipient) -> dict:
 			source=f"Campaign:{campaign.name}",
 		)
 	else:
+		template = campaign_template_document(campaign)
 		message = queue_template_internal(
 			conversation.name,
-			campaign.template,
+			template.name,
+			template.language_code,
 			components=personalization.get("components") or [],
 			source=f"Campaign:{campaign.name}",
+			_template_doc=template,
 		)
 	return {
 		"message": message.name,
@@ -537,11 +712,7 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 		)
 	channel = frappe.get_cached_doc("WhatsApp Core Channel", campaign.channel)
 	content_type = getattr(campaign, "content_type", None) or "Template"
-	template = (
-		frappe.get_cached_doc("WhatsApp Core Template", campaign.template)
-		if content_type == "Template"
-		else None
-	)
+	template = campaign_template_document(campaign) if content_type == "Template" else None
 	results = {}
 	message_names = []
 	message_payloads = []
@@ -606,6 +777,11 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 				"message": message.name,
 				"conversation": message.conversation,
 			}
+		except frappe.QueryDeadlockError:
+			# A database deadlock invalidates the complete transaction, including
+			# messages accumulated for earlier recipients. Never return stale Python
+			# objects as successful rows; the campaign wrapper retries the full batch.
+			raise
 		except Exception as exception:
 			results[recipient.name] = {
 				"success": False,
@@ -650,6 +826,37 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 	return results
 
 
+def freeze_campaign_template(template_name: str) -> dict:
+	"""Return the approved catalog data a campaign must retain for its full run."""
+	template = _approved_template(template_name)
+	return {
+		"name": template.name,
+		"template_name": template.template_name,
+		"language_code": template.language_code or "en",
+		"category": template.category or "",
+		"approval_status": template.approval_status,
+		"enabled": bool(template.enabled),
+		"header_type": template.header_type or "",
+		"header_content": template.header_content or "",
+		"body_text": template.body_text or "",
+		"footer_text": template.footer_text or "",
+		"components": _json_list(template.components),
+	}
+
+
+def campaign_template_document(campaign):
+	"""Return the immutable launch snapshot, with a legacy-campaign fallback.
+
+	New campaigns always persist ``template_snapshot`` before they are queued. Older
+	campaigns created before that field existed still need to drain safely, so they
+	use the catalog document that their existing workers used historically.
+	"""
+	snapshot = _json_dict(getattr(campaign, "template_snapshot", None))
+	if snapshot:
+		return frappe._dict(snapshot)
+	return frappe.get_cached_doc("WhatsApp Core Template", campaign.template)
+
+
 def deliver_queued_message_batch(message_names: list[str]) -> None:
 	"""Submit committed optimistic messages to the Hub in one bounded batch."""
 	message_names = list(dict.fromkeys(message_names or []))
@@ -663,8 +870,15 @@ def deliver_queued_message_batch(message_names: list[str]) -> None:
 
 	submissions = []
 	preparation_failures = []
+	missing_messages = []
 	for message_name in message_names:
-		message = frappe.get_doc("WhatsApp Core Message", message_name)
+		try:
+			message = frappe.get_doc("WhatsApp Core Message", message_name)
+		except frappe.DoesNotExistError:
+			# A stale after-commit job must not prevent the other 39 independent
+			# messages in this transport batch from reaching the Hub.
+			missing_messages.append(message_name)
+			continue
 		if message.delivery_status != "Queued":
 			continue
 		try:
@@ -705,6 +919,11 @@ def deliver_queued_message_batch(message_names: list[str]) -> None:
 	# update with error 1020 (record changed since last read). No business write is
 	# discarded here.
 	frappe.db.rollback()
+	if missing_messages:
+		frappe.logger("frappe_whatsapp_core").warning(
+			"Skipped %s missing messages from a committed campaign transport batch",
+			len(missing_messages),
+		)
 	if not submissions:
 		for message_name, failure in preparation_failures:
 			_mark_failed(frappe._dict(name=message_name), failure)
@@ -1317,6 +1536,13 @@ def _json_dict(value) -> dict:
 		return {}
 	result = frappe.parse_json(value) if isinstance(value, str) else value
 	return result if isinstance(result, dict) else {}
+
+
+def _json_list(value) -> list:
+	if not value:
+		return []
+	result = frappe.parse_json(value) if isinstance(value, str) else value
+	return result if isinstance(result, list) else []
 
 
 def _normalize_choice_options(options) -> list[dict]:

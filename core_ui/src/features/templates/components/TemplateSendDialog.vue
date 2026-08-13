@@ -1,7 +1,7 @@
 <script setup>
 	import { computed, reactive, ref, watch } from 'vue'
 	import Button from 'primevue/button'
-	import Dialog from 'primevue/dialog'
+	import AppDialog from '@/components/AppDialog.vue'
 	import InputText from 'primevue/inputtext'
 	import Select from 'primevue/select'
 	import { Send } from 'lucide-vue-next'
@@ -66,7 +66,7 @@
 </script>
 
 <template>
-	<Dialog
+	<AppDialog
 		:visible="visible"
 		modal
 		header="Send approved template"
@@ -104,7 +104,7 @@
 				<template #icon><Send :size="16" /></template>
 			</Button>
 		</template>
-	</Dialog>
+	</AppDialog>
 </template>
 
 <style scoped>

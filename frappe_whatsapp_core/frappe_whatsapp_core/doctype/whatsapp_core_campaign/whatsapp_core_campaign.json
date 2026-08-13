@@ -12,6 +12,7 @@
 		"channel",
 		"content_type",
 		"template",
+		"template_snapshot",
 		"message_text",
 		"audience_source",
 		"status",
@@ -80,6 +81,13 @@
 			"label": "Message Text",
 			"depends_on": "eval:doc.content_type == 'Text'",
 			"mandatory_depends_on": "eval:doc.content_type == 'Text'"
+		},
+		{
+			"fieldname": "template_snapshot",
+			"fieldtype": "JSON",
+			"label": "Approved Template Snapshot",
+			"read_only": 1,
+			"hidden": 1
 		},
 		{
 			"fieldname": "audience_source",

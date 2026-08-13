@@ -27,6 +27,225 @@ CORE_MANAGEMENT_ROLES = {
 }
 
 
+def _permission_user(user: str | None = None) -> str:
+	return user or frappe.session.user or "Guest"
+
+
+def _conversation_scope_sql(alias: str, user: str) -> str:
+	"""Return the canonical row-level conversation scope for a specific user.
+
+	This expression is intentionally self-contained so Frappe can append it to
+	generic ``/api/resource`` queries. API methods use the equivalent parameterized
+	conditions below; both paths must enforce the same team/contact boundary.
+	"""
+	if user == "Administrator" or set(frappe.get_roles(user)) & CORE_MANAGEMENT_ROLES:
+		return "1 = 1"
+	if user == "Guest":
+		return "1 = 0"
+	escaped_user = frappe.db.escape(user)
+	return f"""(
+		(
+			(
+				EXISTS (
+					SELECT 1
+					FROM `tabWhatsApp Core Team Member` user_team
+					INNER JOIN `tabWhatsApp Core Team` enabled_user_team
+						ON enabled_user_team.name = user_team.parent
+						AND enabled_user_team.enabled = 1
+					WHERE user_team.parenttype = 'WhatsApp Core Team'
+						AND user_team.parentfield = 'members'
+						AND user_team.enabled = 1
+						AND user_team.user = {escaped_user}
+				)
+				AND EXISTS (
+					SELECT 1
+					FROM `tabWhatsApp Core Team Contact` visible_contact
+					INNER JOIN `tabWhatsApp Core Team` visible_contact_team
+						ON visible_contact_team.name = visible_contact.parent
+						AND visible_contact_team.enabled = 1
+					INNER JOIN `tabWhatsApp Core Team Member` visible_member
+						ON visible_member.parent = visible_contact.parent
+						AND visible_member.parenttype = 'WhatsApp Core Team'
+						AND visible_member.parentfield = 'members'
+						AND visible_member.enabled = 1
+						AND visible_member.user = {escaped_user}
+					WHERE visible_contact.parenttype = 'WhatsApp Core Team'
+						AND visible_contact.parentfield = 'contacts'
+						AND visible_contact.enabled = 1
+						AND visible_contact.identity = {alias}.remote_identity
+				)
+			)
+			OR (
+				NOT EXISTS (
+					SELECT 1
+					FROM `tabWhatsApp Core Team Member` user_team
+					INNER JOIN `tabWhatsApp Core Team` enabled_user_team
+						ON enabled_user_team.name = user_team.parent
+						AND enabled_user_team.enabled = 1
+					WHERE user_team.parenttype = 'WhatsApp Core Team'
+						AND user_team.parentfield = 'members'
+						AND user_team.enabled = 1
+						AND user_team.user = {escaped_user}
+				)
+				AND NOT EXISTS (
+				SELECT 1
+				FROM `tabWhatsApp Core Team Contact` scoped_contact
+				INNER JOIN `tabWhatsApp Core Team` scoped_contact_team
+					ON scoped_contact_team.name = scoped_contact.parent
+					AND scoped_contact_team.enabled = 1
+				WHERE scoped_contact.parenttype = 'WhatsApp Core Team'
+					AND scoped_contact.parentfield = 'contacts'
+					AND scoped_contact.enabled = 1
+					AND scoped_contact.identity = {alias}.remote_identity
+			)
+			)
+		)
+		AND (
+			(
+				COALESCE({alias}.assigned_team, '') = ''
+				AND COALESCE({alias}.assigned_user, '') = ''
+			)
+			OR {alias}.assigned_user = {escaped_user}
+			OR EXISTS (
+				SELECT 1
+				FROM `tabWhatsApp Core Team Member` assigned_member
+				WHERE assigned_member.parent = {alias}.assigned_team
+					AND assigned_member.parenttype = 'WhatsApp Core Team'
+					AND assigned_member.parentfield = 'members'
+					AND assigned_member.enabled = 1
+					AND assigned_member.user = {escaped_user}
+			)
+		)
+	)"""
+
+
+def conversation_permission_query(user: str | None = None, **_kwargs) -> str:
+	return _conversation_scope_sql("`tabWhatsApp Core Conversation`", _permission_user(user))
+
+
+def team_permission_query(user: str | None = None, **_kwargs) -> str:
+	user = _permission_user(user)
+	if user == "Administrator" or set(frappe.get_roles(user)) & CORE_MANAGEMENT_ROLES:
+		return "1 = 1"
+	if user == "Guest":
+		return "1 = 0"
+	escaped_user = frappe.db.escape(user)
+	return f"""EXISTS (
+		SELECT 1 FROM `tabWhatsApp Core Team Member` scoped_member
+		WHERE scoped_member.parent = `tabWhatsApp Core Team`.name
+			AND scoped_member.parenttype = 'WhatsApp Core Team'
+			AND scoped_member.parentfield = 'members'
+			AND scoped_member.enabled = 1
+			AND scoped_member.user = {escaped_user}
+	)"""
+
+
+def template_permission_query(user: str | None = None, **_kwargs) -> str:
+	"""Expose only sendable templates to operators; managers may audit every state."""
+	user = _permission_user(user)
+	if user == "Administrator" or set(frappe.get_roles(user)) & CORE_MANAGEMENT_ROLES:
+		return "1 = 1"
+	if user == "Guest":
+		return "1 = 0"
+	return """`tabWhatsApp Core Template`.enabled = 1
+		AND `tabWhatsApp Core Template`.approval_status = 'APPROVED'"""
+
+
+def has_scoped_template_permission(doc, ptype="read", user=None, **_kwargs):
+	user = _permission_user(user)
+	if user == "Administrator" or set(frappe.get_roles(user)) & CORE_MANAGEMENT_ROLES:
+		return True
+	if ptype != "read" or user == "Guest":
+		return False
+	return bool(doc.get("enabled") and doc.get("approval_status") == "APPROVED")
+
+
+def has_scoped_team_permission(doc, ptype="read", user=None, **_kwargs):
+	user = _permission_user(user)
+	if user == "Administrator" or set(frappe.get_roles(user)) & CORE_MANAGEMENT_ROLES:
+		return True
+	if ptype != "read":
+		return False
+	return bool(
+		frappe.db.exists(
+			"WhatsApp Core Team Member",
+			{
+				"parent": doc.name,
+				"parenttype": "WhatsApp Core Team",
+				"parentfield": "members",
+				"enabled": 1,
+				"user": user,
+			},
+		)
+	)
+
+
+def _linked_conversation_permission_query(
+	doctype: str,
+	conversation_field: str,
+	user: str | None = None,
+) -> str:
+	source = f"`tab{doctype}`"
+	scope = _conversation_scope_sql("scoped_conversation", _permission_user(user))
+	return f"""EXISTS (
+		SELECT 1 FROM `tabWhatsApp Core Conversation` scoped_conversation
+		WHERE scoped_conversation.name = {source}.`{conversation_field}`
+			AND {scope}
+	)"""
+
+
+def message_permission_query(user: str | None = None, **_kwargs) -> str:
+	return _linked_conversation_permission_query(
+		"WhatsApp Core Message", "conversation", user
+	)
+
+
+def conversation_read_permission_query(user: str | None = None, **_kwargs) -> str:
+	return _linked_conversation_permission_query(
+		"WhatsApp Core Conversation Read", "conversation", user
+	)
+
+
+def message_read_permission_query(user: str | None = None, **_kwargs) -> str:
+	return _linked_conversation_permission_query(
+		"WhatsApp Core Message Read", "conversation", user
+	)
+
+
+def _has_conversation_scope(conversation: str | None, user: str | None = None) -> bool:
+	user = _permission_user(user)
+	if not conversation:
+		return False
+	if user == "Administrator" or set(frappe.get_roles(user)) & CORE_MANAGEMENT_ROLES:
+		return True
+	scope = _conversation_scope_sql("scoped_conversation", user)
+	return bool(
+		frappe.db.sql(
+			f"""SELECT 1
+			FROM `tabWhatsApp Core Conversation` scoped_conversation
+			WHERE scoped_conversation.name = %s AND {scope}
+			LIMIT 1""",
+			(conversation,),
+		)
+	)
+
+
+def has_scoped_conversation_permission(doc, ptype="read", user=None, **_kwargs):
+	return _has_conversation_scope(doc.name, user)
+
+
+def has_scoped_message_permission(doc, ptype="read", user=None, **_kwargs):
+	return _has_conversation_scope(doc.get("conversation"), user)
+
+
+def has_scoped_conversation_read_permission(doc, ptype="read", user=None, **_kwargs):
+	return _has_conversation_scope(doc.get("conversation"), user)
+
+
+def has_scoped_message_read_permission(doc, ptype="read", user=None, **_kwargs):
+	return _has_conversation_scope(doc.get("conversation"), user)
+
+
 def require_core_access(*, manage: bool = False):
 	"""Authorize a site user before entering a company-facing API method."""
 
@@ -45,6 +264,23 @@ def require_core_access(*, manage: bool = False):
 				)
 				frappe.throw(message, frappe.PermissionError)
 
+			return method(*args, **kwargs)
+
+		return guarded
+
+	return decorator
+
+
+def require_system_manager():
+	"""Protect installation/configuration APIs from operational manager roles."""
+
+	def decorator(method):
+		@wraps(method)
+		def guarded(*args, **kwargs):
+			if frappe.session.user == "Guest":
+				frappe.throw("Authentication required", frappe.AuthenticationError)
+			if "System Manager" not in set(frappe.get_roles()):
+				frappe.throw("System Manager access is required", frappe.PermissionError)
 			return method(*args, **kwargs)
 
 		return guarded
@@ -180,33 +416,56 @@ def conversation_conditions(alias: str = "conversation") -> tuple[list[str], dic
 
 
 def assert_identity_team_access(identity: str) -> None:
-	"""Allow uncategorized contacts, or contacts in one of the user's teams."""
+	"""Require the user's team state to match the contact's team state."""
 	roles = set(frappe.get_roles())
 	if roles & CORE_MANAGEMENT_ROLES:
 		return
 	row = frappe.db.sql(
 		"""
 		SELECT
-			COUNT(DISTINCT team_contact.parent) AS category_count,
-			COUNT(DISTINCT member.parent) AS matching_team_count
-		FROM `tabWhatsApp Core Team Contact` AS team_contact
-		JOIN `tabWhatsApp Core Team` AS team
-			ON team.name = team_contact.parent AND team.enabled = 1
-		LEFT JOIN `tabWhatsApp Core Team Member` AS member
-			ON member.parent = team.name
-			AND member.parenttype = 'WhatsApp Core Team'
-			AND member.parentfield = 'members'
-			AND member.enabled = 1
-			AND member.user = %(user)s
-		WHERE team_contact.parenttype = 'WhatsApp Core Team'
-			AND team_contact.parentfield = 'contacts'
-			AND team_contact.enabled = 1
-			AND team_contact.identity = %(identity)s
+			EXISTS (
+				SELECT 1
+				FROM `tabWhatsApp Core Team Member` user_team
+				JOIN `tabWhatsApp Core Team` team
+					ON team.name = user_team.parent AND team.enabled = 1
+				WHERE user_team.parenttype = 'WhatsApp Core Team'
+					AND user_team.parentfield = 'members'
+					AND user_team.enabled = 1
+					AND user_team.user = %(user)s
+			) AS has_user_team,
+			EXISTS (
+				SELECT 1
+				FROM `tabWhatsApp Core Team Contact` team_contact
+				JOIN `tabWhatsApp Core Team` team
+					ON team.name = team_contact.parent AND team.enabled = 1
+				WHERE team_contact.parenttype = 'WhatsApp Core Team'
+					AND team_contact.parentfield = 'contacts'
+					AND team_contact.enabled = 1
+					AND team_contact.identity = %(identity)s
+			) AS has_contact_team,
+			EXISTS (
+				SELECT 1
+				FROM `tabWhatsApp Core Team Contact` team_contact
+				JOIN `tabWhatsApp Core Team` team
+					ON team.name = team_contact.parent AND team.enabled = 1
+				JOIN `tabWhatsApp Core Team Member` member
+					ON member.parent = team_contact.parent
+					AND member.parenttype = 'WhatsApp Core Team'
+					AND member.parentfield = 'members'
+					AND member.enabled = 1
+					AND member.user = %(user)s
+				WHERE team_contact.parenttype = 'WhatsApp Core Team'
+					AND team_contact.parentfield = 'contacts'
+					AND team_contact.enabled = 1
+					AND team_contact.identity = %(identity)s
+			) AS has_matching_team
 		""",
 		{"identity": identity, "user": frappe.session.user},
 		as_dict=True,
 	)[0]
-	if int(row.category_count or 0) and not int(row.matching_team_count or 0):
+	if bool(row.has_user_team) != bool(row.has_contact_team) or (
+		row.has_user_team and not row.has_matching_team
+	):
 		frappe.throw("This contact is assigned to another team", frappe.PermissionError)
 
 
@@ -219,31 +478,57 @@ def identity_team_condition(identity_expression: str) -> tuple[str, dict]:
 		frappe.throw("Invalid identity expression", frappe.ValidationError)
 	return (
 		f"""(
-			NOT EXISTS (
-				SELECT 1
-				FROM `tabWhatsApp Core Team Contact` AS contact_scope
-				JOIN `tabWhatsApp Core Team` AS contact_team
-					ON contact_team.name = contact_scope.parent AND contact_team.enabled = 1
-				WHERE contact_scope.parenttype = 'WhatsApp Core Team'
-					AND contact_scope.parentfield = 'contacts'
-					AND contact_scope.enabled = 1
-					AND contact_scope.identity = {identity_expression}
+			(
+				EXISTS (
+					SELECT 1
+					FROM `tabWhatsApp Core Team Member` AS user_team
+					JOIN `tabWhatsApp Core Team` AS enabled_user_team
+						ON enabled_user_team.name = user_team.parent
+						AND enabled_user_team.enabled = 1
+					WHERE user_team.parenttype = 'WhatsApp Core Team'
+						AND user_team.parentfield = 'members'
+						AND user_team.enabled = 1
+						AND user_team.user = %(contact_scope_user)s
+				)
+				AND EXISTS (
+					SELECT 1
+					FROM `tabWhatsApp Core Team Contact` AS visible_contact
+					JOIN `tabWhatsApp Core Team` AS visible_team
+						ON visible_team.name = visible_contact.parent AND visible_team.enabled = 1
+					JOIN `tabWhatsApp Core Team Member` AS visible_member
+						ON visible_member.parent = visible_team.name
+						AND visible_member.parenttype = 'WhatsApp Core Team'
+						AND visible_member.parentfield = 'members'
+						AND visible_member.enabled = 1
+					WHERE visible_contact.parenttype = 'WhatsApp Core Team'
+						AND visible_contact.parentfield = 'contacts'
+						AND visible_contact.enabled = 1
+						AND visible_contact.identity = {identity_expression}
+						AND visible_member.user = %(contact_scope_user)s
+				)
 			)
-			OR EXISTS (
-				SELECT 1
-				FROM `tabWhatsApp Core Team Contact` AS visible_contact
-				JOIN `tabWhatsApp Core Team` AS visible_team
-					ON visible_team.name = visible_contact.parent AND visible_team.enabled = 1
-				JOIN `tabWhatsApp Core Team Member` AS visible_member
-					ON visible_member.parent = visible_team.name
-					AND visible_member.parenttype = 'WhatsApp Core Team'
-					AND visible_member.parentfield = 'members'
-					AND visible_member.enabled = 1
-				WHERE visible_contact.parenttype = 'WhatsApp Core Team'
-					AND visible_contact.parentfield = 'contacts'
-					AND visible_contact.enabled = 1
-					AND visible_contact.identity = {identity_expression}
-					AND visible_member.user = %(contact_scope_user)s
+			OR (
+				NOT EXISTS (
+					SELECT 1
+					FROM `tabWhatsApp Core Team Member` AS user_team
+					JOIN `tabWhatsApp Core Team` AS enabled_user_team
+						ON enabled_user_team.name = user_team.parent
+						AND enabled_user_team.enabled = 1
+					WHERE user_team.parenttype = 'WhatsApp Core Team'
+						AND user_team.parentfield = 'members'
+						AND user_team.enabled = 1
+						AND user_team.user = %(contact_scope_user)s
+				)
+				AND NOT EXISTS (
+					SELECT 1
+					FROM `tabWhatsApp Core Team Contact` AS contact_scope
+					JOIN `tabWhatsApp Core Team` AS contact_team
+						ON contact_team.name = contact_scope.parent AND contact_team.enabled = 1
+					WHERE contact_scope.parenttype = 'WhatsApp Core Team'
+						AND contact_scope.parentfield = 'contacts'
+						AND contact_scope.enabled = 1
+						AND contact_scope.identity = {identity_expression}
+				)
 			)
 		)""",
 		{"contact_scope_user": frappe.session.user},

@@ -7,7 +7,9 @@
 	"engine": "InnoDB",
 	"field_order": [
 		"identity",
-		"enabled"
+		"enabled",
+		"assignment_source",
+		"source_reference"
 	],
 	"fields": [
 		{
@@ -25,6 +27,20 @@
 			"label": "Enabled",
 			"default": "1",
 			"in_list_view": 1
+		},
+		{
+			"fieldname": "assignment_source",
+			"fieldtype": "Data",
+			"hidden": 1,
+			"label": "Assignment Source",
+			"read_only": 1
+		},
+		{
+			"fieldname": "source_reference",
+			"fieldtype": "Data",
+			"hidden": 1,
+			"label": "Source Reference",
+			"read_only": 1
 		}
 	]
 }

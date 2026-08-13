@@ -192,13 +192,23 @@ scheduler_events = {
 # -----------
 # Permissions evaluated in scripted ways
 
-# permission_query_conditions = {
-# 	"Event": "frappe.desk.doctype.event.event.get_permission_query_conditions",
-# }
-#
-# has_permission = {
-# 	"Event": "frappe.desk.doctype.event.event.has_permission",
-# }
+permission_query_conditions = {
+	"WhatsApp Core Conversation": "frappe_whatsapp_core.permissions.conversation_permission_query",
+	"WhatsApp Core Message": "frappe_whatsapp_core.permissions.message_permission_query",
+	"WhatsApp Core Conversation Read": "frappe_whatsapp_core.permissions.conversation_read_permission_query",
+	"WhatsApp Core Message Read": "frappe_whatsapp_core.permissions.message_read_permission_query",
+	"WhatsApp Core Team": "frappe_whatsapp_core.permissions.team_permission_query",
+	"WhatsApp Core Template": "frappe_whatsapp_core.permissions.template_permission_query",
+}
+
+has_permission = {
+	"WhatsApp Core Conversation": "frappe_whatsapp_core.permissions.has_scoped_conversation_permission",
+	"WhatsApp Core Message": "frappe_whatsapp_core.permissions.has_scoped_message_permission",
+	"WhatsApp Core Conversation Read": "frappe_whatsapp_core.permissions.has_scoped_conversation_read_permission",
+	"WhatsApp Core Message Read": "frappe_whatsapp_core.permissions.has_scoped_message_read_permission",
+	"WhatsApp Core Team": "frappe_whatsapp_core.permissions.has_scoped_team_permission",
+	"WhatsApp Core Template": "frappe_whatsapp_core.permissions.has_scoped_template_permission",
+}
 
 # DocType Class
 # ---------------

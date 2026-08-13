@@ -34,6 +34,7 @@
 	--wa-sidebar: #ffffff;
 	--wa-message-in: #ffffff;
 	--wa-message-out: #e7f8ef;
+	--wa-chat-bg: #efeae2;
 }
 
 .app-dark {
@@ -61,6 +62,47 @@
 	--wa-sidebar: #171b20;
 	--wa-message-in: #20252b;
 	--wa-message-out: #19362c;
+	--wa-chat-bg: #0b141a;
+}
+
+.app-dark .inbox-page {
+	--wa-primary: #00a884;
+	--wa-primary-soft: #182229;
+	--wa-success: #00a884;
+	--wa-success-soft: #0b392f;
+	--wa-surface: #111b21;
+	--wa-surface-muted: #202c33;
+	--wa-message-in: #202c33;
+	--wa-message-out: #005c4b;
+	--wa-text: #e9edef;
+	--wa-muted: #8696a0;
+	--wa-border: #2a3942;
+	--wa-border-soft: #202c33;
+	--wa-chat-bg: #0b141a;
+}
+
+.inbox-page * {
+	scrollbar-width: thin;
+	scrollbar-color: color-mix(in srgb, var(--wa-muted) 42%, transparent) transparent;
+}
+.inbox-page *::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+.inbox-page *::-webkit-scrollbar-track {
+	background: transparent;
+}
+.inbox-page *::-webkit-scrollbar-thumb {
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--wa-muted) 42%, transparent);
+}
+.inbox-page *::-webkit-scrollbar-thumb:hover {
+	background: color-mix(in srgb, var(--wa-muted) 64%, transparent);
+}
+html.inbox-resizing,
+html.inbox-resizing * {
+	cursor: col-resize !important;
+	user-select: none !important;
 }
 
 * {

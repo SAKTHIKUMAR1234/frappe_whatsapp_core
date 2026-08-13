@@ -12,6 +12,7 @@
 		"category",
 		"approval_status",
 		"enabled",
+		"hub_template_name",
 		"template_id",
 		"header_type",
 		"header_content",
@@ -70,6 +71,13 @@
 			"label": "Meta Template ID"
 		},
 		{
+			"fieldname": "hub_template_name",
+			"fieldtype": "Data",
+			"label": "Integration Template",
+			"read_only": 1,
+			"hidden": 1
+		},
+		{
 			"fieldname": "header_type",
 			"fieldtype": "Data",
 			"label": "Header Type"
@@ -112,6 +120,10 @@
 		},
 		{
 			"role": "WhatsApp Manager",
+			"read": 1
+		},
+		{
+			"role": "WhatsApp User",
 			"read": 1
 		}
 	],

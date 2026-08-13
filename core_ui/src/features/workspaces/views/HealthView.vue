@@ -15,6 +15,7 @@
 
 	import AsyncState from '@/components/AsyncState.vue'
 	import { call, errorMessage } from '@/services/frappe'
+	import { formatDateTime } from '@/utils/datetime'
 
 	const loading = ref(true)
 	const loadError = ref('')
@@ -55,7 +56,6 @@
 		<div>
 			<div class="eyebrow">Core evidence</div>
 			<h1>Audit & Health</h1>
-			<p>Operational state derived from events, flow runs and message delivery records.</p>
 		</div>
 		<Button label="Refresh" outlined :loading="loading" :disabled="loading" @click="load">
 			<template #icon><RefreshCw :size="16" /></template>
@@ -135,7 +135,9 @@
 						<p class="error-copy">{{ data.error || 'No error detail recorded' }}</p>
 					</template>
 				</Column>
-				<Column field="modified" header="Time" />
+				<Column field="modified" header="Time">
+					<template #body="{ data }">{{ formatDateTime(data.modified) }}</template>
+				</Column>
 				<template #empty>
 					<div class="empty">
 						<CircleCheck :size="30" />

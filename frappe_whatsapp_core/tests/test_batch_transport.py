@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import frappe
 
 from frappe_whatsapp_core.campaigns import _campaign_batch_sender
-from frappe_whatsapp_core.hub_client import send_batch
+from frappe_whatsapp_core.hub_client import publish_outbound_command, send_batch
 from frappe_whatsapp_core.outbound import (
 	deliver_queued_message,
 	deliver_queued_message_batch,
@@ -64,13 +64,13 @@ class TestBatchTransport(TestCase):
 	def test_hub_batch_maps_channels_and_uses_one_request(self):
 		settings = SimpleNamespace(
 			hub_url="https://hub.example.test",
+			relay_url="https://relay.example.test",
 			request_timeout=30,
 			get_hub_auth_headers=lambda: {"Authorization": "token test"},
 			get_account_name=lambda channel: f"account:{channel}",
 		)
 		response = MagicMock(ok=True)
 		response.json.return_value = {
-			"message": {
 				"success": True,
 				"queued": 2,
 				"items": [
@@ -85,7 +85,6 @@ class TestBatchTransport(TestCase):
 						"result": {"success": True},
 					},
 				],
-			},
 		}
 		with (
 			patch(
@@ -116,14 +115,89 @@ class TestBatchTransport(TestCase):
 
 		self.assertTrue(result["accepted"])
 		self.assertEqual(post.call_count, 1)
+		self.assertEqual(post.call_args.args[0], "https://relay.example.test/v1/outbound/batch")
 		self.assertEqual(
 			post.call_args.kwargs["json"]["messages"][0]["account_name"],
 			"account:channel-1",
 		)
 
+	def test_core_batch_posts_directly_to_go_when_relay_url_is_configured(self):
+		settings = SimpleNamespace(
+			hub_url="https://hub.example.test",
+			relay_url="https://relay.example.test/",
+			request_timeout=30,
+			get_hub_auth_headers=lambda: {
+				"Authorization": "token core-key:core-secret"
+			},
+			get_account_name=lambda channel: f"account:{channel}",
+		)
+		response = MagicMock(ok=True)
+		response.json.return_value = {
+			"success": True,
+			"queued": 1,
+			"duplicates": 0,
+			"items": [{
+				"idempotency_key": "key-1",
+				"status": "queued",
+				"result": {"success": True, "status": "queued"},
+			}],
+		}
+		with (
+			patch(
+				"frappe_whatsapp_core.hub_client.get_settings",
+				return_value=settings,
+			),
+			patch(
+				"frappe_whatsapp_core.hub_client._session.post",
+				return_value=response,
+			) as post,
+		):
+			result = send_batch([{
+				"channel": "channel-1",
+				"payload": {"to": "911111111111"},
+				"idempotency_key": "key-1",
+			}])
+
+		self.assertTrue(result["accepted"])
+		self.assertEqual(
+			post.call_args.args[0],
+			"https://relay.example.test/v1/outbound/batch",
+		)
+		self.assertEqual(
+			post.call_args.kwargs["headers"]["Authorization"],
+			"token core-key:core-secret",
+		)
+
 	def test_core_campaign_sender_defaults_to_batch_transport(self):
 		with patch("frappe_whatsapp_core.campaigns.frappe.get_hooks", return_value=[]):
 			self.assertIs(_campaign_batch_sender(), queue_campaign_batch)
+
+	def test_management_publishes_one_runtime_command_to_go(self):
+		settings = SimpleNamespace(
+			hub_url="https://hub.example.test",
+			relay_url="https://relay.example.test",
+			request_timeout=30,
+			get_hub_auth_headers=lambda: {"Authorization": "token core:secret"},
+			get_account_name=lambda channel: f"account:{channel}",
+		)
+		response = MagicMock(ok=True, status_code=202)
+		response.json.return_value = {
+			"success": True, "command_id": "campaign-1", "queued": 1,
+			"duplicates": 0, "total": 1,
+		}
+		with (
+			patch("frappe_whatsapp_core.hub_client.get_settings", return_value=settings),
+			patch("frappe_whatsapp_core.hub_client._session.post", return_value=response) as post,
+		):
+			result = publish_outbound_command(
+				"campaign-1",
+				[{"channel": "channel-1", "payload": {"to": "9876543210", "type": "text", "text": {"body": "hello"}}, "idempotency_key": "message-1"}],
+				execute_at="2026-08-13T10:00:00+05:30",
+			)
+		self.assertTrue(result["accepted"])
+		self.assertEqual(post.call_args.args[0], "https://relay.example.test/v1/commands/outbound")
+		self.assertEqual(post.call_args.kwargs["json"]["command_id"], "campaign-1")
+		self.assertEqual(post.call_args.kwargs["json"]["execute_at"], "2026-08-13T10:00:00+05:30")
 
 	def test_recipient_phone_defaults_to_core_identity(self):
 		identity = SimpleNamespace(normalized_value="+91 98765 43210")
@@ -256,6 +330,38 @@ class TestBatchTransport(TestCase):
 			2,
 		)
 
+	def test_campaign_batch_never_converts_deadlock_to_recipient_failure(self):
+		campaign = SimpleNamespace(
+			name="campaign-deadlock",
+			channel="channel-1",
+			template="template-1",
+		)
+		recipient = SimpleNamespace(
+			name="recipient-deadlock",
+			identity="identity-deadlock",
+			personalization="{}",
+		)
+		with (
+			patch("frappe_whatsapp_core.outbound.outbound_ready", return_value=True),
+			patch(
+				"frappe_whatsapp_core.outbound.frappe.get_cached_doc",
+				side_effect=[
+					SimpleNamespace(name="channel-1"),
+					SimpleNamespace(name="template-1", language_code="en"),
+					SimpleNamespace(name="identity-deadlock"),
+				],
+			),
+			patch(
+				"frappe_whatsapp_core.outbound.get_or_create_conversation",
+				side_effect=frappe.QueryDeadlockError("deadlock"),
+			),
+			patch("frappe_whatsapp_core.outbound.frappe.enqueue") as enqueue,
+		):
+			with self.assertRaises(frappe.QueryDeadlockError):
+				queue_campaign_batch(campaign, [recipient])
+
+		enqueue.assert_not_called()
+
 	def test_committed_campaign_batch_submits_all_messages_together(self):
 		messages = {
 			f"message-{index}": frappe._dict(
@@ -327,6 +433,50 @@ class TestBatchTransport(TestCase):
 		self.assertEqual(hub_batch.call_count, 1)
 		self.assertEqual(len(hub_batch.call_args.args[0]), 2)
 		self.assertEqual(rollback.call_count, 2)
+
+	def test_missing_message_does_not_abort_other_committed_batch_items(self):
+		message = frappe._dict(
+			name="message-valid",
+			channel="channel-1",
+			conversation="conversation-1",
+			idempotency_key="key-valid",
+			delivery_status="Queued",
+		)
+		conversation = frappe._dict(name="conversation-1", remote_identity="identity-1")
+		identity = frappe._dict(name="identity-1", normalized_value="919999999999")
+
+		def get_doc(doctype, name):
+			if doctype == "WhatsApp Core Message" and name == "message-missing":
+				raise frappe.DoesNotExistError
+			return {
+				("WhatsApp Core Message", "message-valid"): message,
+				("WhatsApp Core Conversation", "conversation-1"): conversation,
+				("WhatsApp Core Identity", "identity-1"): identity,
+			}[(doctype, name)]
+
+		with (
+			patch("frappe_whatsapp_core.outbound.frappe.get_doc", side_effect=get_doc),
+			patch("frappe_whatsapp_core.outbound.resolve_recipient_phone", return_value="919999999999"),
+			patch("frappe_whatsapp_core.outbound._message_payload", return_value={"to": "919999999999"}),
+			patch(
+				"frappe_whatsapp_core.outbound.send_hub_batch",
+				return_value={
+					"accepted": True,
+					"items": [{
+						"idempotency_key": "key-valid",
+						"status": "queued",
+						"result": {"success": True, "status": "queued"},
+					}],
+				},
+			) as hub_batch,
+			patch("frappe_whatsapp_core.outbound.frappe.db.rollback"),
+			patch("frappe_whatsapp_core.outbound.frappe.logger") as logger,
+		):
+			deliver_queued_message_batch(["message-missing", "message-valid"])
+
+		hub_batch.assert_called_once()
+		self.assertEqual(len(hub_batch.call_args.args[0]), 1)
+		logger.return_value.warning.assert_called_once()
 
 	def test_invalid_campaign_recipient_fails_before_message_creation(self):
 		campaign = SimpleNamespace(

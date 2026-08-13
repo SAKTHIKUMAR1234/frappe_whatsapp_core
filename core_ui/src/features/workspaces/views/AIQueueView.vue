@@ -5,7 +5,7 @@
 	import Checkbox from 'primevue/checkbox'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
-	import Dialog from 'primevue/dialog'
+	import AppDialog from '@/components/AppDialog.vue'
 	import InputText from 'primevue/inputtext'
 	import Skeleton from 'primevue/skeleton'
 	import Tag from 'primevue/tag'
@@ -16,6 +16,7 @@
 	import { call, errorMessage } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
+	import { formatDateTime } from '@/utils/datetime'
 	import { focusDialogControl } from '@/utils/focus'
 
 	const toast = useToast()
@@ -148,10 +149,6 @@
 		<div>
 			<div class="eyebrow">Human review</div>
 			<h1>AI Queue</h1>
-			<p>
-				Classify uncertain messages manually or let an authenticated MCP client handle
-				them.
-			</p>
 		</div>
 		<div class="heading-actions">
 			<Button label="Refresh" outlined :loading="loading" :disabled="loading" @click="load">
@@ -233,7 +230,11 @@
 						<Tag :value="data.direction" severity="secondary" rounded />
 					</template>
 				</Column>
-				<Column field="provider_timestamp" header="Received" />
+				<Column field="provider_timestamp" header="Received">
+					<template #body="{ data }">{{
+						formatDateTime(data.provider_timestamp)
+					}}</template>
+				</Column>
 				<template #empty>
 					<div class="empty">
 						<CircleCheck :size="30" />
@@ -258,7 +259,9 @@
 						<p>{{ message.body || `(${message.message_type})` }}</p>
 						<small>
 							<Tag :value="message.direction" severity="secondary" rounded />
-							<time>{{ message.provider_timestamp }}</time>
+							<time :datetime="message.provider_timestamp || undefined">{{
+								formatDateTime(message.provider_timestamp)
+							}}</time>
 						</small>
 					</span>
 				</label>
@@ -292,13 +295,18 @@
 						/>
 					</template>
 				</Column>
-				<Column field="creation" header="Time" />
+				<Column field="creation" header="Time">
+					<template #body="{ data }">{{ formatDateTime(data.creation) }}</template>
+				</Column>
 			</DataTable>
 			<div class="mobile-invocations">
 				<article v-for="invocation in workspace.invocations" :key="invocation.name">
 					<div>
 						<strong>{{ invocation.tool_name }}</strong>
-						<small>{{ invocation.user }} · {{ invocation.creation }}</small>
+						<small
+							>{{ invocation.user }} ·
+							{{ formatDateTime(invocation.creation) }}</small
+						>
 					</div>
 					<span>
 						<Tag
@@ -315,7 +323,7 @@
 			</div>
 		</section>
 
-		<Dialog
+		<AppDialog
 			ref="dialogRef"
 			v-model:visible="dialogVisible"
 			modal
@@ -356,7 +364,7 @@
 					@click="classify"
 				/>
 			</template>
-		</Dialog>
+		</AppDialog>
 	</template>
 </template>
 

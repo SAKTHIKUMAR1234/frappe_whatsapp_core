@@ -8,12 +8,16 @@ import json
 import frappe
 
 from frappe_whatsapp_core.contact_presentation import present_identity_names
-from frappe_whatsapp_core.conversation_reads import conversation_readers, mark_conversation_read
+from frappe_whatsapp_core.conversation_reads import (
+	attach_message_readers,
+	conversation_readers,
+	mark_conversation_read,
+)
 from frappe_whatsapp_core.materializer import inbound_message_body
 from frappe_whatsapp_core.message_media import add_media_url
 from frappe_whatsapp_core.message_quotes import attach_quoted_messages
 from frappe_whatsapp_core.message_reactions import attach_message_reactions
-from frappe_whatsapp_core.outbound import outbound_state
+from frappe_whatsapp_core.outbound import outbound_state, template_message_snapshot
 from frappe_whatsapp_core.permissions import (
 	CORE_MANAGEMENT_ROLES,
 	assert_conversation_access,
@@ -26,9 +30,78 @@ from frappe_whatsapp_core.ai_summaries import attach_message_insights, get_ident
 
 @frappe.whitelist()
 @require_core_access()
-def conversations(limit: int = 250, category: str | None = None) -> list[dict]:
+def conversations(
+	limit: int = 250,
+	category: str | None = None,
+	team: str | None = None,
+) -> list[dict]:
 	limit = max(1, min(int(limit), 500))
+	return _conversation_page(limit=limit, category=category, team=team)[0]
+
+
+@frappe.whitelist()
+@require_core_access()
+def conversation_page(
+	limit: int = 20,
+	before: str | None = None,
+	before_name: str | None = None,
+	category: str | None = None,
+	team: str | None = None,
+) -> dict:
+	"""Return a stable cursor page for the virtualized conversation list."""
+	limit = max(1, min(int(limit or 20), 100))
+	rows, has_more = _conversation_page(
+		limit=limit,
+		before=before,
+		before_name=before_name,
+		category=category,
+		team=team,
+	)
+	oldest = rows[-1] if has_more and rows else None
+	return {
+		"rows": rows,
+		"has_more": has_more,
+		"next_before": oldest.get("last_message_at") if oldest else None,
+		"next_before_name": oldest.get("name") if oldest else None,
+	}
+
+
+def _conversation_page(
+	*,
+	limit: int,
+	before: str | None = None,
+	before_name: str | None = None,
+	category: str | None = None,
+	team: str | None = None,
+) -> tuple[list[dict], bool]:
 	conditions, values = conversation_conditions("conversation")
+	team = str(team or "").strip()
+	if team:
+		if not frappe.db.exists("WhatsApp Core Team", {"name": team, "enabled": 1}):
+			frappe.throw("Enabled team not found", frappe.ValidationError)
+		if not set(frappe.get_roles()) & CORE_MANAGEMENT_ROLES and not frappe.db.exists(
+			"WhatsApp Core Team Member",
+			{
+				"parent": team,
+				"parenttype": "WhatsApp Core Team",
+				"parentfield": "members",
+				"user": frappe.session.user,
+				"enabled": 1,
+			},
+		):
+			frappe.throw("This team is outside your access scope", frappe.PermissionError)
+		conditions.append(
+			"""EXISTS (
+				SELECT 1
+				FROM `tabWhatsApp Core Team Contact` AS team_filter
+				WHERE team_filter.parent = %(team)s
+					AND team_filter.parenttype = 'WhatsApp Core Team'
+					AND team_filter.parentfield = 'contacts'
+					AND team_filter.enabled = 1
+					AND team_filter.identity = conversation.remote_identity
+			)"""
+		)
+		values["team"] = team
 	category = str(category or "").strip()
 	if category:
 		conditions.append(
@@ -40,7 +113,22 @@ def conversations(limit: int = 250, category: str | None = None) -> list[dict]:
 			)"""
 		)
 		values["category"] = category
-	values["limit"] = limit
+	if before:
+		values["before"] = before
+		if before_name:
+			conditions.append(
+				"""(
+					conversation.last_message_at < %(before)s
+					OR (
+						conversation.last_message_at = %(before)s
+						AND conversation.name < %(before_name)s
+					)
+				)"""
+			)
+			values["before_name"] = before_name
+		else:
+			conditions.append("conversation.last_message_at < %(before)s")
+	values["limit"] = limit + 1
 	rows = frappe.db.sql(
 		f"""
 		SELECT
@@ -56,12 +144,50 @@ def conversations(limit: int = 250, category: str | None = None) -> list[dict]:
 			conversation.last_message_at
 		FROM `tabWhatsApp Core Conversation` AS conversation
 		WHERE {" AND ".join(conditions)}
-		ORDER BY conversation.last_message_at DESC
+		ORDER BY conversation.last_message_at DESC, conversation.name DESC
 		LIMIT %(limit)s
 		""",
 		values,
 		as_dict=True,
 	)
+	has_more = len(rows) > limit
+	rows = rows[:limit]
+	return _enrich_conversation_rows(rows), has_more
+
+
+@frappe.whitelist()
+@require_core_access()
+def conversation_summary(name: str) -> dict | None:
+	"""Return one list-row projection without reloading the whole inbox."""
+	assert_conversation_access(name)
+	conditions, values = conversation_conditions("conversation")
+	conditions.append("conversation.name = %(name)s")
+	values["name"] = name
+	rows = frappe.db.sql(
+		f"""
+		SELECT
+			conversation.name,
+			conversation.conversation_key,
+			conversation.channel,
+			conversation.remote_identity,
+			conversation.status,
+			conversation.workspace_key,
+			conversation.assigned_team,
+			conversation.assigned_user,
+			conversation.last_inbound_at,
+			conversation.last_message_at
+		FROM `tabWhatsApp Core Conversation` AS conversation
+		WHERE {" AND ".join(conditions)}
+		LIMIT 1
+		""",
+		values,
+		as_dict=True,
+	)
+	result = _enrich_conversation_rows(rows)
+	return result[0] if result else None
+
+
+def _enrich_conversation_rows(rows) -> list[dict]:
 	if not rows:
 		return []
 	conversation_names = [row.name for row in rows]
@@ -122,8 +248,8 @@ def category_catalog() -> list[dict]:
 
 @frappe.whitelist()
 @require_core_access()
-def conversation(name: str, message_limit: int = 500) -> dict:
-	message_limit = max(1, min(int(message_limit), 1000))
+def conversation(name: str, message_limit: int = 20) -> dict:
+	message_limit = max(1, min(int(message_limit or 20), 100))
 	assert_conversation_access(name)
 	doc = frappe.get_doc("WhatsApp Core Conversation", name)
 	frappe.has_permission(
@@ -168,7 +294,9 @@ def conversation(name: str, message_limit: int = 500) -> dict:
 		current_read,
 	)
 	_enrich_message_senders(messages)
+	_attach_template_snapshots(messages)
 	attach_message_reactions(messages, doc.name)
+	attach_message_readers(messages)
 	bookmarks = set(frappe.get_all(
 		"WhatsApp Core Message Bookmark",
 		filters={"user": frappe.session.user, "message": ["in", [row.name for row in messages]]},
@@ -216,26 +344,58 @@ def conversation(name: str, message_limit: int = 500) -> dict:
 	}
 
 
+def _attach_template_snapshots(messages) -> None:
+	"""Enrich legacy template rows without mutating their historical database record."""
+	for row in messages:
+		if row.get("message_type") != "template":
+			continue
+		try:
+			content = json.loads(row.get("content") or "{}")
+		except (TypeError, ValueError):
+			content = {}
+		if not isinstance(content, dict) or content.get("template_snapshot"):
+			continue
+		record = content.get("template_record")
+		if not record or not frappe.db.exists("WhatsApp Core Template", record):
+			continue
+		template_doc = frappe.get_cached_doc("WhatsApp Core Template", record)
+		snapshot = template_message_snapshot(template_doc, content.get("components") or [])
+		content["template_snapshot"] = snapshot
+		row.content = json.dumps(content, separators=(",", ":"), ensure_ascii=False)
+		if not row.get("body") or row.get("body") == content.get("template"):
+			row.body = snapshot.get("body") or snapshot.get("header") or row.get("body")
+
+
 def _conversation_message_rows(conversation: str, limit: int, current_read) -> tuple[list, dict, str | None]:
-	"""Load from an operator's durable cursor, with a small preceding context window."""
+	"""Open at the first exact unread inbound message, otherwise at the bottom."""
 	fields = """
 		name, provider_message_id, direction, message_type, body, content,
 		provider_timestamp, delivery_status, failure, owner, creation
 	"""
-	resume_message = current_read.last_read_message if current_read else None
-	anchor = None
-	if resume_message:
-		anchor = frappe.db.get_value(
-			"WhatsApp Core Message",
-			{"name": resume_message, "conversation": conversation},
-			["provider_timestamp", "creation"],
-			as_dict=True,
-		)
+	anchor = frappe.db.sql(
+		"""
+		SELECT message.name, message.provider_timestamp, message.creation
+		FROM `tabWhatsApp Core Message` message
+		LEFT JOIN `tabWhatsApp Core Message Read` message_read
+			ON message_read.message = message.name
+			AND message_read.user = %(user)s
+		WHERE message.conversation = %(conversation)s
+			AND message.direction = 'Inbound'
+			AND message.message_type != 'reaction'
+			AND message_read.name IS NULL
+		ORDER BY message.provider_timestamp ASC, message.creation ASC, message.name ASC
+		LIMIT 1
+		""",
+		{"conversation": conversation, "user": frappe.session.user},
+		as_dict=True,
+	)
+	anchor = anchor[0] if anchor else None
 	if anchor:
 		values = {
 			"conversation": conversation,
 			"at": anchor.provider_timestamp,
 			"creation": anchor.creation,
+			"anchor_name": anchor.name,
 			"limit": limit + 1,
 		}
 		newer = frappe.db.sql(
@@ -245,9 +405,15 @@ def _conversation_message_rows(conversation: str, limit: int, current_read) -> t
 			WHERE conversation = %(conversation)s AND message_type != 'reaction'
 				AND (
 					provider_timestamp > %(at)s
-					OR (provider_timestamp = %(at)s AND creation >= %(creation)s)
+					OR (
+						provider_timestamp = %(at)s
+						AND (
+							creation > %(creation)s
+							OR (creation = %(creation)s AND name >= %(anchor_name)s)
+						)
+					)
 				)
-			ORDER BY provider_timestamp ASC, creation ASC
+			ORDER BY provider_timestamp ASC, creation ASC, name ASC
 			LIMIT %(limit)s
 			""",
 			values,
@@ -255,38 +421,45 @@ def _conversation_message_rows(conversation: str, limit: int, current_read) -> t
 		)
 		has_more_newer = len(newer) > limit
 		newer = newer[:limit]
-		older = frappe.db.sql(
+		has_more_older = bool(frappe.db.sql(
 			f"""
-			SELECT {fields}
+			SELECT name
 			FROM `tabWhatsApp Core Message`
 			WHERE conversation = %(conversation)s AND message_type != 'reaction'
 				AND (
 					provider_timestamp < %(at)s
-					OR (provider_timestamp = %(at)s AND creation < %(creation)s)
+					OR (
+						provider_timestamp = %(at)s
+						AND (
+							creation < %(creation)s
+							OR (creation = %(creation)s AND name < %(anchor_name)s)
+						)
+					)
 				)
-			ORDER BY provider_timestamp DESC, creation DESC
-			LIMIT 21
+			LIMIT 1
 			""",
 			values,
-			as_dict=True,
-		)
-		has_more_older = len(older) > 20
-		older = list(reversed(older[:20]))
-		messages = older + newer
+		))
+		messages = newer
 		oldest = messages[0] if messages else None
+		newest = newer[-1] if newer else None
 		return messages, {
 			"has_more": has_more_older,
 			"has_more_newer": has_more_newer,
 			"next_before": oldest.provider_timestamp if has_more_older and oldest else None,
 			"next_before_creation": oldest.creation if has_more_older and oldest else None,
-		}, resume_message
+			"next_before_name": oldest.name if has_more_older and oldest else None,
+			"next_after": newest.provider_timestamp if has_more_newer and newest else None,
+			"next_after_creation": newest.creation if has_more_newer and newest else None,
+			"next_after_name": newest.name if has_more_newer and newest else None,
+		}, anchor.name
 
 	messages = frappe.db.sql(
 		f"""
 		SELECT {fields}
 		FROM `tabWhatsApp Core Message`
 		WHERE conversation = %(conversation)s AND message_type != 'reaction'
-		ORDER BY provider_timestamp DESC, creation DESC
+		ORDER BY provider_timestamp DESC, creation DESC, name DESC
 		LIMIT %(limit)s
 		""",
 		{"conversation": conversation, "limit": limit + 1},
@@ -301,7 +474,11 @@ def _conversation_message_rows(conversation: str, limit: int, current_read) -> t
 		"has_more_newer": False,
 		"next_before": oldest.provider_timestamp if has_more and oldest else None,
 		"next_before_creation": oldest.creation if has_more and oldest else None,
-	}, None
+		"next_before_name": oldest.name if has_more and oldest else None,
+		"next_after": None,
+		"next_after_creation": None,
+		"next_after_name": None,
+	}, current_read.last_read_message if current_read else None
 
 
 def _team_presentations(team_names) -> dict[str, dict]:
@@ -523,19 +700,13 @@ def _unread_counts(conversation_names: list[str]) -> dict:
 			message.conversation,
 			COUNT(*) AS unread_count
 		FROM `tabWhatsApp Core Message` AS message
-		LEFT JOIN `tabWhatsApp Core Conversation Read` AS read_cursor
-			ON read_cursor.conversation = message.conversation
-			AND read_cursor.user = %(user)s
+		LEFT JOIN `tabWhatsApp Core Message Read` AS message_read
+			ON message_read.message = message.name
+			AND message_read.user = %(user)s
 		WHERE message.conversation IN %(conversation_names)s
 			AND message.direction = 'Inbound'
-			AND (
-				read_cursor.last_read_at IS NULL
-				OR message.provider_timestamp > read_cursor.last_read_at
-				OR (
-					message.provider_timestamp = read_cursor.last_read_at
-					AND message.creation > COALESCE(read_cursor.last_read_creation, '1970-01-01')
-				)
-			)
+			AND message.message_type != 'reaction'
+			AND message_read.name IS NULL
 		GROUP BY message.conversation
 		""",
 		{

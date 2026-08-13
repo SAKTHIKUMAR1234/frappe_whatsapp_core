@@ -4,10 +4,10 @@
 	import Button from 'primevue/button'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
-	import Dialog from 'primevue/dialog'
+	import AppDialog from '@/components/AppDialog.vue'
 	import InputText from 'primevue/inputtext'
 	import InputNumber from 'primevue/inputnumber'
-	import MultiSelect from 'primevue/multiselect'
+	import MultiLinkField from '@/components/form/MultiLinkField.vue'
 	import Select from 'primevue/select'
 	import Tag from 'primevue/tag'
 	import Textarea from 'primevue/textarea'
@@ -417,7 +417,6 @@
 		<div>
 			<div class="eyebrow">Meta Groups API</div>
 			<h1>WhatsApp Groups</h1>
-			<p>Create, moderate and message Meta-hosted business groups without leaving Core.</p>
 		</div>
 		<Button
 			label="Create group"
@@ -488,7 +487,7 @@
 			<span>Create the first group for this account or choose another account.</span>
 		</div>
 	</section>
-	<Dialog
+	<AppDialog
 		ref="createDialogRef"
 		v-model:visible="showCreate"
 		modal
@@ -523,8 +522,8 @@
 				:loading="saving"
 				:disabled="!form.subject.trim()"
 				@click="create" /></template
-	></Dialog>
-	<Dialog
+	></AppDialog>
+	<AppDialog
 		ref="manageDialogRef"
 		v-model:visible="showManage"
 		modal
@@ -665,7 +664,7 @@
 				</div>
 				<label>
 					Participants to remove
-					<MultiSelect
+					<MultiLinkField
 						v-model="participantsToRemove"
 						:options="activity.members"
 						option-label="participant_id"
@@ -791,7 +790,7 @@
 				</div>
 			</section>
 		</div>
-	</Dialog>
+	</AppDialog>
 </template>
 <style scoped>
 	.panel {

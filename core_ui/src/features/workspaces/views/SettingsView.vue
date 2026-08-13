@@ -65,7 +65,6 @@
 		<div>
 			<div class="eyebrow">Company configuration</div>
 			<h1>Core Settings</h1>
-			<p>Configure accounts, teams, contact sources and messaging defaults.</p>
 		</div>
 		<Button label="Refresh inventory" outlined @click="load">
 			<template #icon><RefreshCw :size="16" /></template>

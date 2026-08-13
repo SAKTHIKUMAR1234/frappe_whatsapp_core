@@ -9,6 +9,7 @@
 		"team_name",
 		"icon",
 		"description",
+		"managed_source",
 		"enabled",
 		"members",
 		"contacts"
@@ -33,6 +34,13 @@
 			"fieldname": "description",
 			"fieldtype": "Small Text",
 			"label": "Description"
+		},
+		{
+			"fieldname": "managed_source",
+			"fieldtype": "Data",
+			"hidden": 1,
+			"label": "Managed Source",
+			"read_only": 1
 		},
 		{
 			"fieldname": "enabled",
@@ -63,14 +71,18 @@
 			"delete": 1,
 			"export": 1
 		},
-		{
-			"role": "WhatsApp Manager",
+  {
+    "role": "WhatsApp Manager",
 			"read": 1,
 			"write": 1,
 			"create": 1,
 			"delete": 1,
-			"export": 1
-		}
+    "export": 1
+  },
+  {
+    "role": "WhatsApp User",
+    "read": 1
+  }
 	],
 	"sort_field": "team_name",
 	"sort_order": "ASC",

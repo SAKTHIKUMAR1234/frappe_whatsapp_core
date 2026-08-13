@@ -2,7 +2,7 @@
 	import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 	import { useRoute, useRouter } from 'vue-router'
 	import Button from 'primevue/button'
-	import Dialog from 'primevue/dialog'
+	import AppDialog from '@/components/AppDialog.vue'
 	import InputText from 'primevue/inputtext'
 	import Menu from 'primevue/menu'
 	import {
@@ -35,8 +35,9 @@
 	let unsubscribeAuth = () => {}
 	let sidebarCollapseTimer = null
 	const flushContent = computed(() =>
-		['inbox', 'flow-builder', 'automation-flow-builder'].includes(String(route.name || '')),
+		['inbox', 'flow-builder'].includes(String(route.name || '')),
 	)
+	const inboxRoute = computed(() => String(route.name || '') === 'inbox')
 	const primaryRole = computed(
 		() => session.user?.roles?.find((role) => role.startsWith('WhatsApp ')) || 'Core user',
 	)
@@ -179,8 +180,9 @@
 
 <template>
 	<div class="app-shell">
-		<button
+		<Button
 			v-if="mobileOpen"
+			unstyled
 			class="sidebar-scrim"
 			aria-label="Close navigation"
 			@click="mobileOpen = false"
@@ -228,7 +230,7 @@
 			</div>
 		</aside>
 
-		<div class="main-shell">
+		<div :class="['main-shell', { 'inbox-shell': inboxRoute }]">
 			<header class="topbar">
 				<Button
 					class="mobile-menu"
@@ -241,11 +243,11 @@
 				>
 					<MenuIcon :size="21" />
 				</Button>
-				<button class="global-search" type="button" @click="openCommand">
+				<Button unstyled class="global-search" type="button" @click="openCommand">
 					<Search :size="18" />
 					<span>Search workspace and jump to a feature…</span>
 					<kbd>Ctrl K</kbd>
-				</button>
+				</Button>
 				<div class="top-actions">
 					<Button
 						v-if="session.boot?.modules?.includes('inbox')"
@@ -275,7 +277,8 @@
 						@click="router.push({ name: 'inbox' })"
 						><Bell :size="19"
 					/></Button>
-					<button
+					<Button
+						unstyled
 						class="profile"
 						type="button"
 						aria-label="Open user menu"
@@ -287,14 +290,14 @@
 							<small>{{ primaryRole }}</small>
 						</div>
 						<ChevronDown :size="15" />
-					</button>
+					</Button>
 					<Menu ref="profileMenu" :model="profileItems" popup />
 				</div>
 			</header>
 
 			<main :class="['content', { flush: flushContent }]"><RouterView /></main>
 		</div>
-		<Dialog
+		<AppDialog
 			v-model:visible="commandOpen"
 			modal
 			header="Go to"
@@ -306,15 +309,16 @@
 				<InputText
 					ref="commandInput"
 					v-model="commandQuery"
-					placeholder="Search inbox, campaigns, flows, settings…"
+					placeholder="Search inbox, campaigns, flows…"
 					fluid
 					@keyup.enter="filteredCommands[0] && runCommand(filteredCommands[0])"
 				/>
 			</div>
 			<div class="command-results">
-				<button
+				<Button
 					v-for="item in filteredCommands"
 					:key="item.route"
+					unstyled
 					type="button"
 					@click="runCommand(item)"
 				>
@@ -324,12 +328,12 @@
 						><small>{{ item.group }}</small>
 					</div>
 					<ArrowRight :size="16" />
-				</button>
+				</Button>
 				<div v-if="!filteredCommands.length" class="command-empty">
 					No workspace feature matches “{{ commandQuery }}”.
 				</div>
 			</div>
-		</Dialog>
+		</AppDialog>
 	</div>
 </template>
 
@@ -431,6 +435,9 @@
 	.sidebar:not(.expanded) nav::-webkit-scrollbar {
 		width: 0;
 		height: 0;
+	}
+	.sidebar:not(.expanded) .nav-item > em {
+		display: none;
 	}
 	.nav-group {
 		margin-bottom: 5px;
@@ -685,6 +692,14 @@
 	}
 	.content.flush {
 		padding: 0;
+	}
+	@media (min-width: 901px) {
+		.inbox-shell .topbar {
+			display: none;
+		}
+		.inbox-shell .content {
+			height: 100dvh;
+		}
 	}
 	.mobile-menu {
 		display: none;

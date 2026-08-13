@@ -149,6 +149,7 @@ from frappe_whatsapp_core.meta_flows import (
 )
 from frappe_whatsapp_core.party_bindings import upsert_party_binding
 from frappe_whatsapp_core.permissions import CORE_MANAGEMENT_ROLES, FLOW_BUILDER_ROLES
+from frappe_whatsapp_core.template_catalog import request_template_upsert
 from frappe_whatsapp_core.topics import (
 	list_topics,
 	unclassified_messages,
@@ -405,6 +406,8 @@ TOOL_DEFINITIONS = [
 			"properties": {
 				"conversation": {"type": "string"},
 				"before": {"type": "string"},
+				"before_creation": {"type": "string"},
+				"before_name": {"type": "string"},
 				"limit": {"type": "integer", "minimum": 1, "maximum": 100},
 				"search": {"type": "string"},
 			},
@@ -513,6 +516,45 @@ TOOL_DEFINITIONS = [
 		"name": "whatsapp.list_templates",
 		"description": "List the site template catalog and approval state.",
 		"inputSchema": {"type": "object", "properties": {}},
+	},
+	{
+		"name": "whatsapp.create_template",
+		"description": "Create, assign and submit a WhatsApp template through Integration and Meta.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["template_name", "body_text"],
+			"properties": {
+				"template_name": {"type": "string"},
+				"language_code": {"type": "string", "default": "en"},
+				"category": {"type": "string", "enum": ["MARKETING", "UTILITY", "AUTHENTICATION"]},
+				"header_type": {"type": "string", "enum": ["", "TEXT", "IMAGE", "VIDEO", "DOCUMENT", "LOCATION"]},
+				"header_content": {"type": "string"},
+				"body_text": {"type": "string"},
+				"footer_text": {"type": "string"},
+				"message_send_ttl_seconds": {"type": "integer", "minimum": 1},
+				"buttons": {"type": "array", "items": {"type": "object"}},
+				"sample_values": {"type": "array", "items": {"type": "object"}},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.update_template",
+		"description": "Edit an assigned template and submit the revision to Meta for review.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["template_key"],
+			"properties": {
+				"template_key": {"type": "string"},
+				"category": {"type": "string", "enum": ["MARKETING", "UTILITY", "AUTHENTICATION"]},
+				"header_type": {"type": "string", "enum": ["", "TEXT", "IMAGE", "VIDEO", "DOCUMENT", "LOCATION"]},
+				"header_content": {"type": "string"},
+				"body_text": {"type": "string"},
+				"footer_text": {"type": "string"},
+				"message_send_ttl_seconds": {"type": "integer", "minimum": 1},
+				"buttons": {"type": "array", "items": {"type": "object"}},
+				"sample_values": {"type": "array", "items": {"type": "object"}},
+			},
+		},
 	},
 	{
 		"name": "whatsapp.list_campaigns",
@@ -1282,6 +1324,15 @@ def call_tool(name: str, arguments: dict | str | None = None) -> dict | list:
 		"whatsapp.list_teams": list_teams,
 		"whatsapp.upsert_team": lambda: upsert_team(**arguments),
 		"whatsapp.list_templates": lambda: _frontend_call("template_catalog"),
+		"whatsapp.create_template": lambda: request_template_upsert(template=arguments),
+		"whatsapp.update_template": lambda: request_template_upsert(
+			template={
+				key: value
+				for key, value in arguments.items()
+				if key != "template_key"
+			},
+			template_key=arguments["template_key"],
+		),
 		"whatsapp.list_campaigns": lambda: _frontend_call("campaign_workspace"),
 		"whatsapp.create_campaign": lambda: _frontend_call(
 			"create_campaign_draft",

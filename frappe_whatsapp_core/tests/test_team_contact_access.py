@@ -3,9 +3,10 @@ from frappe.tests.utils import FrappeTestCase
 from frappe.utils import now_datetime
 
 from frappe_whatsapp_core.identity import contact_options
-from frappe_whatsapp_core.inbox import conversations
+from frappe_whatsapp_core.inbox import conversation_page, conversations
 from frappe_whatsapp_core.permissions import assert_conversation_access
 from frappe_whatsapp_core.workspace_api import upsert_team
+from frappe_whatsapp_core.template_catalog import sync_template_projection
 
 
 class TestTeamContactAccess(FrappeTestCase):
@@ -44,11 +45,84 @@ class TestTeamContactAccess(FrappeTestCase):
 		options = contact_options(search=self.identity.display_value, limit=20)
 		self.assertNotIn(self.identity.name, {row["identity"] for row in options})
 
-	def test_uncategorized_contact_remains_visible(self):
+	def test_generic_doctype_queries_cannot_bypass_team_scope(self):
+		frappe.set_user("Administrator")
+		message = frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": f"team-secret-{frappe.generate_hash(length=10).lower()}",
+			"provider_message_id": f"wamid.team-secret-{frappe.generate_hash(length=10).lower()}",
+			"conversation": self.conversation.name,
+			"channel": self.conversation.channel,
+			"remote_identity": self.identity.name,
+			"direction": "Inbound",
+			"message_type": "Text",
+			"body": "private team message",
+			"content": {"text": {"body": "private team message"}},
+			"provider_timestamp": now_datetime(),
+			"delivery_status": "Received",
+		}).insert(ignore_permissions=True)
+
+		frappe.set_user(self.outsider)
+		self.assertFalse(
+			frappe.has_permission(
+				"WhatsApp Core Conversation", "read", doc=self.conversation
+			)
+		)
+		self.assertFalse(
+			frappe.has_permission("WhatsApp Core Message", "read", doc=message)
+		)
+		self.assertNotIn(
+			self.conversation.name,
+			frappe.get_list("WhatsApp Core Conversation", pluck="name"),
+		)
+		self.assertNotIn(
+			message.name,
+			frappe.get_list("WhatsApp Core Message", pluck="name"),
+		)
+
+	def test_template_queries_hide_non_sendable_records_from_operators(self):
+		frappe.set_user("Administrator")
+		approved = sync_template_projection({
+			"name": f"approved_{frappe.generate_hash(length=8).lower()}",
+			"language": "en",
+			"status": "APPROVED",
+		})["name"]
+		draft = sync_template_projection({
+			"name": f"draft_{frappe.generate_hash(length=8).lower()}",
+			"language": "en",
+			"status": "IN_REVIEW",
+		})["name"]
+
+		frappe.set_user(self.outsider)
+		visible = set(frappe.get_list("WhatsApp Core Template", pluck="name"))
+		self.assertIn(approved, visible)
+		self.assertNotIn(draft, visible)
+		self.assertFalse(
+			frappe.has_permission(
+				"WhatsApp Core Template",
+				"read",
+				doc=frappe.get_doc("WhatsApp Core Template", draft),
+			)
+		)
+
+	def test_user_without_team_can_open_uncategorized_contact(self):
 		frappe.set_user(self.outsider)
 		assert_conversation_access(self.open_conversation.name)
 		options = contact_options(search=self.uncategorized.display_value, limit=20)
 		self.assertIn(self.uncategorized.name, {row["identity"] for row in options})
+
+	def test_team_member_cannot_open_or_enumerate_uncategorized_contact(self):
+		frappe.set_user(self.member)
+		with self.assertRaises(frappe.PermissionError):
+			assert_conversation_access(self.open_conversation.name)
+		options = contact_options(search=self.uncategorized.display_value, limit=20)
+		self.assertNotIn(self.uncategorized.name, {row["identity"] for row in options})
+
+	def test_manager_can_filter_inbox_by_contact_team(self):
+		frappe.set_user("Administrator")
+		rows = conversation_page(team=self.team["name"], limit=20)["rows"]
+		self.assertIn(self.conversation.name, {row["name"] for row in rows})
+		self.assertNotIn(self.open_conversation.name, {row["name"] for row in rows})
 
 	def _user(self, email):
 		user = frappe.get_doc({

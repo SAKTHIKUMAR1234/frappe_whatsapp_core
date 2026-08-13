@@ -213,12 +213,13 @@ def contact_options(
 			identity.normalized_value,
 			identity.display_value,
 			identity.primary_link,
-			identity.attributes
+			identity.attributes,
+			identity.creation
 		FROM `tabWhatsApp Core Identity` AS identity
 		LEFT JOIN `tabWhatsApp Core Identity Link` AS search_link
 			ON search_link.identity = identity.name AND search_link.status = 'Active'
 		WHERE {" AND ".join(conditions)}
-		ORDER BY identity.display_value ASC, identity.normalized_value ASC
+		ORDER BY identity.creation DESC, identity.name DESC
 		LIMIT %(limit)s
 		""",
 		values,
@@ -231,7 +232,7 @@ def contact_options(
 		identities.extend(frappe.db.sql(
 			f"""
 			SELECT identity.name, identity.normalized_value, identity.display_value,
-				identity.primary_link, identity.attributes
+				identity.primary_link, identity.attributes, identity.creation
 			FROM `tabWhatsApp Core Identity` AS identity
 			WHERE identity.identity_type = 'WhatsApp'
 				AND identity.status = 'Active'
@@ -272,13 +273,7 @@ def contact_options(
 				"presentation": presentation,
 			}
 		)
-	return sorted(
-		options,
-		key=lambda option: (
-			str(option["label"] or "").casefold(),
-			option["phone_number"],
-		),
-	)[: max(limit, len(include))]
+	return options[: max(limit, len(include))]
 
 
 def _resolve_source(identity, source):

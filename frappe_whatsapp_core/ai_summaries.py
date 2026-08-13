@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import time
 from pathlib import Path
 
 import frappe
@@ -28,6 +29,7 @@ from frappe_whatsapp_core.permissions import assert_identity_team_access
 MEDIA_TYPES = {"audio", "document", "image", "sticker", "video"}
 DEFAULT_BATCH_SIZE = 100
 MAX_BATCHES_PER_JOB = 20
+SUMMARY_SETTLE_WINDOW_SECONDS = 0.5
 
 
 def get_identity_summary(identity: str) -> dict:
@@ -127,7 +129,15 @@ def summarize_identity(identity: str, force: bool = False) -> dict:
 					summary.save(ignore_permissions=True)
 					raise
 				if len(messages) < batch_size:
-					break
+					# A burst may commit more messages while this deduplicated job is
+					# running. Commit the cursor to release the old MariaDB snapshot,
+					# allow the burst to settle, and drain any newly visible tail before
+					# exiting. Otherwise the later messages wait for the 30-minute repair
+					# scheduler because their identical RQ job was deduplicated.
+					frappe.db.commit()
+					time.sleep(SUMMARY_SETTLE_WINDOW_SECONDS)
+					if not _identity_messages(identity, summary, batch_size):
+						break
 		from frappe_whatsapp_core.summary_rollups import enqueue_summary_rollup
 
 		enqueue_summary_rollup(identity, enqueue_after_commit=True)
@@ -241,17 +251,32 @@ def queue_pending_summaries(limit: int = 100) -> dict:
 		return {"queued": 0, "disabled": True}
 	identities = frappe.db.sql(
 		"""
-		SELECT conversation.remote_identity
+		SELECT DISTINCT conversation.remote_identity
 		FROM `tabWhatsApp Core Conversation` AS conversation
-		JOIN `tabWhatsApp Core Message` AS message ON message.conversation = conversation.name
 		LEFT JOIN `tabWhatsApp Core Contact Summary` AS summary
 			ON summary.scope_type = 'Identity' AND summary.identity = conversation.remote_identity
-		GROUP BY conversation.remote_identity, summary.last_message_at, summary.last_message_creation
-		HAVING MAX(message.provider_timestamp) > COALESCE(summary.last_message_at, '1900-01-01')
-			OR (
-				MAX(message.provider_timestamp) = COALESCE(summary.last_message_at, '1900-01-01')
-				AND MAX(message.creation) > COALESCE(summary.last_message_creation, '1900-01-01')
-			)
+		WHERE EXISTS (
+			SELECT 1
+			FROM `tabWhatsApp Core Message` AS message
+			WHERE message.conversation = conversation.name
+				AND message.delivery_status != 'Deleted'
+				AND message.message_type != 'reaction'
+				AND (
+					summary.name IS NULL
+					OR summary.last_message_at IS NULL
+					OR message.provider_timestamp > summary.last_message_at
+					OR (
+						message.provider_timestamp = summary.last_message_at
+						AND (
+							message.creation > summary.last_message_creation
+							OR (
+								message.creation = summary.last_message_creation
+								AND message.name > COALESCE(summary.last_message, '')
+							)
+						)
+					)
+				)
+		)
 		LIMIT %(limit)s
 		""",
 		{"limit": max(1, min(cint(limit) or 100, 500))},
@@ -275,13 +300,20 @@ def _identity_messages(identity: str, summary, limit: int) -> list[dict]:
 		values.update({
 			"last_at": summary.last_message_at,
 			"last_creation": summary.last_message_creation,
+			"last_message": summary.last_message or "",
 		})
 		cursor = """
 			AND (
 				message.provider_timestamp > %(last_at)s
 				OR (
-					message.provider_timestamp = %(last_at)s
-					AND message.creation > %(last_creation)s
+				message.provider_timestamp = %(last_at)s
+					AND (
+						message.creation > %(last_creation)s
+						OR (
+							message.creation = %(last_creation)s
+							AND message.name > %(last_message)s
+						)
+					)
 				)
 			)
 		"""
@@ -298,7 +330,7 @@ def _identity_messages(identity: str, summary, limit: int) -> list[dict]:
 			AND message.delivery_status != 'Deleted'
 			AND message.message_type != 'reaction'
 			{cursor}
-		ORDER BY message.provider_timestamp ASC, message.creation ASC
+		ORDER BY message.provider_timestamp ASC, message.creation ASC, message.name ASC
 		LIMIT %(limit)s
 		""",
 		values,

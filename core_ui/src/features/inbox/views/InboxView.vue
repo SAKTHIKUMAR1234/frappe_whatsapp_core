@@ -2,38 +2,29 @@
 	import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 	import { useRoute, useRouter } from 'vue-router'
 	import Button from 'primevue/button'
-	import Dialog from 'primevue/dialog'
+	import AppDialog from '@/components/AppDialog.vue'
 	import InputText from 'primevue/inputtext'
 	import Select from 'primevue/select'
 	import Skeleton from 'primevue/skeleton'
-	import Textarea from 'primevue/textarea'
 	import { useToast } from 'primevue/usetoast'
-	import {
-		MessageSquarePlus,
-		ArrowDown,
-		Download,
-		Info,
-		Paperclip,
-		ChevronLeft,
-		RefreshCw,
-		Search,
-		Send,
-		ShieldAlert,
-		Smile,
-		PanelRight,
-		Reply,
-		X,
-	} from 'lucide-vue-next'
+	import { MessageSquarePlus, ArrowDown, Search, ShieldAlert, X } from 'lucide-vue-next'
 
+	import ConversationHeader from '@/features/inbox/components/ConversationHeader.vue'
 	import ConversationContext from '@/features/inbox/components/ConversationContext.vue'
 	import ContactMessageEditor from '@/features/inbox/components/ContactMessageEditor.vue'
 	import ConversationList from '@/features/inbox/components/ConversationList.vue'
+	import InboxSidebarControls from '@/features/inbox/components/InboxSidebarControls.vue'
+	import InboxResizeHandle from '@/features/inbox/components/InboxResizeHandle.vue'
+	import MessageActionMenu from '@/features/inbox/components/MessageActionMenu.vue'
 	import MessageBubble from '@/features/inbox/components/MessageBubble.vue'
+	import MessageComposer from '@/features/inbox/components/MessageComposer.vue'
+	import MessageStreamViewport from '@/features/inbox/components/MessageStreamViewport.vue'
 	import ContactSelect from '@/features/contacts/components/ContactSelect.vue'
 	import TemplateSendDialog from '@/features/templates/components/TemplateSendDialog.vue'
 	import { call, errorMessage, uploadFile } from '@/services/frappe'
 	import { subscribe, subscribeConnection } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
+	import { formatDateTime } from '@/utils/datetime'
 	import { focusDialogControl } from '@/utils/focus'
 
 	const route = useRoute()
@@ -48,13 +39,17 @@
 	const loadingOlder = ref(false)
 	const richSending = ref(false)
 	const search = ref('')
-	const category = ref('')
-	const categoryOptions = ref([])
+	const listMode = ref('all')
+	const team = ref('')
 	const rows = ref([])
+	const conversationPage = ref({ has_more: false })
+	const loadingMoreRows = ref(false)
 	const listScrollTop = ref(Number(sessionStorage.getItem('whatsapp:inbox-scroll') || 0))
+	const listPaneWidth = ref(Number(localStorage.getItem('whatsapp:inbox-pane-width') || 360))
 	const detail = ref(null)
 	const contextOpen = ref(false)
-	const messagePage = ref({ has_more: false })
+	const messagePage = ref({ has_more: false, has_more_newer: false })
+	const loadingNewer = ref(false)
 	const messageSearchOpen = ref(false)
 	const messageSearchInput = ref(null)
 	const messageSearch = ref('')
@@ -116,6 +111,8 @@
 	let messageSearchTimer = null
 	const stream = ref(null)
 	const hasUnseenMessages = ref(false)
+	const atMessageBottom = ref(true)
+	const jumpingToLatest = ref(false)
 	const messageScrollPositions = readMessageScrollPositions()
 	const newDialog = ref(false)
 	const newDialogRef = ref(null)
@@ -139,6 +136,11 @@
 	let messageSearchRequest = 0
 	let batchRefreshTimer = null
 	let pendingBatchEvents = []
+	let readBatchTimer = null
+	let readScanFrame = null
+	const pendingReadMessages = new Map()
+	const locallyReadMessages = new Set()
+	const optimisticReadCursors = new Map()
 	let realtimeConnectedOnce = false
 	let restoringMessageScroll = false
 
@@ -156,6 +158,10 @@
 		const distance =
 			stream.value.scrollHeight - stream.value.clientHeight - stream.value.scrollTop
 		return distance <= threshold
+	}
+
+	function updateMessageBottomState() {
+		atMessageBottom.value = !messagePage.value.has_more_newer && isNearMessageBottom()
 	}
 
 	function rememberMessageScroll(conversation = selectedName.value) {
@@ -179,14 +185,26 @@
 	}
 
 	const selectedName = computed(() => route.params.conversation || '')
+	const listPaneMaxWidth = computed(() => Math.max(320, Math.min(620, window.innerWidth * 0.48)))
+	const workbenchStyle = computed(() => ({
+		'--conversation-pane-width': `${Math.min(listPaneWidth.value, listPaneMaxWidth.value)}px`,
+	}))
+
+	function resizeListPane(width) {
+		listPaneWidth.value = Math.max(270, Math.min(listPaneMaxWidth.value, Number(width) || 360))
+		localStorage.setItem('whatsapp:inbox-pane-width', String(listPaneWidth.value))
+	}
+
 	const filteredRows = computed(() => {
 		const query = search.value.trim().toLowerCase()
-		if (!query) return rows.value
-		return rows.value.filter((row) =>
-			[row.display_name, row.phone_number, row.latest_message?.body]
-				.join(' ')
-				.toLowerCase()
-				.includes(query),
+		return rows.value.filter(
+			(row) =>
+				(listMode.value !== 'unread' || Number(row.unread_count || 0) > 0) &&
+				(!query ||
+					[row.display_name, row.phone_number, row.latest_message?.body]
+						.join(' ')
+						.toLowerCase()
+						.includes(query)),
 		)
 	})
 	const messageMap = computed(
@@ -202,11 +220,16 @@
 	)
 	const readersByMessage = computed(() => {
 		const result = new Map()
+		// Exact per-message reads stay on each message for unread accounting and
+		// audit. The chat presentation is a read cursor: show each operator once,
+		// under only the furthest message they have read. Operators at the same
+		// cursor naturally share one marker row.
 		for (const reader of detail.value?.readers || []) {
-			if (!reader.last_read_message || !messageMap.value.has(reader.last_read_message)) continue
-			const rows = result.get(reader.last_read_message) || []
-			rows.push(reader)
-			result.set(reader.last_read_message, rows)
+			if (!reader.last_read_message || !messageMap.value.has(reader.last_read_message))
+				continue
+			const readers = result.get(reader.last_read_message) || []
+			readers.push(reader)
+			result.set(reader.last_read_message, readers)
 		}
 		return result
 	})
@@ -233,17 +256,45 @@
 		if (!silent) loading.value = true
 		listError.value = ''
 		try {
-			const loaded = await call('frappe_whatsapp_core.inbox.conversations', {
-				limit: 500,
-				category: category.value || null,
+			const loaded = await call('frappe_whatsapp_core.inbox.conversation_page', {
+				limit: 20,
+				team: team.value || null,
 			})
 			if (request !== listRequest) return
-			rows.value = loaded
+			rows.value = loaded.rows || []
+			conversationPage.value = loaded
 		} catch (error) {
 			if (request === listRequest)
 				listError.value = errorMessage(error, 'Unable to load conversations.')
 		} finally {
 			if (request === listRequest && !silent) loading.value = false
+		}
+	}
+
+	async function loadMoreRows() {
+		if (!conversationPage.value.has_more || loadingMoreRows.value) return
+		loadingMoreRows.value = true
+		const request = listRequest
+		try {
+			const loaded = await call('frappe_whatsapp_core.inbox.conversation_page', {
+				limit: 20,
+				before: conversationPage.value.next_before,
+				before_name: conversationPage.value.next_before_name,
+				team: team.value || null,
+			})
+			if (request !== listRequest) return
+			const known = new Set(rows.value.map((row) => row.name))
+			rows.value.push(...(loaded.rows || []).filter((row) => !known.has(row.name)))
+			conversationPage.value = loaded
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Could not load more conversations',
+				detail: errorMessage(error),
+				life: 4500,
+			})
+		} finally {
+			loadingMoreRows.value = false
 		}
 	}
 
@@ -271,6 +322,7 @@
 			detailLoading.value = false
 			detailError.value = ''
 			loadingOlder.value = false
+			atMessageBottom.value = true
 			return
 		}
 		if (!silent) {
@@ -283,17 +335,9 @@
 			if (request !== detailRequest) return
 			detail.value = loaded
 			resumeMessage = loaded.resume_message || null
-			messagePage.value = detail.value.message_page || { has_more: false }
-			const latest = detail.value.messages.at(-1)?.name
-			if (latest) {
-				const readState = await call('frappe_whatsapp_core.inbox.read_conversation', {
-					name,
-					message: latest,
-				})
-				if (request !== detailRequest) return
-				updateConversationReader(readState)
-				const row = rows.value.find((item) => item.name === name)
-				if (row) row.unread_count = 0
+			messagePage.value = detail.value.message_page || {
+				has_more: false,
+				has_more_newer: false,
 			}
 		} catch (error) {
 			if (request === detailRequest && !silent)
@@ -307,6 +351,7 @@
 					resumeMessage,
 					preferResume: hadUnread,
 				})
+				queueVisibleMessages()
 			}
 		}
 	}
@@ -326,6 +371,7 @@
 				target.closest('details')?.setAttribute('open', '')
 				await nextTick()
 				stream.value.scrollTop = Math.max(0, target.offsetTop - 48)
+				updateMessageBottomState()
 				return
 			}
 		}
@@ -350,6 +396,7 @@
 				0,
 				stream.value.scrollHeight - stream.value.clientHeight - desiredDistance,
 			)
+			updateMessageBottomState()
 		} finally {
 			restoringMessageScroll = false
 		}
@@ -368,7 +415,8 @@
 				conversation,
 				before: messagePage.value.next_before,
 				before_creation: messagePage.value.next_before_creation,
-				limit: 50,
+				before_name: messagePage.value.next_before_name,
+				limit: 20,
 			})
 			if (
 				request !== olderRequest ||
@@ -379,9 +427,16 @@
 			const known = new Set(currentDetail.messages.map((message) => message.name))
 			const older = [...page.rows].reverse().filter((message) => !known.has(message.name))
 			currentDetail.messages.unshift(...older)
-			messagePage.value = page
+			messagePage.value = {
+				...messagePage.value,
+				has_more: page.has_more,
+				next_before: page.next_before,
+				next_before_creation: page.next_before_creation,
+				next_before_name: page.next_before_name,
+			}
 			await nextTick()
 			stream.value.scrollTop = stream.value.scrollHeight - previousHeight
+			updateMessageBottomState()
 		} catch (error) {
 			if (request !== olderRequest || conversation !== selectedName.value) return
 			toast.add({
@@ -395,10 +450,219 @@
 		}
 	}
 
+	async function loadNewerMessages() {
+		if (
+			!detail.value ||
+			!messagePage.value.has_more_newer ||
+			loadingNewer.value ||
+			!stream.value
+		)
+			return
+		const conversation = selectedName.value
+		const currentDetail = detail.value
+		loadingNewer.value = true
+		try {
+			const page = await call('frappe_whatsapp_core.workspace_api.list_messages', {
+				conversation,
+				after: messagePage.value.next_after,
+				after_creation: messagePage.value.next_after_creation,
+				after_name: messagePage.value.next_after_name,
+				limit: 20,
+			})
+			if (conversation !== selectedName.value || detail.value !== currentDetail) return
+			const known = new Set(currentDetail.messages.map((message) => message.name))
+			currentDetail.messages.push(...page.rows.filter((message) => !known.has(message.name)))
+			messagePage.value = {
+				...messagePage.value,
+				has_more_newer: page.has_more,
+				next_after: page.next_after,
+				next_after_creation: page.next_after_creation,
+				next_after_name: page.next_after_name,
+			}
+			await nextTick()
+			updateMessageBottomState()
+			queueVisibleMessages()
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Could not load newer messages',
+				detail: errorMessage(error),
+				life: 4500,
+			})
+		} finally {
+			loadingNewer.value = false
+		}
+	}
+
+	function cursorPosition(value) {
+		return [
+			String(value?.provider_timestamp || value?.last_read_at || ''),
+			String(value?.creation || value?.last_read_creation || ''),
+			String(value?.name || value?.last_read_message || ''),
+		]
+	}
+
+	function compareCursorPosition(left, right) {
+		const leftPosition = cursorPosition(left)
+		const rightPosition = cursorPosition(right)
+		if (leftPosition[0] !== rightPosition[0])
+			return leftPosition[0].localeCompare(rightPosition[0])
+		if (leftPosition[1] !== rightPosition[1])
+			return leftPosition[1].localeCompare(rightPosition[1])
+		return leftPosition[2].localeCompare(rightPosition[2])
+	}
+
+	function isAlreadyRead(message) {
+		return (message.read_by || []).some((reader) => reader.user === session.user?.name)
+	}
+
+	function isMessageVisible(element, viewport) {
+		const bounds = element.getBoundingClientRect()
+		const visibleHeight = Math.max(
+			0,
+			Math.min(bounds.bottom, viewport.bottom) - Math.max(bounds.top, viewport.top),
+		)
+		const requiredHeight = Math.min(48, Math.max(1, bounds.height * 0.5))
+		return visibleHeight >= requiredHeight
+	}
+
+	function queueVisibleMessages() {
+		window.cancelAnimationFrame(readScanFrame)
+		readScanFrame = window.requestAnimationFrame(() => {
+			const conversation = selectedName.value
+			if (!conversation || !stream.value || !detail.value) return
+			if (document.visibilityState !== 'visible' || !document.hasFocus()) return
+			const viewport = stream.value.getBoundingClientRect()
+			const messagesByName = new Map(
+				detail.value.messages.map((message) => [message.name, message]),
+			)
+			const visibleNames = new Set()
+			for (const element of stream.value.querySelectorAll('[data-message-name]')) {
+				const name = element.dataset.messageName
+				const message = messagesByName.get(name)
+				if (!message || locallyReadMessages.has(name) || isAlreadyRead(message)) continue
+				if (!isMessageVisible(element, viewport)) continue
+				visibleNames.add(name)
+			}
+			window.clearTimeout(readBatchTimer)
+			if (!visibleNames.size) {
+				pendingReadMessages.delete(conversation)
+				return
+			}
+			// Replace rather than accumulate. During continuous or smooth scrolling,
+			// only the messages in the final settled viewport survive the 400 ms dwell.
+			pendingReadMessages.set(conversation, visibleNames)
+			readBatchTimer = window.setTimeout(flushReadBatch, 400)
+		})
+	}
+
+	function discardPendingReadMessages(conversation = selectedName.value) {
+		window.clearTimeout(readBatchTimer)
+		readBatchTimer = null
+		window.cancelAnimationFrame(readScanFrame)
+		if (conversation) pendingReadMessages.delete(conversation)
+	}
+
+	function handleReadVisibilityChange() {
+		if (document.visibilityState === 'visible' && document.hasFocus()) {
+			queueVisibleMessages()
+			return
+		}
+		discardPendingReadMessages()
+	}
+
+	async function flushReadBatch() {
+		window.clearTimeout(readBatchTimer)
+		readBatchTimer = null
+		const entry = [...pendingReadMessages.entries()].find(([, names]) => names.size)
+		if (!entry) return
+		const [conversation, pending] = entry
+		const names = [...pending].slice(0, 100)
+		for (const name of names) locallyReadMessages.add(name)
+		for (const name of names) pending.delete(name)
+		if (!pending.size) pendingReadMessages.delete(conversation)
+		const visibleMessages = (detail.value?.messages || []).filter((message) =>
+			names.includes(message.name),
+		)
+		const newlyReadInbound = visibleMessages.filter(
+			(message) => message.direction === 'Inbound',
+		).length
+		const row = rows.value.find((item) => item.name === conversation)
+		if (row) row.unread_count = Math.max(0, Number(row.unread_count || 0) - newlyReadInbound)
+		const latest = visibleMessages.reduce(
+			(current, message) =>
+				!current || compareCursorPosition(message, current) > 0 ? message : current,
+			null,
+		)
+		const previousRead =
+			conversation === selectedName.value ? detail.value?.current_user_read || null : null
+		if (conversation === selectedName.value && latest) {
+			const optimisticRead = {
+				conversation,
+				user: session.user?.name,
+				last_read_message: latest.name,
+				last_read_at: latest.provider_timestamp,
+				last_read_creation: latest.creation,
+				messages: names,
+			}
+			optimisticReadCursors.set(conversation, optimisticRead)
+			updateConversationReader(optimisticRead)
+		}
+		try {
+			const savedRead = await call(
+				'frappe_whatsapp_core.conversation_reads.mark_messages_read',
+				{ conversation, messages: names },
+			)
+			if (conversation === selectedName.value && savedRead?.last_read_message)
+				updateConversationReader(savedRead)
+			const optimistic = optimisticReadCursors.get(conversation)
+			if (latest && optimistic?.last_read_message === latest.name)
+				optimisticReadCursors.delete(conversation)
+		} catch (error) {
+			for (const name of names) locallyReadMessages.delete(name)
+			const retryPending = pendingReadMessages.get(conversation) || new Set()
+			for (const name of names) retryPending.add(name)
+			pendingReadMessages.set(conversation, retryPending)
+			if (row) row.unread_count = Number(row.unread_count || 0) + newlyReadInbound
+			const optimistic = optimisticReadCursors.get(conversation)
+			if (conversation === selectedName.value && detail.value) {
+				const failedNames = new Set(names)
+				for (const message of detail.value.messages || []) {
+					if (!failedNames.has(message.name)) continue
+					message.read_by = (message.read_by || []).filter(
+						(reader) => reader.user !== session.user?.name,
+					)
+				}
+			}
+			if (latest && optimistic?.last_read_message === latest.name) {
+				optimisticReadCursors.delete(conversation)
+				if (conversation === selectedName.value && detail.value) {
+					detail.value.current_user_read = previousRead
+					const readers = (detail.value.readers || []).filter(
+						(reader) => reader.user !== session.user?.name,
+					)
+					if (previousRead) readers.unshift(previousRead)
+					detail.value.readers = readers
+				}
+			}
+			toast.add({
+				severity: 'error',
+				summary: 'Read position not saved',
+				detail: errorMessage(error),
+				life: 3500,
+			})
+		}
+		if ([...pendingReadMessages.values()].some((items) => items.size))
+			readBatchTimer = window.setTimeout(flushReadBatch, 250)
+	}
+
 	function handleStreamScroll() {
 		if (isNearMessageBottom()) hasUnseenMessages.value = false
+		updateMessageBottomState()
 		rememberMessageScroll()
+		queueVisibleMessages()
 		if (stream.value?.scrollTop <= 64) loadOlderMessages()
+		if (isNearMessageBottom(160)) loadNewerMessages()
 	}
 
 	function selectConversation(name) {
@@ -426,7 +690,7 @@
 		const request = ++messageSearchRequest
 		const query = messageSearch.value.trim()
 		const conversation = selectedName.value
-		if ((!query && !category.value) || !conversation) {
+		if (!query || !conversation) {
 			messageSearchRows.value = []
 			messageSearching.value = false
 			return
@@ -436,7 +700,6 @@
 			const result = await call('frappe_whatsapp_core.workspace_api.list_messages', {
 				conversation,
 				search: query,
-				category: category.value || null,
 				limit: 100,
 			})
 			if (request !== messageSearchRequest || conversation !== selectedName.value) return
@@ -698,18 +961,7 @@
 	}
 
 	function formatInfoTime(value) {
-		if (!value) return '—'
-		const date = new Date(String(value).replace(' ', 'T'))
-		if (Number.isNaN(date.getTime())) return value
-		return new Intl.DateTimeFormat('en-GB', {
-			day: '2-digit',
-			month: '2-digit',
-			year: 'numeric',
-			hour: '2-digit',
-			minute: '2-digit',
-			second: '2-digit',
-			hour12: true,
-		}).format(date)
+		return formatDateTime(value)
 	}
 
 	function handleGlobalKeydown(event) {
@@ -990,18 +1242,15 @@
 	async function openNewChat() {
 		if (!canManage.value) return
 		try {
-			const [templateData, settingsData, contacts] = await Promise.all([
-				call('frappe_whatsapp_core.frontend_api.template_catalog'),
-				call('frappe_whatsapp_core.frontend_api.settings_workspace'),
-				call('frappe_whatsapp_core.frontend_api.search_contact_options', { limit: 50 }),
-			])
-			catalog.value = templateData
-			settings.value = settingsData
-			newChatContacts.value = contacts
-			newChat.value.channel =
-				settingsData.channels.find((channel) => channel.enabled)?.name || ''
+			const options = await call(
+				'frappe_whatsapp_core.frontend_api.new_conversation_options',
+			)
+			catalog.value = { templates: options.templates || [] }
+			settings.value = { channels: options.channels || [] }
+			newChatContacts.value = options.contacts || []
+			newChat.value.channel = options.channels?.[0]?.name || ''
 			newChat.value.template =
-				templateData.templates.find(
+				options.templates.find(
 					(template) => template.enabled && template.approval_status === 'APPROVED',
 				)?.name || ''
 			newDialog.value = true
@@ -1022,9 +1271,9 @@
 			return
 		}
 		if (event.conversation === selectedName.value && detail.value) {
-			const shouldStickToBottom = isNearMessageBottom()
+			const shouldStickToBottom = atMessageBottom.value
 			reconcileMessage(event.message)
-			if (shouldStickToBottom) scrollToBottom()
+			if (shouldStickToBottom) scrollToBottom().then(queueVisibleMessages)
 			else if (event.message.direction === 'Inbound') hasUnseenMessages.value = true
 		}
 		const row = rows.value.find((item) => item.name === event.conversation)
@@ -1039,7 +1288,19 @@
 			}
 			rows.value = [row, ...rows.value.filter((item) => item.name !== row.name)]
 		} else {
-			loadRows()
+			hydrateConversationRow(event.conversation)
+		}
+	}
+
+	async function hydrateConversationRow(conversation) {
+		if (!conversation || rows.value.some((row) => row.name === conversation)) return
+		try {
+			const row = await call('frappe_whatsapp_core.inbox.conversation_summary', {
+				name: conversation,
+			})
+			if (row && !rows.value.some((item) => item.name === row.name)) rows.value.unshift(row)
+		} catch {
+			// A conversation can be outside this operator's team scope. Ignore it.
 		}
 	}
 
@@ -1055,21 +1316,37 @@
 	function updateConversationReader(event) {
 		if (event?.conversation !== selectedName.value || !detail.value || !event.user) return
 		const previous = (detail.value.readers || []).find((reader) => reader.user === event.user)
-		const readers = (detail.value.readers || []).filter((reader) => reader.user !== event.user)
-		detail.value.readers = [
-			{
-				...previous,
-				user: event.user,
-				last_read_message: event.last_read_message || null,
-				last_read_at: event.last_read_at,
-				last_read_creation: event.last_read_creation || null,
-				full_name:
-					previous?.full_name ||
-					(session.user?.name === event.user ? session.user?.full_name : '') ||
-					event.user,
-			},
-			...readers,
-		]
+		const staleCursor = previous && compareCursorPosition(event, previous) < 0
+		const updated = staleCursor
+			? previous
+			: {
+					...previous,
+					user: event.user,
+					last_read_message: event.last_read_message || null,
+					last_read_at: event.last_read_at,
+					last_read_creation: event.last_read_creation || null,
+					full_name:
+						previous?.full_name ||
+						(session.user?.name === event.user ? session.user?.full_name : '') ||
+						event.user,
+				}
+		if (!staleCursor) {
+			const readers = (detail.value.readers || []).filter(
+				(reader) => reader.user !== event.user,
+			)
+			detail.value.readers = [updated, ...readers]
+			if (session.user?.name === event.user) detail.value.current_user_read = updated
+		}
+		const exactMessages = new Set(event.messages || [])
+		for (const message of detail.value.messages || []) {
+			if (!exactMessages.has(message.name)) continue
+			const readBy = (message.read_by || []).filter((reader) => reader.user !== event.user)
+			readBy.push({
+				...updated,
+				read_at: event.read_at || new Date().toISOString(),
+			})
+			message.read_by = readBy
+		}
 	}
 
 	function mergeCommittedMessage(message) {
@@ -1100,7 +1377,7 @@
 		pendingBatchEvents.push(event || {})
 		window.clearTimeout(batchRefreshTimer)
 		batchRefreshTimer = window.setTimeout(async () => {
-			const shouldStickToBottom = isNearMessageBottom()
+			const shouldStickToBottom = atMessageBottom.value
 			const events = pendingBatchEvents.splice(0)
 			const changesByMessage = new Map()
 			const kinds = new Set()
@@ -1128,7 +1405,7 @@
 			}
 			const changes = [...changesByMessage.values()]
 			if (changes.length) {
-				let needsListReload = false
+				const missingConversations = new Set()
 				let selectedChanged = false
 				let latestSelectedInbound = null
 				for (const change of changes) {
@@ -1147,7 +1424,7 @@
 					}
 					const row = rows.value.find((item) => item.name === message.conversation)
 					if (!row) {
-						needsListReload = true
+						missingConversations.add(message.conversation)
 						continue
 					}
 					if (isNewerMessage(message, row.latest_message)) {
@@ -1162,17 +1439,10 @@
 					)
 						row.unread_count = Number(row.unread_count || 0) + 1
 				}
-				if (needsListReload) await loadRows({ silent: true })
-				if (latestSelectedInbound) {
-					await call('frappe_whatsapp_core.inbox.read_conversation', {
-						name: selectedName.value,
-						message: latestSelectedInbound.name,
-					})
-					const row = rows.value.find((item) => item.name === selectedName.value)
-					if (row) row.unread_count = 0
-				}
+				await Promise.all([...missingConversations].map(hydrateConversationRow))
 				if (selectedChanged && shouldStickToBottom) await scrollToBottom()
 				else if (latestSelectedInbound) hasUnseenMessages.value = true
+				if (selectedChanged) queueVisibleMessages()
 				if (!needsCompatibilityReload) return
 			}
 			if (
@@ -1243,18 +1513,64 @@
 		}
 	}
 
-	async function scrollToBottom() {
+	async function scrollToBottom(smooth = false) {
 		await nextTick()
 		if (stream.value) {
-			stream.value.scrollTop = stream.value.scrollHeight
+			if (smooth && stream.value.scrollTo) {
+				stream.value.scrollTo({ top: stream.value.scrollHeight, behavior: 'smooth' })
+			} else {
+				stream.value.scrollTop = stream.value.scrollHeight
+			}
 			hasUnseenMessages.value = false
+			updateMessageBottomState()
 			rememberMessageScroll()
+		}
+	}
+
+	async function loadLatestMessages() {
+		if (!detail.value || !stream.value || jumpingToLatest.value) return
+		const conversation = selectedName.value
+		const currentDetail = detail.value
+		jumpingToLatest.value = true
+		try {
+			const page = await call('frappe_whatsapp_core.workspace_api.list_messages', {
+				conversation,
+				limit: 20,
+			})
+			if (conversation !== selectedName.value || detail.value !== currentDetail) return
+			currentDetail.messages = [...page.rows].reverse()
+			messagePage.value = {
+				has_more: page.has_more,
+				has_more_newer: false,
+				next_before: page.next_before,
+				next_before_creation: page.next_before_creation,
+				next_before_name: page.next_before_name,
+				next_after: null,
+				next_after_creation: null,
+				next_after_name: null,
+			}
+			await scrollToBottom(true)
+			await new Promise((resolve) => window.setTimeout(resolve, 400))
+			updateMessageBottomState()
+			queueVisibleMessages()
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Could not reach the latest message',
+				detail: errorMessage(error),
+				life: 3500,
+			})
+		} finally {
+			jumpingToLatest.value = false
 		}
 	}
 
 	watch(selectedName, (name, previousName) => {
 		rememberMessageScroll(previousName)
+		discardPendingReadMessages(previousName)
+		locallyReadMessages.clear()
 		hasUnseenMessages.value = false
+		atMessageBottom.value = true
 		loadDetail(name)
 		replyTo.value = null
 		contextOpen.value = false
@@ -1265,18 +1581,15 @@
 		clearTimeout(messageSearchTimer)
 		messageSearchTimer = setTimeout(runMessageSearch, 300)
 	})
-	watch(category, async () => {
+	watch(team, async () => {
 		await loadRows()
-		if (category.value) messageSearchOpen.value = true
-		if (selectedName.value) await runMessageSearch()
 	})
 	onMounted(async () => {
 		window.addEventListener('keydown', handleGlobalKeydown)
-		const [categories] = await Promise.all([
-			call('frappe_whatsapp_core.inbox.category_catalog'),
-			loadRows(),
-		])
-		categoryOptions.value = categories
+		window.addEventListener('focus', handleReadVisibilityChange)
+		window.addEventListener('blur', handleReadVisibilityChange)
+		document.addEventListener('visibilitychange', handleReadVisibilityChange)
+		await loadRows()
 		if (selectedName.value) await loadDetail(selectedName.value)
 		const site = session.boot?.site
 		unsubscribers.push(
@@ -1299,10 +1612,14 @@
 	})
 	onBeforeUnmount(() => {
 		window.removeEventListener('keydown', handleGlobalKeydown)
+		window.removeEventListener('focus', handleReadVisibilityChange)
+		window.removeEventListener('blur', handleReadVisibilityChange)
+		document.removeEventListener('visibilitychange', handleReadVisibilityChange)
 		rememberMessageScroll()
 		clearTimeout(messageSearchTimer)
 		stopTypingSession()
 		window.clearTimeout(batchRefreshTimer)
+		discardPendingReadMessages()
 		pendingBatchEvents = []
 		unsubscribers.forEach((unsubscribe) => unsubscribe())
 	})
@@ -1310,48 +1627,25 @@
 
 <template>
 	<div class="inbox-page">
-		<header class="inbox-heading">
-			<div>
-				<div class="eyebrow">Realtime WhatsApp</div>
-				<h1>Shared Inbox</h1>
-				<p>Instant local updates with durable delivery through the Go relay.</p>
-			</div>
-			<div class="heading-actions">
-				<Button
-					outlined
-					aria-label="Refresh"
-					:loading="loading"
-					:disabled="loading"
-					@click="loadRows"
-					><RefreshCw :size="16"
-				/></Button>
-				<Button v-if="canManage" label="New chat" @click="openNewChat">
-					<template #icon><MessageSquarePlus :size="16" /></template>
-				</Button>
-			</div>
-		</header>
-
 		<section
 			:class="[
 				'inbox-workbench',
-				'surface-card',
-				{ 'mobile-chat-open': detail, 'context-open': detail && contextOpen },
+				{
+					'mobile-chat-open': detail,
+					'context-open': detail && contextOpen,
+				},
 			]"
+			:style="workbenchStyle"
 		>
 			<aside class="list-panel">
-				<label class="conversation-search">
-					<Search :size="16" />
-					<InputText v-model="search" placeholder="Search people or messages" />
-				</label>
-				<Select
-					v-model="category"
-					class="category-filter"
-					:options="categoryOptions"
-					option-label="category_name"
-					option-value="name"
-					placeholder="All message categories"
-					show-clear
-					aria-label="Filter conversations by message category"
+				<InboxSidebarControls
+					v-model:search="search"
+					v-model:mode="listMode"
+					v-model:team="team"
+					:loading="loading"
+					:can-manage="canManage"
+					@refresh="loadRows"
+					@new-chat="openNewChat"
 				/>
 				<div v-if="loading" class="list-skeleton" aria-label="Loading conversations">
 					<div v-for="index in 7" :key="index" class="conversation-skeleton">
@@ -1374,8 +1668,16 @@
 					:restore-scroll="listScrollTop"
 					@select="selectConversation"
 					@scroll-position="rememberListScroll"
+					@load-more="loadMoreRows"
 				/>
+				<div v-if="loadingMoreRows" class="older-loading">Loading conversations…</div>
 			</aside>
+			<InboxResizeHandle
+				:width="listPaneWidth"
+				:max-width="listPaneMaxWidth"
+				@resize="resizeListPane"
+				@reset="resizeListPane(360)"
+			/>
 
 			<main class="chat-panel">
 				<div
@@ -1395,49 +1697,18 @@
 				</div>
 				<div v-else-if="!detail" class="empty-chat">
 					<MessageSquarePlus :size="38" />
-					<strong>Select or start a conversation</strong>
-					<span
-						>Core works independently; no business-specific frontend is required.</span
-					>
+					<strong>Select a conversation</strong>
 				</div>
 				<template v-else>
-					<header class="chat-heading">
-						<button
-							class="mobile-back"
-							type="button"
-							aria-label="Back to conversations"
-							@click="closeMobileConversation"
-						>
-							<ChevronLeft :size="18" />
-						</button>
-						<div>
-							<strong>{{ detail.display_name }}</strong>
-							<span>{{ detail.identity.normalized_value }}</span>
-						</div>
-						<div class="chat-heading-actions">
-							<span>{{ detail.conversation.status }}</span>
-							<Button
-								text
-								rounded
-								aria-label="Search this conversation"
-								@click="toggleMessageSearch"
-							>
-								<Search :size="16" />
-							</Button>
-							<Button
-								text
-								rounded
-								:aria-label="
-									contextOpen
-										? 'Hide conversation details'
-										: 'Show conversation details'
-								"
-								@click="contextOpen = !contextOpen"
-							>
-								<PanelRight :size="16" />
-							</Button>
-						</div>
-					</header>
+					<ConversationHeader
+						:display-name="detail.display_name"
+						:identity="detail.identity.normalized_value"
+						:status="detail.conversation.status"
+						:context-open="contextOpen"
+						@back="closeMobileConversation"
+						@search="toggleMessageSearch"
+						@toggle-context="contextOpen = !contextOpen"
+					/>
 					<div v-if="messageSearchOpen" class="message-search-bar">
 						<Search :size="15" />
 						<InputText
@@ -1454,8 +1725,8 @@
 							<X :size="15" />
 						</Button>
 					</div>
-					<div ref="stream" class="message-stream" @scroll.passive="handleStreamScroll">
-					<div v-if="messageSearch.trim() || category" class="search-results">
+					<MessageStreamViewport ref="stream" @scroll="handleStreamScroll">
+						<div v-if="messageSearch.trim()" class="search-results">
 							<div v-if="messageSearching" class="older-loading">Searching…</div>
 							<div v-else-if="!messageSearchRows.length" class="search-empty">
 								No matching messages
@@ -1477,14 +1748,14 @@
 							<div v-if="loadingOlder" class="older-loading">
 								Loading older messages…
 							</div>
-							<button
+							<Button
 								v-else-if="messagePage.has_more"
 								class="older-loading older-button"
-								type="button"
+								unstyled
 								@click="loadOlderMessages"
 							>
 								Load older messages
-							</button>
+							</Button>
 							<details v-for="topic in topics" :key="topic.name" class="topic-group">
 								<summary>
 									<span>
@@ -1530,54 +1801,54 @@
 									@menu="openMessageMenu"
 								/>
 							</div>
+							<Button
+								v-if="messagePage.has_more_newer"
+								class="older-loading older-button newer-button"
+								unstyled
+								:disabled="loadingNewer"
+								@click="loadNewerMessages"
+							>
+								{{
+									loadingNewer
+										? 'Loading newer messages…'
+										: 'Load newer messages'
+								}}
+							</Button>
 						</template>
-					</div>
-					<button
-						v-if="hasUnseenMessages"
+					</MessageStreamViewport>
+					<Button
+						v-if="messagePage.has_more_newer || !atMessageBottom || hasUnseenMessages"
 						class="new-messages-button"
-						type="button"
-						@click="scrollToBottom"
+						unstyled
+						:data-unseen="hasUnseenMessages ? 'true' : 'false'"
+						:disabled="jumpingToLatest"
+						:aria-label="
+							hasUnseenMessages || messagePage.has_more_newer
+								? 'Jump to new messages'
+								: 'Scroll to bottom'
+						"
+						@click="loadLatestMessages"
 					>
 						<ArrowDown :size="15" />
-						New messages
-					</button>
-					<footer v-if="textReady" class="composer">
-						<div v-if="replyTo" class="reply-preview">
-							<span
-								><strong>Replying to</strong>
-								{{ replyTo.body || replyTo.message_type }}</span
-							>
-							<button
-								type="button"
-								aria-label="Cancel reply"
-								@click="replyTo = null"
-							>
-								<X :size="14" />
-							</button>
-						</div>
-						<Button text rounded aria-label="Add emoji" @click="addEmoji"
-							><Smile :size="18"
-						/></Button>
-						<Button
-							text
-							rounded
-							aria-label="Send media or rich message"
-							@click="richDialog = true"
-							><Paperclip :size="18"
-						/></Button>
-						<Textarea
-							v-model="draft"
-							auto-resize
-							rows="1"
-							placeholder="Write a message"
-							@keydown.enter.exact.prevent="sendText"
-							@input="noteTyping"
-							@blur="stopTypingSession"
-						/>
-						<Button :disabled="!draft.trim()" rounded @click="sendText">
-							<Send :size="18" />
-						</Button>
-					</footer>
+						{{
+							jumpingToLatest
+								? 'Loading latest…'
+								: hasUnseenMessages || messagePage.has_more_newer
+									? 'New messages'
+									: 'Scroll to bottom'
+						}}
+					</Button>
+					<MessageComposer
+						v-if="textReady"
+						v-model="draft"
+						:reply-to="replyTo"
+						@send="sendText"
+						@emoji="addEmoji"
+						@media="richDialog = true"
+						@cancel-reply="replyTo = null"
+						@typing="noteTyping"
+						@blur="stopTypingSession"
+					/>
 					<footer v-else class="template-gate">
 						<ShieldAlert :size="18" />
 						<div>
@@ -1614,7 +1885,7 @@
 			@send="sendTemplate"
 		/>
 
-		<Dialog
+		<AppDialog
 			ref="newDialogRef"
 			v-model:visible="newDialog"
 			modal
@@ -1671,9 +1942,9 @@
 					@click="startConversation"
 				/>
 			</template>
-		</Dialog>
+		</AppDialog>
 
-		<Dialog
+		<AppDialog
 			ref="richDialogRef"
 			v-model:visible="richDialog"
 			modal
@@ -1745,9 +2016,9 @@
 				<Button label="Cancel" text @click="richDialog = false" />
 				<Button label="Queue message" :loading="richSending" @click="sendRich" />
 			</template>
-		</Dialog>
+		</AppDialog>
 
-		<Dialog
+		<AppDialog
 			v-model:visible="messageInfoOpen"
 			modal
 			header="Message info"
@@ -1781,100 +2052,53 @@
 			<template #footer>
 				<Button label="Close" @click="messageInfoOpen = false" />
 			</template>
-		</Dialog>
+		</AppDialog>
 
-		<Teleport to="body">
-			<div
-				v-if="messageMenu"
-				class="message-menu-layer"
-				role="presentation"
-				@click.self="closeMessageMenu"
-				@contextmenu.prevent
-			>
-				<div
-					class="message-action-menu"
-					role="menu"
-					aria-label="Message actions"
-					:style="{
-						left: `${messageMenuPosition.x}px`,
-						top: `${messageMenuPosition.y}px`,
-					}"
-				>
-					<div class="quick-reactions" aria-label="React to message">
-						<button
-							v-for="emoji in quickReactions"
-							:key="emoji"
-							type="button"
-							:aria-label="`React with ${emoji}`"
-							@click="reactToMessage(emoji)"
-						>
-							{{ emoji }}
-						</button>
-					</div>
-					<button
-						v-if="
-							messageMenu.provider_message_id &&
-							!messageMenu.provider_message_id.startsWith('local:')
-						"
-						type="button"
-						role="menuitem"
-						@click="replyFromMenu"
-					>
-						<Reply :size="17" /><span>Reply</span>
-					</button>
-					<button type="button" role="menuitem" @click="showMessageInfo">
-						<Info :size="17" /><span>Message info</span>
-					</button>
-					<button
-						v-if="isMediaMessage(messageMenu) && messageMenu.media_url"
-						type="button"
-						role="menuitem"
-						@click="downloadMedia()"
-					>
-						<Download :size="17" /><span>Download</span>
-					</button>
-				</div>
-			</div>
-		</Teleport>
+		<MessageActionMenu
+			:visible="Boolean(messageMenu)"
+			:position="messageMenuPosition"
+			:reactions="quickReactions"
+			:can-reply="
+				Boolean(
+					messageMenu?.provider_message_id &&
+					!messageMenu.provider_message_id.startsWith('local:'),
+				)
+			"
+			:can-download="
+				Boolean(messageMenu && isMediaMessage(messageMenu) && messageMenu.media_url)
+			"
+			@close="closeMessageMenu"
+			@react="reactToMessage"
+			@reply="replyFromMenu"
+			@info="showMessageInfo"
+			@download="downloadMedia"
+		/>
 	</div>
 </template>
 
 <style scoped>
 	.inbox-page {
-		height: calc(100vh - 56px);
-		padding: 14px;
+		height: 100dvh;
+		padding: 0;
 		display: flex;
 		flex-direction: column;
-	}
-	.inbox-heading {
-		display: flex;
-		align-items: flex-start;
-		justify-content: space-between;
-		gap: 18px;
-		margin-bottom: 10px;
-	}
-	.inbox-heading h1 {
-		margin: 3px 0 0;
-		font-size: 21px;
-	}
-	.inbox-heading p {
-		margin: 4px 0 0;
-		color: var(--wa-muted);
-		font-size: 12px;
-	}
-	.heading-actions {
-		display: flex;
-		gap: 8px;
+		background: var(--wa-surface);
+		font-family: 'Segoe UI', Helvetica, Arial, sans-serif;
+		font-size: 14px;
+		-webkit-font-smoothing: antialiased;
 	}
 	.inbox-workbench {
 		min-height: 0;
 		flex: 1;
 		display: grid;
-		grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+		grid-template-columns: var(--conversation-pane-width, 360px) 5px minmax(0, 1fr);
 		overflow: hidden;
 	}
 	.inbox-workbench.context-open {
-		grid-template-columns: minmax(280px, 320px) minmax(0, 1fr) minmax(250px, 290px);
+		grid-template-columns: var(--conversation-pane-width, 340px) 5px minmax(0, 1fr) minmax(
+				270px,
+				310px
+			);
 	}
 	.list-panel,
 	.chat-panel {
@@ -1889,29 +2113,9 @@
 	.list-panel {
 		min-height: 0;
 		display: grid;
-		grid-template-rows: auto auto minmax(0, 1fr);
+		grid-template-rows: auto auto auto minmax(0, 1fr);
 		overflow: hidden;
 		border-right: 1px solid var(--wa-border);
-	}
-	.conversation-search {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 11px 12px;
-		border-bottom: 1px solid var(--wa-border);
-		color: var(--wa-muted);
-		background: var(--wa-surface);
-	}
-	.conversation-search :deep(input) {
-		width: 100%;
-		border: 0;
-		box-shadow: none;
-		background: transparent;
-		font-size: 13px;
-	}
-	.category-filter {
-		width: calc(100% - 20px);
-		margin: 8px 10px;
 	}
 	.list-skeleton {
 		padding: 3px 0;
@@ -1985,34 +2189,9 @@
 		text-align: center;
 		line-height: 1.5;
 	}
-	.chat-heading {
-		height: 62px;
-		padding: 11px 16px;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		border-bottom: 1px solid var(--wa-border);
-		background: var(--wa-surface);
-	}
-	.mobile-back {
-		display: none;
-		padding: 5px;
-		border: 0;
-		background: transparent;
-		color: var(--wa-text);
-		cursor: pointer;
-	}
-	.chat-heading strong,
-	.chat-heading span {
-		display: block;
-	}
-	.chat-heading-actions,
 	.message-search-bar {
 		display: flex;
 		align-items: center;
-	}
-	.chat-heading-actions {
-		gap: 6px;
 	}
 	.message-search-bar {
 		gap: 8px;
@@ -2027,30 +2206,13 @@
 		border: 0;
 		box-shadow: none;
 	}
-	.chat-heading strong {
-		font-size: 14px;
-	}
-	.chat-heading span {
-		margin-top: 3px;
-		color: var(--wa-muted);
-		font-size: 11px;
-	}
-	.message-stream {
-		min-height: 0;
-		flex: 1;
-		padding: 18px;
-		overflow-x: hidden;
-		overflow-y: auto;
-		background-color: var(--wa-surface-muted);
-		background-image: radial-gradient(var(--wa-border) 0.65px, transparent 0.65px);
-		background-size: 14px 14px;
-	}
 	.new-messages-button {
 		position: absolute;
 		right: 18px;
 		bottom: 76px;
 		z-index: 3;
 		display: inline-flex;
+		min-height: 44px;
 		align-items: center;
 		gap: 6px;
 		padding: 7px 11px;
@@ -2063,6 +2225,10 @@
 		font-size: 12px;
 		font-weight: 700;
 		cursor: pointer;
+	}
+	.new-messages-button:disabled {
+		opacity: 0.7;
+		cursor: wait;
 	}
 	.ungrouped,
 	.topic-messages,
@@ -2137,44 +2303,13 @@
 		padding: 12px;
 		border-top: 1px solid var(--wa-border-soft);
 	}
-	.composer,
 	.template-gate {
 		padding: 10px 12px;
 		display: flex;
 		align-items: center;
 		gap: 9px;
 		border-top: 1px solid var(--wa-border);
-		background: var(--wa-surface);
-	}
-	.composer {
-		flex-wrap: wrap;
-	}
-	.reply-preview {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		flex: 1 0 100%;
-		padding: 6px 9px;
-		border-left: 3px solid var(--wa-success);
-		border-radius: 6px;
-		background: var(--wa-success-soft);
-		font-size: 11px;
-	}
-	.reply-preview span {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.reply-preview button {
-		display: inline-flex;
-		border: 0;
-		background: transparent;
-		cursor: pointer;
-	}
-	.composer :deep(textarea) {
-		min-width: 0;
-		flex: 1;
-		max-height: 110px;
+		background: var(--wa-surface-muted);
 	}
 	.template-gate {
 		color: var(--wa-warning);
@@ -2218,72 +2353,6 @@
 	.dialog-form :deep(input) {
 		width: 100%;
 	}
-	.message-menu-layer {
-		position: fixed;
-		inset: 0;
-		z-index: 12000;
-	}
-	.message-action-menu {
-		position: fixed;
-		width: 244px;
-		padding: 7px;
-		border: 1px solid var(--wa-border);
-		border-radius: 12px;
-		background: var(--wa-surface);
-		box-shadow: 0 12px 36px rgba(15, 23, 42, 0.2);
-		animation: message-menu-in 120ms ease-out;
-	}
-	.message-action-menu > button {
-		width: 100%;
-		min-height: 40px;
-		padding: 8px 10px;
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		border: 0;
-		border-radius: 8px;
-		background: transparent;
-		color: var(--wa-text);
-		font: inherit;
-		font-size: 13px;
-		text-align: left;
-		cursor: pointer;
-	}
-	.message-action-menu > button:hover,
-	.message-action-menu > button:focus-visible {
-		outline: none;
-		background: var(--wa-surface-muted);
-	}
-	.message-action-menu .danger-action {
-		color: var(--wa-danger);
-	}
-	.quick-reactions {
-		padding: 5px 4px 9px;
-		display: grid;
-		grid-template-columns: repeat(6, 1fr);
-		gap: 2px;
-		border-bottom: 1px solid var(--wa-border-soft);
-		margin-bottom: 4px;
-	}
-	.quick-reactions button {
-		min-width: 0;
-		min-height: 34px;
-		padding: 2px;
-		border: 0;
-		border-radius: 8px;
-		background: transparent;
-		font-size: 19px;
-		cursor: pointer;
-		transition:
-			transform 100ms ease,
-			background 100ms ease;
-	}
-	.quick-reactions button:hover,
-	.quick-reactions button:focus-visible {
-		outline: none;
-		background: var(--wa-surface-muted);
-		transform: scale(1.12);
-	}
 	.message-info-grid {
 		width: min(470px, 78vw);
 		display: grid;
@@ -2313,19 +2382,9 @@
 	.message-info-id {
 		grid-column: 1 / -1;
 	}
-	@keyframes message-menu-in {
-		from {
-			opacity: 0;
-			transform: translateY(-4px) scale(0.98);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0) scale(1);
-		}
-	}
 	@media (max-width: 1120px) {
 		.inbox-workbench.context-open {
-			grid-template-columns: minmax(250px, 320px) minmax(0, 1fr);
+			grid-template-columns: var(--conversation-pane-width, 320px) 5px minmax(0, 1fr);
 		}
 		.inbox-workbench.context-open > :deep(.context-panel) {
 			display: none;
@@ -2339,6 +2398,9 @@
 		.inbox-workbench {
 			grid-template-columns: 1fr;
 		}
+		.inbox-workbench > :deep(.resize-handle) {
+			display: none;
+		}
 		.chat-panel {
 			display: none;
 		}
@@ -2349,25 +2411,8 @@
 			display: flex;
 			width: 100%;
 			min-width: 0;
+			animation: mobile-chat-in 170ms cubic-bezier(0.22, 1, 0.36, 1);
 		}
-		.chat-heading {
-			min-width: 0;
-			padding-inline: 10px;
-		}
-		.chat-heading > div:first-of-type {
-			min-width: 0;
-			overflow: hidden;
-		}
-		.chat-heading strong,
-		.chat-heading span {
-			overflow: hidden;
-			text-overflow: ellipsis;
-			white-space: nowrap;
-		}
-		.chat-heading-actions {
-			flex: 0 0 auto;
-		}
-		.composer,
 		.template-gate {
 			min-width: 0;
 		}
@@ -2377,48 +2422,8 @@
 		.template-gate :deep(.p-select) {
 			width: 100%;
 		}
-		.mobile-back {
-			display: inline-flex;
-		}
-		.inbox-heading p,
-		.inbox-heading .eyebrow {
-			display: none;
-		}
-		.inbox-heading h1 {
-			font-size: 20px;
-		}
-		.inbox-heading {
-			min-height: 52px;
-			padding: 8px 12px 6px;
-			align-items: center;
-			margin-bottom: 0;
-		}
 		.dialog-form {
 			width: 100%;
-		}
-		.message-stream {
-			padding: 12px 9px;
-		}
-		.message-menu-layer {
-			background: rgba(15, 23, 42, 0.28);
-		}
-		.message-action-menu {
-			inset: auto 8px max(8px, env(safe-area-inset-bottom)) 8px !important;
-			width: auto;
-			padding: 9px;
-			border-radius: 16px;
-			animation-name: message-sheet-in;
-		}
-		.message-action-menu > button {
-			min-height: 46px;
-			font-size: 14px;
-		}
-		.quick-reactions {
-			padding: 5px 3px 10px;
-		}
-		.quick-reactions button {
-			min-height: 42px;
-			font-size: 22px;
 		}
 		.message-info-grid {
 			width: 100%;
@@ -2428,14 +2433,14 @@
 			grid-column: auto;
 		}
 	}
-	@keyframes message-sheet-in {
+	@keyframes mobile-chat-in {
 		from {
 			opacity: 0;
-			transform: translateY(20px);
+			transform: translateX(12px);
 		}
 		to {
 			opacity: 1;
-			transform: translateY(0);
+			transform: translateX(0);
 		}
 	}
 </style>

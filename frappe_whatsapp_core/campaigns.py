@@ -212,6 +212,14 @@ def launch_campaign(campaign_name: str) -> dict:
 		throw=True,
 	)
 	_validate_launch(campaign)
+	if (campaign.content_type or "Template") == "Template" and not campaign.template_snapshot:
+		from frappe_whatsapp_core.outbound import freeze_campaign_template
+
+		campaign.template_snapshot = json.dumps(
+			freeze_campaign_template(campaign.template),
+			separators=(",", ":"),
+			ensure_ascii=False,
+		)
 	campaign.status = "Running"
 	campaign.started_at = campaign.started_at or now_datetime()
 	campaign.save()
@@ -334,6 +342,27 @@ def run_due_campaigns() -> None:
 
 
 def process_campaign_batch(
+	campaign_name: str,
+	batch_size: int = DEFAULT_BATCH_SIZE,
+) -> None:
+	"""Advance one campaign batch, retrying the complete transaction on deadlock.
+
+	MariaDB/MyRocks invalidates the whole transaction after a deadlock. Catching
+	the exception inside one recipient loop leaves Python objects referring to
+	message inserts that the database has already rolled back. Always rebuild the
+	full bounded batch from committed state instead.
+	"""
+	for attempt in range(6):
+		try:
+			return _process_campaign_batch_once(campaign_name, batch_size)
+		except frappe.QueryDeadlockError:
+			frappe.db.rollback()
+			if attempt == 5:
+				raise
+			time.sleep(min(1.5, 0.08 * (2**attempt)) + random.uniform(0, 0.04))
+
+
+def _process_campaign_batch_once(
 	campaign_name: str,
 	batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> None:
@@ -665,11 +694,10 @@ def enqueue_campaign_refresh_for_messages(message_names) -> None:
 def campaign_summary(campaign_name: str) -> dict:
 	campaign = frappe.get_doc("WhatsApp Core Campaign", campaign_name)
 	content_type = campaign.content_type or "Template"
-	template = (
-		frappe.get_cached_doc("WhatsApp Core Template", campaign.template)
-		if content_type == "Template" and campaign.template
-		else None
-	)
+	template_snapshot = _json_object(campaign.template_snapshot)
+	template = None
+	if content_type == "Template" and campaign.template and not template_snapshot:
+		template = frappe.get_cached_doc("WhatsApp Core Template", campaign.template)
 	return {
 		"name": campaign.name,
 		"campaign_key": campaign.campaign_key,
@@ -679,10 +707,10 @@ def campaign_summary(campaign_name: str) -> dict:
 		"content_type": content_type,
 		"template": campaign.template,
 		"message_text": campaign.message_text if content_type == "Text" else "",
-		"template_name": template.template_name if template else "",
-		"language_code": template.language_code if template else "",
-		"template_approval_status": template.approval_status if template else "NOT_REQUIRED",
-		"template_enabled": bool(template.enabled) if template else False,
+		"template_name": template_snapshot.get("template_name") or (template.template_name if template else ""),
+		"language_code": template_snapshot.get("language_code") or (template.language_code if template else ""),
+		"template_approval_status": template_snapshot.get("approval_status") or (template.approval_status if template else "NOT_REQUIRED"),
+		"template_enabled": bool(template_snapshot.get("enabled")) if template_snapshot else bool(template.enabled) if template else False,
 		"status": campaign.status,
 		"send_authorized": bool(campaign.send_authorized),
 		"authorized_by": campaign.authorized_by,
@@ -754,13 +782,24 @@ def _validate_campaign_definition(campaign) -> None:
 	if content_type == "Template":
 		if not campaign.template:
 			frappe.throw("Select an approved template", frappe.ValidationError)
-		template = frappe.get_cached_doc("WhatsApp Core Template", campaign.template)
-		if not template.enabled:
+		snapshot = (
+			_json_object(campaign.template_snapshot)
+			if campaign.status in {"Running", "Paused"}
+			else {}
+		)
+		template = (
+			None
+			if snapshot
+			else frappe.get_cached_doc("WhatsApp Core Template", campaign.template)
+		)
+		enabled = bool(snapshot.get("enabled")) if snapshot else bool(template.enabled)
+		approval_status = snapshot.get("approval_status") if snapshot else template.approval_status
+		if not enabled:
 			frappe.throw(
 				"Template is disabled for this site in the Integration application",
 				frappe.ValidationError,
 			)
-		if template.approval_status != "APPROVED":
+		if approval_status != "APPROVED":
 			frappe.throw(
 				"Meta template approval is required before SEND authorization",
 				frappe.ValidationError,
@@ -778,6 +817,18 @@ def _validate_campaign_definition(campaign) -> None:
 		frappe.throw("Campaign channel is disabled", frappe.ValidationError)
 	if not campaign.recipient_count:
 		frappe.throw("Campaign has no prepared recipients", frappe.ValidationError)
+
+
+def _json_object(value) -> dict:
+	if not value:
+		return {}
+	if isinstance(value, dict):
+		return value
+	try:
+		parsed = json.loads(value)
+	except (TypeError, ValueError):
+		return {}
+	return parsed if isinstance(parsed, dict) else {}
 
 
 def _validate_launch(campaign) -> None:
@@ -839,6 +890,10 @@ def _queue_recipient_batch(campaign, recipients, sender) -> dict[str, int]:
 	counts = {}
 	try:
 		results = sender(campaign, recipients)
+	except frappe.QueryDeadlockError:
+		# A deadlock rolls back every earlier message insert in this batch. The
+		# outer campaign retry must reconstruct the batch from committed state.
+		raise
 	except Exception as exception:
 		for recipient in recipients:
 			_mark_recipient_failed(recipient, exception)
@@ -893,6 +948,8 @@ def _queue_recipient(campaign, recipient, sender) -> str:
 			update_modified=False,
 		)
 		return "Queued"
+	except frappe.QueryDeadlockError:
+		raise
 	except Exception as exception:
 		_mark_recipient_failed(recipient, exception)
 		frappe.log_error(

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import time
+from zoneinfo import ZoneInfo
 
 import frappe
 import requests
+from frappe.utils import get_datetime, get_system_timezone
 
 _session = requests.Session()
 
@@ -49,19 +52,39 @@ def mark_message_read(
 	*,
 	typing_indicator: bool = False,
 ) -> dict:
-	"""Forward provider read/typing state through the mapped Hub account."""
+	"""Queue provider read/typing state on the Go data plane when configured."""
 	settings = get_settings(outbound=True)
 	message_id = str(message_id or "").strip()
 	if not message_id or message_id.startswith("local:"):
 		frappe.throw("A provider inbound message id is required", frappe.ValidationError)
-	return call_management(
-		"frappe_whatsapp_integration.frappe_whatsapp_hub.api.send.mark_message_read",
-		{
-			"account_name": settings.get_account_name(channel),
-			"message_id": message_id,
-			"typing_indicator": 1 if typing_indicator else 0,
-		},
-	)
+	result = send_raw(
+			channel,
+			{
+				"messaging_product": "whatsapp",
+				"status": "read",
+				"message_id": message_id,
+				**(
+					{"typing_indicator": {"type": "text"}}
+					if typing_indicator
+					else {}
+				),
+			},
+			(
+				f"typing:{message_id}:{time.time_ns()}"
+				if typing_indicator
+				else f"read:{message_id}"
+			),
+		)
+	if result.get("accepted"):
+		return result.get("result") or {
+			"success": True,
+			"status": result.get("status") or "queued",
+		}
+	return {
+		"success": False,
+		"error": result.get("error") or "Relay did not accept read state",
+		"retryable": bool(result.get("retryable")),
+	}
 
 
 def send_raw(
@@ -70,10 +93,8 @@ def send_raw(
 	idempotency_key: str,
 ) -> dict:
 	settings = get_settings(outbound=True)
-	url = (
-		f"{settings.hub_url}/api/method/"
-		"frappe_whatsapp_integration.frappe_whatsapp_hub.api.send.send_raw"
-	)
+	relay_url = _relay_url(settings)
+	url = f"{relay_url}/v1/outbound"
 	try:
 		response = _session.post(
 			url,
@@ -150,10 +171,8 @@ def send_batch(messages: list[dict]) -> dict:
 			"idempotency_key": idempotency_key,
 		})
 
-	url = (
-		f"{settings.hub_url}/api/method/"
-		"frappe_whatsapp_integration.frappe_whatsapp_hub.api.send.send_batch"
-	)
+	relay_url = _relay_url(settings)
+	url = f"{relay_url}/v1/outbound/batch"
 	try:
 		response = _session.post(
 			url,
@@ -195,12 +214,78 @@ def send_batch(messages: list[dict]) -> dict:
 	}
 
 
+def publish_outbound_command(
+	command_id: str,
+	messages: list[dict],
+	*,
+	execute_at=None,
+) -> dict:
+	"""Publish one approved campaign/automation command to the Go runtime.
+
+	Frappe resolves management definitions into immutable payloads once. Go owns
+	scheduling, provider execution, idempotency, retry and operational state.
+	"""
+	command_id = str(command_id or "").strip()
+	if not command_id:
+		frappe.throw("Runtime command_id is required", frappe.ValidationError)
+	if not isinstance(messages, list) or not 1 <= len(messages) <= 5_000:
+		frappe.throw(
+			"A runtime command requires between 1 and 5000 messages",
+			frappe.ValidationError,
+		)
+	settings = get_settings(outbound=True)
+	normalized = []
+	for message in messages:
+		channel = str(message.get("channel") or "").strip()
+		payload = message.get("payload")
+		idempotency_key = str(message.get("idempotency_key") or "").strip()
+		if not channel or not isinstance(payload, dict) or not idempotency_key:
+			frappe.throw(
+				"Every runtime message requires channel, payload, and idempotency_key",
+				frappe.ValidationError,
+			)
+		normalized.append({
+			"account_name": settings.get_account_name(channel),
+			"payload": payload,
+			"idempotency_key": idempotency_key,
+		})
+	request_body = {"command_id": command_id, "messages": normalized}
+	if execute_at:
+		scheduled_for = get_datetime(execute_at)
+		if scheduled_for.tzinfo is None:
+			scheduled_for = scheduled_for.replace(tzinfo=ZoneInfo(get_system_timezone()))
+		request_body["execute_at"] = scheduled_for.isoformat()
+	try:
+		response = _session.post(
+			f"{_relay_url(settings)}/v1/commands/outbound",
+			headers=settings.get_hub_auth_headers(),
+			json=request_body,
+			timeout=max(_request_timeout(settings), 120),
+		)
+	except requests.RequestException as exception:
+		return {"accepted": False, "retryable": True, "error": str(exception)}
+	try:
+		result = response.json()
+	except ValueError:
+		result = {"raw": response.text[:2000]}
+	if not response.ok or not isinstance(result, dict) or not result.get("success"):
+		return {
+			"accepted": False,
+			"retryable": response.status_code >= 500,
+			"status_code": response.status_code,
+			"error": _error_message(result),
+		}
+	return {"accepted": True, **result}
+
+
 def get_settings(*, outbound: bool = False):
 	settings = frappe.get_single("WhatsApp Core Settings")
 	if not settings.enabled:
 		frappe.throw("WhatsApp Core is not enabled on this site")
 	if outbound and not settings.outbound_enabled:
 		frappe.throw("Outbound WhatsApp messages are disabled on this site")
+	if outbound and not _relay_url(settings):
+		frappe.throw("WhatsApp Go Relay URL is not configured")
 	if not settings.hub_url:
 		frappe.throw("WhatsApp Core Hub URL is not configured")
 	return settings
@@ -212,6 +297,8 @@ def connection_status() -> dict:
 		"enabled": bool(settings.enabled),
 		"outbound_enabled": bool(settings.outbound_enabled),
 		"hub_url": settings.hub_url or "",
+		"relay_url": getattr(settings, "relay_url", None) or "",
+		"data_plane": "go_relay" if _relay_url(settings) else "not_configured",
 		"credentials_configured": bool(
 			settings.get_password("api_key", raise_exception=False)
 			and settings.get_password("api_secret", raise_exception=False)
@@ -222,6 +309,11 @@ def connection_status() -> dict:
 
 def _request_timeout(settings) -> int:
 	return max(2, min(int(settings.request_timeout or 30), 120))
+
+
+def _relay_url(settings) -> str:
+	"""Return the mandatory Go data-plane endpoint for operational requests."""
+	return str(getattr(settings, "relay_url", None) or "").strip().rstrip("/")
 
 
 def _error_message(result) -> str:

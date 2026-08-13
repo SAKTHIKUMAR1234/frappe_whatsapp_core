@@ -3,7 +3,7 @@
 	import Button from 'primevue/button'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
-	import Dialog from 'primevue/dialog'
+	import AppDialog from '@/components/AppDialog.vue'
 	import InputText from 'primevue/inputtext'
 	import Select from 'primevue/select'
 	import Skeleton from 'primevue/skeleton'
@@ -15,6 +15,7 @@
 		BadgeCheck,
 		CircleDashed,
 		Clock3,
+		ListChecks,
 		Megaphone,
 		Plus,
 		Send,
@@ -24,6 +25,7 @@
 	} from 'lucide-vue-next'
 
 	import AsyncState from '@/components/AsyncState.vue'
+	import CampaignRecipientLedger from '@/features/campaigns/components/CampaignRecipientLedger.vue'
 	import ContactMultiSelect from '@/features/contacts/components/ContactMultiSelect.vue'
 	import { call, errorMessage } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
@@ -54,6 +56,8 @@
 	const prepareDialogRef = ref(null)
 	const authorizationDialogRef = ref(null)
 	const selectedCampaign = ref(null)
+	const ledgerCampaign = ref(null)
+	const recipientLedgerDialog = ref(false)
 	const selectedAudience = ref([])
 	const importedRecipients = ref({})
 	const audienceFile = ref(null)
@@ -158,6 +162,11 @@
 		importedRecipients.value = {}
 		importSummary.value = null
 		prepareDialog.value = true
+	}
+
+	function openRecipientLedger(campaign) {
+		ledgerCampaign.value = campaign
+		recipientLedgerDialog.value = true
 	}
 
 	async function importAudience(event) {
@@ -335,7 +344,6 @@
 		<div>
 			<div class="eyebrow">Engage safely</div>
 			<h1>Bulk Messaging</h1>
-			<p>Prepare an exact audience, approve the template, then authorize SEND separately.</p>
 		</div>
 		<Button label="New campaign" @click="createDialog = true">
 			<template #icon><Plus :size="16" /></template>
@@ -475,6 +483,14 @@
 				</Column>
 				<Column>
 					<template #body="{ data }">
+						<Button
+							label="Recipients"
+							size="small"
+							text
+							@click="openRecipientLedger(data)"
+						>
+							<template #icon><ListChecks :size="15" /></template>
+						</Button>
 						<div v-if="['Running', 'Scheduled', 'Paused'].includes(data.status)">
 							<Button
 								label="Cancel campaign"
@@ -524,7 +540,7 @@
 			</DataTable>
 		</section>
 
-		<Dialog
+		<AppDialog
 			ref="createDialogRef"
 			v-model:visible="createDialog"
 			modal
@@ -618,9 +634,9 @@
 					@click="createCampaign"
 				/>
 			</template>
-		</Dialog>
+		</AppDialog>
 
-		<Dialog
+		<AppDialog
 			ref="prepareDialogRef"
 			v-model:visible="prepareDialog"
 			modal
@@ -677,9 +693,9 @@
 					@click="prepare"
 				/>
 			</template>
-		</Dialog>
+		</AppDialog>
 
-		<Dialog
+		<AppDialog
 			ref="authorizationDialogRef"
 			v-model:visible="authorizationDialog"
 			modal
@@ -711,7 +727,12 @@
 					@click="authorize"
 				/>
 			</template>
-		</Dialog>
+		</AppDialog>
+
+		<CampaignRecipientLedger
+			v-model:visible="recipientLedgerDialog"
+			:campaign="ledgerCampaign"
+		/>
 	</template>
 </template>
 

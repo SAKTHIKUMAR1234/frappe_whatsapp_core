@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 
 import frappe
@@ -65,7 +66,15 @@ class TestCoreProduct(FrappeTestCase):
 			"language_code": "en",
 			"approval_status": "APPROVED",
 			"enabled": 1,
-			"body_text": "Welcome",
+			"body_text": "Welcome {{1}}",
+			"footer_text": "Reply STOP to opt out",
+			"components": json.dumps([
+				{"type": "BODY", "text": "Welcome {{1}}"},
+				{
+					"type": "BUTTONS",
+					"buttons": [{"type": "QUICK_REPLY", "text": "Continue"}],
+				},
+			]),
 		}).insert(ignore_permissions=True)
 
 		with (
@@ -89,12 +98,24 @@ class TestCoreProduct(FrappeTestCase):
 			opening = queue_template_internal(
 				started["conversation"],
 				template.name,
+				components=[{
+					"type": "body",
+					"parameters": [{"type": "text", "text": "Customer"}],
+				}],
 				source="Core Test",
 			)
 
 		self.assertEqual(text.delivery_status, "Queued")
 		self.assertEqual(text.provider_message_id, f"local:{client_message_id}")
 		self.assertEqual(opening.message_type, "template")
+		self.assertEqual(opening.body, "Welcome Customer")
+		opening_content = json.loads(opening.content)
+		self.assertEqual(opening_content["template_snapshot"]["body"], "Welcome Customer")
+		self.assertEqual(opening_content["template_snapshot"]["footer"], "Reply STOP to opt out")
+		self.assertEqual(
+			opening_content["template_snapshot"]["buttons"],
+			[{"label": "Continue", "type": "QUICK_REPLY", "url": ""}],
+		)
 		rows = conversations(limit=100)
 		self.assertIn(self.thread.name, {row["name"] for row in rows})
 		snapshot = conversation(self.thread.name)

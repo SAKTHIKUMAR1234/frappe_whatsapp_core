@@ -1,6 +1,7 @@
 import json
 import unittest
 from inspect import Parameter, signature
+from pathlib import Path
 from unittest.mock import patch
 
 import frappe
@@ -14,14 +15,17 @@ from frappe_whatsapp_core.api import (
 	receive_outbound_results,
 )
 from frappe_whatsapp_core.dispatcher import (
+	_get_locked_core_event_rows,
 	_has_orphan_status,
 	_lock_status_projection_rows,
+	_process_status_event_batch,
 	enqueue_event_batch,
 	enqueue_orphan_status_retry,
 	enqueue_waiting_status_events,
 	process_event_batch,
 	retry_orphan_status_events,
 	retry_stale_events,
+	wake_waiting_status_events,
 )
 from frappe_whatsapp_core.outbound import _mark_sent
 
@@ -33,12 +37,50 @@ class TestPayloadContract(unittest.TestCase):
 	def test_provider_binding_revives_exhausted_orphan_receipt(
 		self, get_all, db_sql, enqueue_batch
 	):
-		count = enqueue_waiting_status_events(["wamid.1"])
+		count = enqueue_waiting_status_events(
+			["wamid.1"], enqueue_after_commit=False
+		)
 
 		self.assertEqual(count, 1)
 		self.assertNotIn("attempts", get_all.call_args.kwargs["filters"])
-		self.assertIn("attempts = 0", db_sql.call_args.args[0])
+		db_sql.assert_not_called()
 		enqueue_batch.assert_called_once_with(["EVENT-1"], enqueue_after_commit=True)
+
+	@patch("frappe_whatsapp_core.dispatcher.frappe.db.sql")
+	@patch("frappe_whatsapp_core.dispatcher.frappe.get_all")
+	@patch("frappe_whatsapp_core.dispatcher.frappe.enqueue")
+	def test_provider_binding_defers_event_wake_to_fresh_transaction(
+		self, enqueue, get_all, db_sql
+	):
+		count = enqueue_waiting_status_events(["wamid.1", "wamid.1"])
+
+		self.assertEqual(count, 0)
+		get_all.assert_not_called()
+		db_sql.assert_not_called()
+		enqueue.assert_called_once_with(
+			"frappe_whatsapp_core.dispatcher.wake_waiting_status_events",
+			queue="short",
+			enqueue_after_commit=True,
+			provider_ids=["wamid.1"],
+		)
+
+	@patch("frappe_whatsapp_core.dispatcher.time.sleep")
+	@patch("frappe_whatsapp_core.dispatcher.frappe.db.rollback")
+	@patch("frappe_whatsapp_core.dispatcher._wake_waiting_status_events")
+	def test_provider_binding_wake_retries_after_checkread(
+		self, wake, rollback, sleep
+	):
+		wake.side_effect = [
+			frappe.QueryDeadlockError("synthetic checkread"),
+			2,
+		]
+
+		count = wake_waiting_status_events(["wamid.1"])
+
+		self.assertEqual(count, 2)
+		self.assertEqual(wake.call_count, 2)
+		rollback.assert_called_once_with()
+		sleep.assert_called_once()
 
 	@patch("frappe_whatsapp_core.dispatcher.enqueue_waiting_status_events")
 	@patch("frappe_whatsapp_core.outbound._publish_status")
@@ -65,23 +107,35 @@ class TestPayloadContract(unittest.TestCase):
 
 	@patch("frappe_whatsapp_core.api.enqueue_campaign_refresh_for_messages")
 	@patch("frappe_whatsapp_core.api.frappe.publish_realtime")
-	@patch("frappe_whatsapp_core.api.frappe.get_doc")
-	@patch("frappe_whatsapp_core.api.frappe.db.get_value")
-	@patch("frappe_whatsapp_core.api.frappe.db.exists", return_value=False)
-	def test_provider_id_collision_is_terminal_failure_not_callback_error(
-		self, _exists, get_value, get_doc, publish, refresh
-	):
-		get_value.side_effect = ["MSG-NEW", "MSG-EXISTING"]
-		message = frappe._dict(
+	@patch(
+		"frappe_whatsapp_core.api.frappe.get_all",
+		return_value=[frappe._dict(name="MSG-EXISTING", provider_message_id="wamid.collision")],
+	)
+	@patch("frappe_whatsapp_core.api.frappe.clear_document_cache")
+	@patch("frappe_whatsapp_core.api.frappe.db.bulk_update")
+	@patch(
+		"frappe_whatsapp_core.api.frappe.db.sql",
+		return_value=[frappe._dict(
 			name="MSG-NEW",
+			idempotency_key="new-result",
 			conversation="CONV-1",
 			delivery_status="Queued",
 			provider_message_id="local:new",
 			failure=None,
-			save=lambda **_kwargs: None,
-		)
-		get_doc.return_value = message
-
+		)],
+	)
+	@patch(
+		"frappe_whatsapp_core.api.frappe.db.get_value",
+		return_value=frappe._dict(
+			name="MSG-NEW",
+			conversation="CONV-1",
+			delivery_status="Failed",
+			provider_message_id="local:new",
+		),
+	)
+	def test_provider_id_collision_is_terminal_failure_not_callback_error(
+		self, _get_value, _db_sql, bulk_update, _clear, _get_all, publish, refresh
+	):
 		result = _apply_outbound_result(
 			idempotency_key="new-result",
 			status="sent",
@@ -92,8 +146,9 @@ class TestPayloadContract(unittest.TestCase):
 
 		self.assertEqual(result["status"], "applied")
 		self.assertEqual(result["delivery_status"], "Failed")
-		self.assertEqual(message.provider_message_id, "local:new")
-		self.assertEqual(json.loads(message.failure)["code"], "provider_message_id_collision")
+		update = bulk_update.call_args.args[1]["MSG-NEW"]
+		self.assertEqual(update["provider_message_id"], "local:new")
+		self.assertEqual(json.loads(update["failure"])["code"], "provider_message_id_collision")
 		publish.assert_called_once()
 		refresh.assert_called_once_with(["MSG-NEW"])
 
@@ -298,10 +353,139 @@ class TestPayloadContract(unittest.TestCase):
 		self.assertIn("ORDER BY name", db_sql.call_args_list[0].args[0])
 		self.assertIn("FOR UPDATE", db_sql.call_args_list[0].args[0])
 
+	@patch("frappe_whatsapp_core.dispatcher.frappe.db.sql")
+	def test_status_fast_lane_locks_events_before_projection(self, db_sql):
+		db_sql.return_value = [
+			frappe._dict(name="EVENT-1", status="Pending"),
+			frappe._dict(name="EVENT-2", status="Completed"),
+		]
+
+		events = _get_locked_core_event_rows(["EVENT-2", "EVENT-1", "EVENT-1"])
+
+		self.assertEqual([row.name for row in events], ["EVENT-1", "EVENT-2"])
+		self.assertEqual(
+			db_sql.call_args.args[1]["event_ids"],
+			["EVENT-1", "EVENT-2"],
+		)
+		self.assertIn("ORDER BY name", db_sql.call_args.args[0])
+		self.assertIn("FOR UPDATE", db_sql.call_args.args[0])
+		self.assertTrue(db_sql.call_args.kwargs["as_dict"])
+
+	@patch("frappe_whatsapp_core.dispatcher._publish_batch_refresh")
+	@patch("frappe_whatsapp_core.dispatcher.frappe.db.sql")
+	@patch("frappe_whatsapp_core.dispatcher.frappe.db.savepoint")
+	@patch(
+		"frappe_whatsapp_core.dispatcher.materialize_event",
+		return_value=[{"kind": "status", "status": "updated", "name": "MSG-1"}],
+	)
+	@patch("frappe_whatsapp_core.dispatcher._lock_status_projection_rows")
+	@patch("frappe_whatsapp_core.dispatcher._get_locked_core_event_rows")
+	def test_status_fast_lane_recovers_exhausted_failed_orphan(
+		self,
+		locked_events,
+		_lock_messages,
+		materialize,
+		_savepoint,
+		db_sql,
+		_publish,
+	):
+		locked_events.return_value = [frappe._dict(
+			name="EVENT-1",
+			payload="{}",
+			status="Failed",
+			attempts=6,
+		)]
+
+		result = _process_status_event_batch(["EVENT-1"])
+
+		self.assertEqual(result[0]["status"], "completed")
+		materialize.assert_called_once()
+		self.assertEqual(db_sql.call_count, 1)
+		self.assertIn("status = 'Completed'", db_sql.call_args.args[0])
+		self.assertIn("error = ''", db_sql.call_args.args[0])
+		self.assertEqual(db_sql.call_args.args[1]["event_ids"], ["EVENT-1"])
+
+	@patch("frappe_whatsapp_core.dispatcher._publish_batch_refresh")
+	@patch("frappe_whatsapp_core.dispatcher.frappe.db.sql")
+	@patch("frappe_whatsapp_core.dispatcher.materialize_event")
+	@patch("frappe_whatsapp_core.dispatcher._lock_status_projection_rows")
+	@patch("frappe_whatsapp_core.dispatcher._get_locked_core_event_rows")
+	def test_status_fast_lane_duplicate_completed_event_is_noop(
+		self,
+		locked_events,
+		_lock_messages,
+		materialize,
+		db_sql,
+		_publish,
+	):
+		locked_events.return_value = [frappe._dict(
+			name="EVENT-1",
+			payload="{}",
+			status="Completed",
+			attempts=1,
+		)]
+
+		result = _process_status_event_batch(["EVENT-1"])
+
+		self.assertEqual(result, [{"event_id": "EVENT-1", "status": "completed"}])
+		materialize.assert_not_called()
+		db_sql.assert_not_called()
+
+	@patch("frappe_whatsapp_core.dispatcher._publish_batch_refresh")
+	@patch("frappe_whatsapp_core.dispatcher.frappe.db.set_value")
+	@patch("frappe_whatsapp_core.dispatcher.frappe.get_traceback", return_value="bad status")
+	@patch("frappe_whatsapp_core.dispatcher.frappe.db.rollback")
+	@patch("frappe_whatsapp_core.dispatcher.frappe.db.savepoint")
+	@patch("frappe_whatsapp_core.dispatcher.materialize_event", side_effect=ValueError("bad"))
+	@patch("frappe_whatsapp_core.dispatcher._lock_status_projection_rows")
+	@patch("frappe_whatsapp_core.dispatcher._get_locked_core_event_rows")
+	def test_status_fast_lane_failure_increments_existing_attempt_count(
+		self,
+		locked_events,
+		_lock_messages,
+		_materialize,
+		_savepoint,
+		_rollback,
+		_traceback,
+		set_value,
+		_publish,
+	):
+		locked_events.return_value = [frappe._dict(
+			name="EVENT-1", payload="{}", status="Pending", attempts=3,
+		)]
+
+		result = _process_status_event_batch(["EVENT-1"])
+
+		self.assertEqual(result, [{"event_id": "EVENT-1", "status": "failed"}])
+		set_value.assert_called_once_with(
+			"WhatsApp Core Event",
+			"EVENT-1",
+			{"status": "Failed", "error": "bad status", "attempts": 4},
+			update_modified=False,
+		)
+
+	def test_core_event_external_id_has_search_index(self):
+		schema_path = (
+			Path(__file__).resolve().parents[1]
+			/ "frappe_whatsapp_core"
+			/ "doctype"
+			/ "whatsapp_core_event"
+			/ "whatsapp_core_event.json"
+		)
+		fields = json.loads(schema_path.read_text())["fields"]
+		external_id = next(
+			field for field in fields if field.get("fieldname") == "external_id"
+		)
+
+		self.assertEqual(external_id.get("search_index"), 1)
+
+	@patch("frappe_whatsapp_core.ai_summaries.enqueue_summary_for_messages")
 	@patch("frappe_whatsapp_core.dispatcher.frappe.publish_realtime")
 	@patch("frappe_whatsapp_core.dispatcher.frappe.get_all")
 	@patch("frappe_whatsapp_core.dispatcher.process_event")
-	def test_event_batch_includes_compact_message_deltas(self, process, get_all, publish):
+	def test_event_batch_includes_compact_message_deltas(
+		self, process, get_all, publish, enqueue_summary
+	):
 		process.return_value = {
 			"status": "completed",
 			"projections": [{"kind": "message", "status": "created", "name": "MSG-1"}],
@@ -326,15 +510,19 @@ class TestPayloadContract(unittest.TestCase):
 			payload["message_changes"][0]["message"]["media_url"],
 		)
 		self.assertEqual(payload["message_changes"][0]["status"], "created")
+		enqueue_summary.assert_called_once_with(
+			["MSG-1"],
+			enqueue_after_commit=True,
+		)
 
 	@patch("frappe_whatsapp_core.api.frappe.publish_realtime")
 	@patch("frappe_whatsapp_core.api.frappe.get_all", return_value=[])
-	@patch("frappe_whatsapp_core.api._apply_outbound_result")
+	@patch("frappe_whatsapp_core.api._apply_outbound_result_batch")
 	@patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["System Manager"])
 	def test_outbound_result_batch_accepts_relay_provider_metadata(
 		self, _get_roles, apply_result, _get_all, publish
 	):
-		apply_result.return_value = {"status": "applied", "message": "MSG-1"}
+		apply_result.return_value = [{"status": "applied", "message": "MSG-1"}]
 		result = receive_outbound_results(
 			[
 				{
@@ -349,7 +537,57 @@ class TestPayloadContract(unittest.TestCase):
 
 		self.assertEqual(result["count"], 1)
 		apply_result.assert_called_once()
+		self.assertEqual(apply_result.call_args.args[0][0]["meta_error"]["code"], 131047)
 		publish.assert_called_once()
+
+	@patch("frappe_whatsapp_core.api.frappe.publish_realtime")
+	@patch("frappe_whatsapp_core.api.frappe.get_all", return_value=[])
+	@patch("frappe_whatsapp_core.api._apply_outbound_result_batch")
+	@patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["System Manager"])
+	def test_outbound_result_contract_accepts_forty_results(
+		self, _get_roles, apply_result, _get_all, publish
+	):
+		results = [
+			{
+				"idempotency_key": f"batch-result-{index}",
+				"status": "sent",
+				"success": 1,
+				"meta_message_id": f"wamid.batch-{index}",
+			}
+			for index in range(40)
+		]
+		apply_result.return_value = [
+			{"status": "applied", "message": f"MSG-{index}"}
+			for index in range(40)
+		]
+
+		response = receive_outbound_results(results)
+
+		self.assertEqual(response["count"], 40)
+		self.assertEqual(len(apply_result.call_args.args[0]), 40)
+		publish.assert_called_once()
+
+	@patch("frappe_whatsapp_core.api.random.uniform", return_value=0)
+	@patch("frappe_whatsapp_core.api.time.sleep")
+	@patch("frappe_whatsapp_core.api.frappe.db.rollback")
+	@patch("frappe_whatsapp_core.api._receive_outbound_results_once")
+	@patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["System Manager"])
+	def test_outbound_result_window_retries_complete_transaction_after_deadlock(
+		self,
+		_get_roles,
+		apply_once,
+		rollback,
+		sleep,
+		_uniform,
+	):
+		applied = {"status": "applied", "count": 1, "results": []}
+		apply_once.side_effect = [frappe.QueryDeadlockError("deadlock"), applied]
+		results = [{"idempotency_key": "key-1", "status": "sent", "success": 1}]
+
+		self.assertEqual(receive_outbound_results(results), applied)
+		self.assertEqual(apply_once.call_count, 2)
+		rollback.assert_called_once_with()
+		sleep.assert_called_once()
 
 	def test_outbound_result_handler_tolerates_provider_metadata(self):
 		parameters = signature(__import__("frappe_whatsapp_core.api", fromlist=["_apply_outbound_result"])._apply_outbound_result).parameters
@@ -381,14 +619,7 @@ class TestPayloadContract(unittest.TestCase):
 		"frappe_whatsapp_core.api.frappe.get_all",
 		side_effect=[
 			[],
-			[],
 			[
-				frappe._dict(
-					name="MSG-READ",
-					conversation="CONV-1",
-					delivery_status="Read",
-					provider_message_id="wamid.read",
-				),
 				frappe._dict(
 					name="MSG-QUEUED",
 					conversation="CONV-2",
@@ -418,12 +649,16 @@ class TestPayloadContract(unittest.TestCase):
 				idempotency_key="result-read",
 				delivery_status="Read",
 				conversation="CONV-1",
+				provider_message_id="wamid.read",
+				failure=None,
 			),
 			frappe._dict(
 				name="MSG-QUEUED",
 				idempotency_key="result-sent",
 				delivery_status="Queued",
 				conversation="CONV-2",
+				provider_message_id="local:result-sent",
+				failure=None,
 			),
 		]
 
@@ -442,15 +677,79 @@ class TestPayloadContract(unittest.TestCase):
 			},
 		])
 
-		self.assertEqual(result["count"], 2)
+		self.assertEqual(result["count"], 1)
+		self.assertEqual(result["unchanged"], 1)
 		updates = bulk_update.call_args.args[1]
-		self.assertEqual(updates["MSG-READ"]["delivery_status"], "Read")
+		self.assertNotIn("MSG-READ", updates)
 		self.assertEqual(updates["MSG-QUEUED"]["delivery_status"], "Sent")
 		self.assertEqual(updates["MSG-QUEUED"]["provider_message_id"], "wamid.sent")
 		self.assertEqual(result["results"][0]["delivery_status"], "Read")
-		refresh.assert_called_once_with(["MSG-READ", "MSG-QUEUED"])
+		self.assertEqual(result["results"][0]["status"], "noop")
+		refresh.assert_called_once_with(["MSG-QUEUED"])
 		publish.assert_called_once()
 		payload = publish.call_args.args[1]
 		self.assertEqual(payload["kinds"], ["status"])
-		self.assertEqual(len(payload["message_changes"]), 2)
-		self.assertEqual(payload["message_changes"][1]["message"].delivery_status, "Sent")
+		self.assertEqual(len(payload["message_changes"]), 1)
+		self.assertEqual(payload["message_changes"][0]["message"].delivery_status, "Sent")
+
+	@patch("frappe_whatsapp_core.api.enqueue_campaign_refresh_for_messages")
+	@patch("frappe_whatsapp_core.api.frappe.publish_realtime")
+	@patch(
+		"frappe_whatsapp_core.api.frappe.get_all",
+		side_effect=[
+			[],
+			[frappe._dict(
+				name="MSG-1",
+				conversation="CONV-1",
+				delivery_status="Sent",
+				provider_message_id="wamid.final",
+			)],
+		],
+	)
+	@patch("frappe_whatsapp_core.api.frappe.clear_document_cache")
+	@patch("frappe_whatsapp_core.api.frappe.db.bulk_update")
+	@patch(
+		"frappe_whatsapp_core.api.frappe.db.sql",
+		return_value=[frappe._dict(
+			name="MSG-1",
+			idempotency_key="result-1",
+			conversation="CONV-1",
+			delivery_status="Queued",
+			provider_message_id="local:result-1",
+			failure=None,
+		)],
+	)
+	@patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["System Manager"])
+	def test_duplicate_result_key_is_coalesced_to_last_batch_observation(
+		self,
+		_get_roles,
+		_db_sql,
+		bulk_update,
+		_clear,
+		_get_all,
+		_publish,
+		_refresh,
+	):
+		result = receive_outbound_results([
+			{
+				"idempotency_key": "result-1",
+				"status": "failed",
+				"success": 0,
+				"error": "stale retry",
+			},
+			{
+				"idempotency_key": "result-1",
+				"status": "sent",
+				"success": 1,
+				"meta_message_id": "wamid.final",
+			},
+		])
+
+		self.assertEqual(result["count"], 1)
+		self.assertEqual(result["ignored"], 1)
+		self.assertEqual(result["results"][0]["reason"], "superseded_in_batch")
+		self.assertEqual(result["results"][1]["status"], "applied")
+		self.assertEqual(
+			bulk_update.call_args.args[1]["MSG-1"]["delivery_status"],
+			"Sent",
+		)

@@ -4,3 +4,6 @@
 
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
+frappe_whatsapp_core.patches.v1_0.add_inbox_query_indexes
+frappe_whatsapp_core.patches.v1_0.add_read_projection_index
+frappe_whatsapp_core.patches.v1_0.add_message_read_ledger

@@ -1,7 +1,7 @@
 <script setup>
 	import { computed, onMounted, reactive, ref } from 'vue'
 	import Button from 'primevue/button'
-	import Dialog from 'primevue/dialog'
+	import AppDialog from '@/components/AppDialog.vue'
 	import InputNumber from 'primevue/inputnumber'
 	import InputText from 'primevue/inputtext'
 	import Message from 'primevue/message'
@@ -175,7 +175,7 @@
 			>
 		</div>
 
-		<Dialog
+		<AppDialog
 			ref="dialogRef"
 			v-model:visible="visible"
 			modal
@@ -287,7 +287,7 @@
 					@click="save"
 				/>
 			</template>
-		</Dialog>
+		</AppDialog>
 	</section>
 </template>
 

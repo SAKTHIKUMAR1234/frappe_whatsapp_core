@@ -9,6 +9,7 @@
 		"outbound_enabled",
 		"section_connection",
 		"hub_url",
+		"relay_url",
 		"column_connection",
 		"api_key",
 		"api_secret",
@@ -45,7 +46,13 @@
 			"fieldname": "hub_url",
 			"fieldtype": "Data",
 			"label": "Hub URL",
-			"description": "Full URL of the central Frappe WhatsApp Integration site"
+			"description": "Control-plane URL of the central Frappe WhatsApp Integration site"
+		},
+		{
+			"fieldname": "relay_url",
+			"fieldtype": "Data",
+			"label": "Go Relay URL",
+			"description": "Direct Go data-plane URL. Outbound sends bypass Integration Frappe when configured."
 		},
 		{
 			"fieldname": "column_connection",

@@ -3,7 +3,7 @@
 	import Button from 'primevue/button'
 	import InputText from 'primevue/inputtext'
 	import InputNumber from 'primevue/inputnumber'
-	import MultiSelect from 'primevue/multiselect'
+	import MultiLinkField from '@/components/form/MultiLinkField.vue'
 	import Select from 'primevue/select'
 	import Textarea from 'primevue/textarea'
 	import ToggleSwitch from 'primevue/toggleswitch'
@@ -250,7 +250,7 @@
 				"
 			>
 				<label>Accepted attachments</label>
-				<MultiSelect
+				<MultiLinkField
 					v-model="selectedNode.data.config.accepted_media_types"
 					:options="mediaTypes"
 					display="chip"

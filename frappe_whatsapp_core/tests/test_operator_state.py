@@ -1,53 +1,109 @@
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from frappe_whatsapp_core import conversation_reads, message_reactions
 
 
 class TestConversationReads(TestCase):
+	@patch("frappe_whatsapp_core.conversation_reads.message_readers")
+	def test_exact_read_ledger_is_projected_onto_each_loaded_message(self, readers):
+		messages = [
+			SimpleNamespace(name="MSG-1", provider_timestamp="2026-08-10 01:00:00", creation="1"),
+			SimpleNamespace(name="MSG-2", provider_timestamp="2026-08-10 02:00:00", creation="2"),
+		]
+		readers.return_value = {
+			"MSG-1": [{"user": "early@example.test"}],
+			"MSG-2": [{"user": "latest@example.test"}],
+		}
+
+		conversation_reads.attach_message_readers(messages)
+
+		self.assertEqual(messages[0].read_by, [{"user": "early@example.test"}])
+		self.assertEqual(messages[1].read_by, [{"user": "latest@example.test"}])
+		readers.assert_called_once_with(["MSG-1", "MSG-2"])
+
 	@patch("frappe_whatsapp_core.conversation_reads.frappe.get_roles", return_value=["System Manager"])
 	@patch("frappe_whatsapp_core.conversation_reads.assert_conversation_access")
 	@patch("frappe_whatsapp_core.conversation_reads.frappe.has_permission")
-	@patch("frappe_whatsapp_core.conversation_reads.now", return_value="2026-08-10 02:00:00")
-	@patch("frappe_whatsapp_core.conversation_reads.frappe.enqueue")
-	@patch("frappe_whatsapp_core.conversation_reads._latest_inbound_provider_message")
-	@patch("frappe_whatsapp_core.conversation_reads.frappe.new_doc")
-	@patch("frappe_whatsapp_core.conversation_reads.frappe.db.exists", return_value=False)
-	@patch("frappe_whatsapp_core.conversation_reads.frappe.db.get_value", return_value="CONV-1")
-	def test_mark_read_persists_operator_cursor_and_queues_provider_receipt(
+	@patch("frappe_whatsapp_core.conversation_reads._advance_conversation_cursor")
+	@patch("frappe_whatsapp_core.conversation_reads._record_message_reads")
+	@patch("frappe_whatsapp_core.conversation_reads.frappe.get_all")
+	def test_visible_message_batch_records_exact_rows_and_advances_one_cursor(
 		self,
-		_get_value,
-		_exists,
-		new_doc,
-		latest,
-		enqueue,
-		_now,
+		get_all,
+		record_reads,
+		advance_cursor,
 		_has_permission,
 		_assert_access,
 		_get_roles,
 	):
-		doc = MagicMock()
-		new_doc.return_value = doc
-		latest.return_value = SimpleNamespace(channel="CHANNEL-1", provider_message_id="wamid.1")
+		get_all.return_value = [
+			SimpleNamespace(name="MSG-1", provider_timestamp="2026-08-10 01:00:00", creation="1"),
+			SimpleNamespace(name="MSG-2", provider_timestamp="2026-08-10 02:00:00", creation="2"),
+		]
+		record_reads.return_value = ["MSG-1", "MSG-2"]
+		advance_cursor.return_value = {
+			"conversation": "CONV-1",
+			"last_read_message": "MSG-2",
+		}
 
-		with patch.object(conversation_reads.frappe, "publish_realtime") as publish_realtime:
-			result = conversation_reads.mark_conversation_read("CONV-1", "MSG-1")
+		result = conversation_reads.mark_messages_read(
+			"CONV-1",
+			["MSG-1", "MSG-2", "MSG-1"],
+		)
+
+		self.assertEqual(result["processed"], 2)
+		self.assertEqual(result["recorded"], 2)
+		record_reads.assert_called_once()
+		advance_cursor.assert_called_once()
+		self.assertEqual(advance_cursor.call_args.args[1].name, "MSG-2")
+		self.assertEqual(get_all.call_args.kwargs["limit_page_length"], 2)
+
+	@patch("frappe_whatsapp_core.conversation_reads.now_datetime", return_value="2026-08-10 03:00:00")
+	@patch("frappe_whatsapp_core.conversation_reads.frappe.enqueue")
+	@patch("frappe_whatsapp_core.conversation_reads._latest_inbound_provider_message")
+	def test_atomic_cursor_upsert_queues_provider_receipt_inside_read_window(
+		self,
+		latest,
+		enqueue,
+		_now,
+	):
+		target = SimpleNamespace(
+			name="MSG-1",
+			provider_timestamp="2026-08-10 02:00:00",
+			creation="2026-08-10 02:00:01",
+		)
+		latest.return_value = SimpleNamespace(channel="CHANNEL-1", provider_message_id="wamid.1")
+		read_row = SimpleNamespace(
+			conversation="CONV-1",
+			user=conversation_reads.frappe.session.user,
+			last_read_message="MSG-1",
+			last_read_at="2026-08-10 02:00:00",
+			last_read_creation="2026-08-10 02:00:01",
+		)
+		with (
+			patch.object(
+				conversation_reads.frappe.db,
+				"sql",
+				side_effect=[None, [1]],
+			) as db_sql,
+			patch.object(
+				conversation_reads.frappe.db,
+				"get_value",
+				return_value=read_row,
+			),
+			patch.object(conversation_reads.frappe, "publish_realtime") as publish_realtime,
+		):
+			result = conversation_reads._advance_conversation_cursor(
+				"CONV-1", target, ["MSG-1"]
+			)
 
 		self.assertEqual(result["last_read_message"], "MSG-1")
-		self.assertEqual(doc.conversation, "CONV-1")
-		self.assertEqual(doc.last_read_at, "2026-08-10 02:00:00")
-		doc.save.assert_called_once_with(ignore_permissions=True)
-		publish_realtime.assert_called_once_with(
-			"whatsapp_core_conversation_read",
-			{
-				"conversation": "CONV-1",
-				"user": result["user"],
-				"last_read_message": "MSG-1",
-				"last_read_at": "2026-08-10 02:00:00",
-			},
-			after_commit=True,
-		)
+		self.assertEqual(result["messages"], ["MSG-1"])
+		self.assertIn("ON DUPLICATE KEY UPDATE", db_sql.call_args_list[0].args[0])
+		publish_realtime.assert_called_once()
+		latest.assert_called_once_with("CONV-1", at_or_before=target)
 		enqueue.assert_called_once_with(
 			"frappe_whatsapp_core.conversation_reads.sync_provider_read",
 			queue="short",
@@ -56,10 +112,71 @@ class TestConversationReads(TestCase):
 			message_id="wamid.1",
 		)
 
+	@patch("frappe_whatsapp_core.conversation_reads.now_datetime", return_value="2026-08-10 03:00:00")
+	@patch("frappe_whatsapp_core.conversation_reads.frappe.enqueue")
+	@patch("frappe_whatsapp_core.conversation_reads._latest_inbound_provider_message")
+	def test_already_read_cursor_does_not_publish_or_repeat_provider_receipt(
+		self,
+		latest,
+		enqueue,
+		_now,
+	):
+		target = SimpleNamespace(
+			name="MSG-1",
+			provider_timestamp="2026-08-10 02:00:00",
+			creation="2026-08-10 02:00:01",
+		)
+		read_row = SimpleNamespace(
+			conversation="CONV-1",
+			user=conversation_reads.frappe.session.user,
+			last_read_message="MSG-1",
+			last_read_at="2026-08-10 02:00:00",
+			last_read_creation="2026-08-10 02:00:01",
+		)
+		with (
+			patch.object(conversation_reads.frappe.db, "sql", side_effect=[None, [0]]),
+			patch.object(conversation_reads.frappe.db, "get_value", return_value=read_row),
+			patch.object(conversation_reads.frappe, "publish_realtime") as publish_realtime,
+		):
+			result = conversation_reads._advance_conversation_cursor("CONV-1", target, [])
+
+		self.assertEqual(result["last_read_message"], "MSG-1")
+		latest.assert_not_called()
+		enqueue.assert_not_called()
+		publish_realtime.assert_not_called()
+
+	@patch("frappe_whatsapp_core.conversation_reads.frappe.db.sql")
+	def test_provider_receipt_query_is_bounded_by_exact_cursor(self, db_sql):
+		db_sql.return_value = [
+			SimpleNamespace(channel="CHANNEL-1", provider_message_id="wamid.before")
+		]
+		target = SimpleNamespace(
+			name="MSG-20",
+			provider_timestamp="2026-08-10 02:00:00",
+			creation="2026-08-10 02:00:01",
+		)
+
+		result = conversation_reads._latest_inbound_provider_message(
+			"CONV-1", at_or_before=target
+		)
+
+		self.assertEqual(result.provider_message_id, "wamid.before")
+		query, values = db_sql.call_args.args[:2]
+		self.assertIn("name <= %(read_message)s", query)
+		self.assertIn("message_type != 'reaction'", query)
+		self.assertEqual(values["read_message"], "MSG-20")
+
 	@patch("frappe_whatsapp_core.conversation_reads.frappe.get_roles", return_value=["System Manager"])
 	@patch("frappe_whatsapp_core.conversation_reads.assert_conversation_access")
 	@patch("frappe_whatsapp_core.conversation_reads.frappe.has_permission")
-	@patch("frappe_whatsapp_core.conversation_reads.frappe.db.get_value", return_value="OTHER-CONV")
+	@patch(
+		"frappe_whatsapp_core.conversation_reads.frappe.db.get_value",
+		return_value=SimpleNamespace(
+			conversation="OTHER-CONV",
+			provider_timestamp="2026-08-10 02:00:00",
+			creation="2026-08-10 02:00:01",
+		),
+	)
 	def test_mark_read_rejects_cursor_from_another_conversation(
 		self, _get_value, _has_permission, _assert_access, _get_roles
 	):

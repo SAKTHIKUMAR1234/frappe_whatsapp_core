@@ -12,6 +12,8 @@ from frappe_whatsapp_core.message_media import add_media_url, enqueue_message_me
 MAX_ATTEMPTS = 6
 MAX_REALTIME_BATCH_SIZE = 100
 STATUS_BATCH_DEADLOCK_RETRIES = 10
+GENERIC_BATCH_DEADLOCK_RETRIES = 6
+WAITING_STATUS_DEADLOCK_RETRIES = 6
 ORPHAN_STATUS_RETRY_BASE_SECONDS = 0.25
 ORPHAN_STATUS_RETRY_MAX_SECONDS = 2.0
 MESSAGE_PROJECTION_KINDS = {"message", "status", "edit", "revoke"}
@@ -105,13 +107,40 @@ def retry_stale_events(limit=1000):
 
 def enqueue_waiting_status_events(provider_ids, enqueue_after_commit=True):
 	"""Wake receipts that arrived before their outbound provider ID was bound."""
-	provider_ids = list(dict.fromkeys(
-		str(provider_id).strip()
-		for provider_id in provider_ids or []
-		if str(provider_id or "").strip()
-	))
+	provider_ids = _normalized_provider_ids(provider_ids)
 	if not provider_ids:
 		return 0
+	if enqueue_after_commit:
+		# A status worker may be updating the orphan event while this request is
+		# binding the outbound provider ID. Keeping both writes in the request
+		# transaction can trigger MyRocks CHECKREAD (1020) and roll back an
+		# otherwise valid provider result. Wake the event in a fresh transaction.
+		frappe.enqueue(
+			"frappe_whatsapp_core.dispatcher.wake_waiting_status_events",
+			queue="short",
+			enqueue_after_commit=True,
+			provider_ids=provider_ids,
+		)
+		return 0
+	return wake_waiting_status_events(provider_ids)
+
+
+def wake_waiting_status_events(provider_ids):
+	"""Wake orphan receipts in their own retryable database transaction."""
+	provider_ids = _normalized_provider_ids(provider_ids)
+	if not provider_ids:
+		return 0
+	for attempt in range(WAITING_STATUS_DEADLOCK_RETRIES):
+		try:
+			return _wake_waiting_status_events(provider_ids)
+		except frappe.QueryDeadlockError:
+			frappe.db.rollback()
+			if attempt == WAITING_STATUS_DEADLOCK_RETRIES - 1:
+				raise
+			time.sleep(min(1.0, 0.05 * (2**attempt)) + random.uniform(0, 0.03))
+
+
+def _wake_waiting_status_events(provider_ids):
 	# Under load the outbound-result queue can legitimately take longer than the
 	# bounded orphan backoff.  A receipt may therefore exhaust MAX_ATTEMPTS before
 	# the provider id is bound.  Binding the id is the authoritative wake-up: reset
@@ -127,19 +156,20 @@ def enqueue_waiting_status_events(provider_ids, enqueue_after_commit=True):
 		pluck="name",
 		limit_page_length=min(len(provider_ids) * 4, 5000),
 	)
-	if event_ids:
-		frappe.db.sql(
-			"""
-			UPDATE `tabWhatsApp Core Event`
-			SET status = 'Queued', attempts = 0, error = '', modified = NOW(6)
-			WHERE name IN %(event_ids)s
-			  AND status IN ('Pending', 'Queued', 'Failed')
-			  AND error IN ('', 'Awaiting matching outbound provider result')
-			""",
-			{"event_ids": event_ids},
-		)
-	enqueue_event_batch(event_ids, enqueue_after_commit=enqueue_after_commit)
+	# Do not mutate the event in this wake-up transaction. The status batch owns
+	# the event row and can process a recoverable Failed event directly. Writing
+	# here races that batch, causes MyRocks CHECKREAD retries, and needlessly holds
+	# a short-queue worker for several seconds under campaign load.
+	enqueue_event_batch(event_ids, enqueue_after_commit=True)
 	return len(event_ids)
+
+
+def _normalized_provider_ids(provider_ids):
+	return list(dict.fromkeys(
+		str(provider_id).strip()
+		for provider_id in provider_ids or []
+		if str(provider_id or "").strip()
+	))
 
 
 def replay_orphaned_status_events(limit=5000, since=None, start=0):
@@ -194,7 +224,7 @@ def replay_orphaned_status_events(limit=5000, since=None, start=0):
 	return {"requeued": len(event_ids)}
 
 
-def process_event_batch(event_ids):
+def process_event_batch(event_ids, retry_deadlocks=True):
 	"""Process one committed relay window and notify clients once per batch."""
 	if len(event_ids) > MAX_REALTIME_BATCH_SIZE:
 		frappe.throw(
@@ -204,6 +234,20 @@ def process_event_batch(event_ids):
 	event_ids = list(dict.fromkeys(event_ids))
 	if _is_pure_status_batch(event_ids):
 		return _process_status_event_batch_with_retry(event_ids)
+	if not retry_deadlocks:
+		return _process_generic_event_batch(event_ids)
+	for attempt in range(GENERIC_BATCH_DEADLOCK_RETRIES):
+		try:
+			return _process_generic_event_batch(event_ids)
+		except frappe.QueryDeadlockError:
+			frappe.db.rollback()
+			if attempt == GENERIC_BATCH_DEADLOCK_RETRIES - 1:
+				raise
+			time.sleep(min(1.5, 0.08 * (2**attempt)) + random.uniform(0, 0.04))
+
+
+def _process_generic_event_batch(event_ids):
+	"""Process non-status work as one retryable database transaction."""
 	results = []
 	frappe.flags.whatsapp_core_batch_processing = True
 	frappe.flags.whatsapp_core_campaign_message_names = set()
@@ -211,6 +255,10 @@ def process_event_batch(event_ids):
 		for event_id in event_ids:
 			try:
 				results.append({"event_id": event_id, **process_event(event_id)})
+			except frappe.QueryDeadlockError:
+				# A deadlock invalidates every earlier savepoint/write in this
+				# transaction, so the complete committed batch must be replayed.
+				raise
 			except Exception:
 				results.append({"event_id": event_id, "status": "failed"})
 	finally:
@@ -221,6 +269,25 @@ def process_event_batch(event_ids):
 		from frappe_whatsapp_core.campaigns import refresh_campaigns_for_messages
 
 		refresh_campaigns_for_messages(message_names)
+	created_message_names = list(dict.fromkeys(
+		projection["name"]
+		for result in results
+		for projection in result.get("projections") or []
+		if projection.get("kind") == "message"
+		and projection.get("status") == "created"
+		and projection.get("name")
+	))
+	if created_message_names:
+		# Classification/summarization is intentionally off the webhook
+		# transaction. One deduplicated long-queue job is scheduled per affected
+		# contact after the complete event batch commits; the periodic scan remains
+		# a repair path for crashed workers or temporarily disabled AI.
+		from frappe_whatsapp_core.ai_summaries import enqueue_summary_for_messages
+
+		enqueue_summary_for_messages(
+			created_message_names,
+			enqueue_after_commit=True,
+		)
 	_publish_batch_refresh(event_ids, results)
 	return results
 
@@ -261,12 +328,7 @@ def _is_pure_status_batch(event_ids) -> bool:
 
 def _process_status_event_batch(event_ids):
 	"""Materialize status telemetry in bulk without invoking message handlers."""
-	events = frappe.get_all(
-		"WhatsApp Core Event",
-		filters={"name": ["in", event_ids]},
-		fields=["name", "payload", "status", "attempts"],
-		limit_page_length=len(event_ids),
-	)
+	events = _get_locked_core_event_rows(event_ids)
 	by_name = {row.name: row for row in events}
 	_lock_status_projection_rows(events)
 	results = []
@@ -354,10 +416,11 @@ def _process_status_event_batch(event_ids):
 			attempt = max(int(by_name[event_id].attempts or 0) + 1 for event_id in retry_ids)
 			enqueue_orphan_status_retry(retry_ids, attempt=attempt)
 	for event_id, error in failed:
+		next_attempt = int(by_name[event_id].attempts or 0) + 1
 		frappe.db.set_value(
 			"WhatsApp Core Event",
 			event_id,
-			{"status": "Failed", "error": error, "attempts": 1},
+			{"status": "Failed", "error": error, "attempts": next_attempt},
 			update_modified=False,
 		)
 
@@ -369,6 +432,24 @@ def _process_status_event_batch(event_ids):
 		reconcile_campaign_status_batch(message_names)
 	_publish_batch_refresh(event_ids, results)
 	return results
+
+
+def _get_locked_core_event_rows(event_ids):
+	"""Load current event state while serializing duplicate status batches."""
+	event_ids = sorted(set(event_ids or []))
+	if not event_ids:
+		return []
+	return frappe.db.sql(
+		"""
+		SELECT name, payload, status, attempts
+		FROM `tabWhatsApp Core Event`
+		WHERE name IN %(event_ids)s
+		ORDER BY name
+		FOR UPDATE
+		""",
+		{"event_ids": event_ids},
+		as_dict=True,
+	)
 
 
 def _lock_status_projection_rows(events):
@@ -492,6 +573,10 @@ def process_event(event_id):
 		event.error = ""
 		event.save(ignore_permissions=True)
 		return {"status": "completed", "projections": projections, "results": results}
+	except frappe.QueryDeadlockError:
+		# Do not attempt another stale Document save after MariaDB has rolled
+		# back the transaction. The batch owner handles the bounded retry.
+		raise
 	except Exception:
 		event.status = "Failed"
 		event.error = frappe.get_traceback()

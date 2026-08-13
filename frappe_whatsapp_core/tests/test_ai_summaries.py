@@ -108,11 +108,11 @@ class TestAISummaries(FrappeTestCase):
 			self._message("Please arrange a callback tomorrow", 1),
 		]
 
-	def _message(self, body, offset):
+	def _message(self, body, offset, key_prefix="summary-message"):
 		timestamp = add_to_date(now_datetime(), seconds=offset)
 		return frappe.get_doc({
 			"doctype": "WhatsApp Core Message",
-			"message_key": f"summary-message-{frappe.generate_hash(length=10)}",
+			"message_key": f"{key_prefix}-{frappe.generate_hash(length=10)}",
 			"conversation": self.conversation.name,
 			"channel": self.channel.name,
 			"provider_message_id": f"wamid.summary.{frappe.generate_hash(length=12)}",
@@ -172,7 +172,25 @@ class TestAISummaries(FrappeTestCase):
 		)
 		self.assertTrue(frappe.db.exists("WhatsApp Core Message Category", "Payment proof"))
 		self.assertTrue(frappe.db.exists("WhatsApp Core Message Category", "Callback"))
-		third = self._message("The callback is no longer required", 2)
+		third = self._message(
+			"The callback is no longer required",
+			2,
+			key_prefix="zz-summary-message",
+		)
+		# Even a fully tied timestamp pair must advance by the stable message ID.
+		cursor_message = self.messages[-1]
+		frappe.db.set_value(
+			"WhatsApp Core Message",
+			third.name,
+			{
+				"provider_timestamp": cursor_message.provider_timestamp,
+				"creation": cursor_message.creation,
+			},
+			update_modified=False,
+		)
+		third.provider_timestamp = cursor_message.provider_timestamp
+		third.creation = cursor_message.creation
+		self.assertGreater(third.name, cursor_message.name)
 		run_i2a.return_value = self._result("Payment sent; callback cancelled.", ["M1"])
 
 		second = summarize_identity(self.identity.name)
@@ -265,6 +283,33 @@ class TestAISummaries(FrappeTestCase):
 		self.assertEqual(run_i2a.call_count, 2)
 		self.assertEqual(summary["processed_message_count"], 2)
 		self.assertEqual(summary["last_message"], self.messages[-1].name)
+
+	@patch("frappe_whatsapp_core.ai_summaries.time.sleep")
+	@patch("frappe_whatsapp_core.ai_summaries.frappe.db.commit")
+	@patch("frappe_whatsapp_core.ai_summaries._settings")
+	@patch("frappe_whatsapp_core.ai_summaries._run_i2a")
+	def test_short_batch_drains_messages_committed_while_job_runs(
+		self, run_i2a, settings, commit, sleep
+	):
+		settings.return_value = self.settings
+		tail = None
+
+		def model_result(*_args, **_kwargs):
+			nonlocal tail
+			if run_i2a.call_count == 1:
+				tail = self._message("Burst tail needs categorization", 2)
+				return self._result("Initial burst.", ["M1", "M2"])
+			return self._result("Initial burst and tail.", ["M1"])
+
+		run_i2a.side_effect = model_result
+
+		summary = summarize_identity(self.identity.name)
+
+		self.assertEqual(run_i2a.call_count, 2)
+		self.assertEqual(summary["processed_message_count"], 3)
+		self.assertEqual(summary["last_message"], tail.name)
+		commit.assert_called()
+		sleep.assert_called_with(0.5)
 
 	@patch("frappe_whatsapp_core.ai_summaries._settings")
 	@patch("frappe_whatsapp_core.ai_summaries._run_i2a")

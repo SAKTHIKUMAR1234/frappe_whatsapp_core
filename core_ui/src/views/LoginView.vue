@@ -47,10 +47,10 @@
 			<div class="art-copy">
 				<div class="art-logo"><MessageCircleMore :size="28" /></div>
 				<span>WhatsApp Core</span>
-				<h1>One place to configure every WhatsApp interaction.</h1>
+				<h1>One place to handle every WhatsApp interaction.</h1>
 				<p>
-					Build flows, run campaigns, review AI queues and launch polls—without touching
-					the relay server.
+					Handle conversations, groups, calling, campaigns and customer experiences in
+					one workspace.
 				</p>
 			</div>
 			<div class="art-flow">
@@ -71,18 +71,18 @@
 				<Message v-if="sessionNotice" severity="warn" :closable="false">{{
 					sessionNotice
 				}}</Message>
-				<label>Email</label>
+				<label>Email or username</label>
 				<InputText
 					v-model="email"
-					type="email"
+					type="text"
 					autocomplete="username"
-					placeholder="you@company.com"
+					placeholder="you@company.com or Administrator"
 					fluid
 					autofocus
 					:invalid="attempted && !email.trim()"
 				/>
 				<small v-if="attempted && !email.trim()" class="field-error"
-					>Enter your email address.</small
+					>Enter your email address or username.</small
 				>
 				<label>Password</label>
 				<Password

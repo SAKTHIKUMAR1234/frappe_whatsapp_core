@@ -3,7 +3,7 @@
 	import { useRoute, useRouter } from 'vue-router'
 	import Button from 'primevue/button'
 	import InputText from 'primevue/inputtext'
-	import MultiSelect from 'primevue/multiselect'
+	import MultiLinkField from '@/components/form/MultiLinkField.vue'
 	import Tag from 'primevue/tag'
 	import Textarea from 'primevue/textarea'
 	import { useConfirm } from 'primevue/useconfirm'
@@ -317,7 +317,7 @@
 				<label>Name</label
 				><InputText v-model="form.name" fluid :disabled="!mutable || !canManage" />
 				<label>Categories</label
-				><MultiSelect
+				><MultiLinkField
 					v-model="form.categories"
 					:options="categories"
 					display="chip"

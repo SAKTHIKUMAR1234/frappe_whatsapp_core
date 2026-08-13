@@ -4,10 +4,10 @@
 	import Button from 'primevue/button'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
-	import Dialog from 'primevue/dialog'
+	import AppDialog from '@/components/AppDialog.vue'
 	import InputText from 'primevue/inputtext'
 	import Message from 'primevue/message'
-	import MultiSelect from 'primevue/multiselect'
+	import MultiLinkField from '@/components/form/MultiLinkField.vue'
 	import Select from 'primevue/select'
 	import Skeleton from 'primevue/skeleton'
 	import Tag from 'primevue/tag'
@@ -258,10 +258,6 @@
 		<div>
 			<div class="eyebrow">Meta-hosted experiences</div>
 			<h1>WhatsApp Flows</h1>
-			<p>
-				Create and publish native Meta Flows. Frappe stores audit logs, not a second Flow
-				runtime.
-			</p>
 		</div>
 		<div v-if="canManage" class="heading-actions">
 			<Button
@@ -374,7 +370,7 @@
 		</DataTable>
 	</section>
 
-	<Dialog
+	<AppDialog
 		ref="createDialogRef"
 		v-model:visible="dialog"
 		modal
@@ -397,7 +393,7 @@
 			placeholder="Customer support intake"
 		/>
 		<label id="meta-flow-categories-label">Categories</label>
-		<MultiSelect
+		<MultiLinkField
 			v-model="form.categories"
 			:options="categories"
 			aria-labelledby="meta-flow-categories-label"
@@ -418,8 +414,8 @@
 				:disabled="!form.flow_name.trim() || !form.categories.length"
 				@click="createNativeFlow"
 		/></template>
-	</Dialog>
-	<Dialog
+	</AppDialog>
+	<AppDialog
 		ref="endpointDialogRef"
 		v-model:visible="endpointDialog"
 		modal
@@ -463,8 +459,8 @@
 				@click="provisionEndpoint(false)"
 			/>
 		</template>
-	</Dialog>
-	<Dialog
+	</AppDialog>
+	<AppDialog
 		ref="migrateDialogRef"
 		v-model:visible="migrateDialog"
 		modal
@@ -487,8 +483,8 @@
 				:disabled="!migration.source_waba_id.trim()"
 				@click="migrateNativeFlows"
 		/></template>
-	</Dialog>
-	<Dialog
+	</AppDialog>
+	<AppDialog
 		ref="keyDialogRef"
 		v-model:visible="keyDialog"
 		modal
@@ -515,7 +511,7 @@
 				:disabled="!businessPublicKey.trim()"
 				@click="saveBusinessPublicKey"
 		/></template>
-	</Dialog>
+	</AppDialog>
 </template>
 
 <style scoped>

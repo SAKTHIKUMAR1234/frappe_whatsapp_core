@@ -9,9 +9,11 @@ from frappe.utils import cint
 
 from frappe_whatsapp_core.contact_presentation import present_identity_names
 from frappe_whatsapp_core.ai_summaries import attach_message_insights
-from frappe_whatsapp_core.conversation_reads import mark_conversation_read
+from frappe_whatsapp_core.conversation_reads import (
+	attach_message_readers,
+	mark_conversation_read,
+)
 from frappe_whatsapp_core.identity import contact_options
-from frappe_whatsapp_core.message_categories import category_counts_for_teams
 from frappe_whatsapp_core.message_media import add_media_url
 from frappe_whatsapp_core.message_quotes import attach_quoted_messages
 from frappe_whatsapp_core.message_reactions import attach_message_reactions
@@ -74,15 +76,10 @@ def list_conversations(
 			last_message.message_type AS last_message_type,
 			last_message.direction AS last_message_direction,
 			COALESCE(SUM(
-				CASE
-					WHEN message.direction = 'Inbound'
-						AND (
-							message.provider_timestamp > COALESCE(reader.last_read_at, '1970-01-01')
-							OR (
-								message.provider_timestamp = reader.last_read_at
-								AND message.creation > COALESCE(reader.last_read_creation, '1970-01-01')
-							)
-						)
+					CASE
+						WHEN message.direction = 'Inbound'
+							AND message.message_type != 'reaction'
+							AND message_read.name IS NULL
 					THEN 1 ELSE 0
 				END
 			), 0) AS unread_count
@@ -92,17 +89,19 @@ def list_conversations(
 		LEFT JOIN `tabWhatsApp Core Message` last_message
 			ON last_message.name = (
 				SELECT newest.name
-				FROM `tabWhatsApp Core Message` newest
-				WHERE newest.conversation = conversation.name
-				ORDER BY newest.provider_timestamp DESC, newest.creation DESC
+					FROM `tabWhatsApp Core Message` newest
+					WHERE newest.conversation = conversation.name
+						AND newest.message_type != 'reaction'
+					ORDER BY newest.provider_timestamp DESC, newest.creation DESC, newest.name DESC
 				LIMIT 1
 			)
 		LEFT JOIN `tabWhatsApp Core Message` message
 			ON message.conversation = conversation.name
+		LEFT JOIN `tabWhatsApp Core Message Read` message_read
+			ON message_read.message = message.name
+			AND message_read.user = %(user)s
 		LEFT JOIN `tabWhatsApp Core Team` assigned_team
 			ON assigned_team.name = conversation.assigned_team
-		LEFT JOIN `tabWhatsApp Core Conversation Read` reader
-			ON reader.conversation = conversation.name AND reader.user = %(user)s
 		WHERE {where}
 		GROUP BY conversation.name
 		ORDER BY conversation.last_message_at DESC
@@ -161,29 +160,81 @@ def list_messages(
 	conversation: str,
 	before: str | None = None,
 	before_creation: str | None = None,
+	before_name: str | None = None,
+	after: str | None = None,
+	after_creation: str | None = None,
+	after_name: str | None = None,
 	limit: int = 50,
 	search: str | None = None,
 	category: str | None = None,
 ) -> dict:
 	_assert_conversation_access(conversation)
 	limit = min(max(int(limit or 50), 1), 100)
+	if before and after:
+		frappe.throw("Use either before or after, not both", frappe.ValidationError)
 	filters = ["conversation = %(conversation)s", "message_type != 'reaction'"]
 	values = {"conversation": conversation, "limit": limit + 1}
+	ascending = bool(after)
 	if before:
 		values["before"] = before
-		if before_creation:
+		if before_creation and before_name:
 			filters.append(
 				"""(
 					provider_timestamp < %(before)s
 					OR (
 						provider_timestamp = %(before)s
-						AND creation < %(before_creation)s
+						AND (
+							creation < %(before_creation)s
+							OR (
+								creation = %(before_creation)s
+								AND name < %(before_name)s
+							)
+						)
 					)
+				)"""
+			)
+			values["before_creation"] = before_creation
+			values["before_name"] = before_name
+		elif before_creation:
+			filters.append(
+				"""(
+					provider_timestamp < %(before)s
+					OR (provider_timestamp = %(before)s AND creation < %(before_creation)s)
 				)"""
 			)
 			values["before_creation"] = before_creation
 		else:
 			filters.append("provider_timestamp < %(before)s")
+	if after:
+		values["after"] = after
+		if after_creation and after_name:
+			filters.append(
+				"""(
+					provider_timestamp > %(after)s
+					OR (
+						provider_timestamp = %(after)s
+						AND (
+							creation > %(after_creation)s
+							OR (
+								creation = %(after_creation)s
+								AND name > %(after_name)s
+							)
+						)
+					)
+				)"""
+			)
+			values["after_creation"] = after_creation
+			values["after_name"] = after_name
+		elif after_creation:
+			filters.append(
+				"""(
+					provider_timestamp > %(after)s
+					OR (provider_timestamp = %(after)s AND creation > %(after_creation)s)
+				)"""
+			)
+			values["after_creation"] = after_creation
+		else:
+			filters.append("provider_timestamp > %(after)s")
 	if search:
 		filters.append("body LIKE %(search)s")
 		values["search"] = f"%{search.strip()}%"
@@ -209,7 +260,10 @@ def list_messages(
 			) AS bookmarked
 		FROM `tabWhatsApp Core Message`
 		WHERE {" AND ".join(filters)}
-		ORDER BY provider_timestamp DESC, creation DESC
+		ORDER BY
+			provider_timestamp {"ASC" if ascending else "DESC"},
+			creation {"ASC" if ascending else "DESC"},
+			name {"ASC" if ascending else "DESC"}
 		LIMIT %(limit)s
 		""",
 		{**values, "user": frappe.session.user},
@@ -236,11 +290,16 @@ def list_messages(
 	attach_quoted_messages(rows, conversation)
 	attach_message_insights(rows)
 	attach_message_reactions(rows, conversation)
+	attach_message_readers(rows)
 	return {
 		"rows": rows,
 		"has_more": has_more,
-		"next_before": rows[-1].provider_timestamp if has_more and rows else None,
-		"next_before_creation": rows[-1].creation if has_more and rows else None,
+		"next_before": rows[-1].provider_timestamp if not ascending and has_more and rows else None,
+		"next_before_creation": rows[-1].creation if not ascending and has_more and rows else None,
+		"next_before_name": rows[-1].name if not ascending and has_more and rows else None,
+		"next_after": rows[-1].provider_timestamp if ascending and has_more and rows else None,
+		"next_after_creation": rows[-1].creation if ascending and has_more and rows else None,
+		"next_after_name": rows[-1].name if ascending and has_more and rows else None,
 	}
 
 
@@ -327,42 +386,89 @@ def assign_conversation(
 @frappe.whitelist()
 @require_core_access()
 def list_teams() -> list[dict]:
-	teams = frappe.get_all(
-		"WhatsApp Core Team",
-		fields=["name", "team_name", "icon", "description", "enabled"],
-		order_by="team_name asc",
-		limit_page_length=500,
+	"""Return bounded team summaries without materializing child tables."""
+	user = frappe.session.user
+	manager = user == "Administrator" or bool(
+		set(frappe.get_roles(user)) & CORE_MANAGEMENT_ROLES
 	)
-	members_by_team = {team.name: [] for team in teams}
-	contacts_by_team = {team.name: [] for team in teams}
-	categories_by_team = category_counts_for_teams(list(members_by_team))
-	if teams:
-		members = frappe.get_all(
-			"WhatsApp Core Team Member",
-			filters={"parent": ["in", list(members_by_team)]},
-			fields=["parent", "user", "team_role", "enabled"],
-			order_by="parent asc, idx asc",
-			limit_page_length=10000,
-		)
-		for member in members:
-			members_by_team.setdefault(member.parent, []).append(member)
-		contacts = frappe.get_all(
-			"WhatsApp Core Team Contact",
-			filters={"parent": ["in", list(contacts_by_team)]},
-			fields=["parent", "identity", "enabled"],
-			order_by="parent asc, idx asc",
-			limit_page_length=10000,
-		)
-		for contact in contacts:
-			contacts_by_team.setdefault(contact.parent, []).append(contact)
-	for team in teams:
-		team["members"] = members_by_team.get(team.name, [])
-		team["contacts"] = contacts_by_team.get(team.name, [])
-		team["categories"] = categories_by_team.get(team.name, [])
-		team["categorized_messages"] = sum(
-			row["count"] for row in team["categories"]
-		)
-	return teams
+	values = {"user": user, "limit": 500}
+	visibility = "1 = 1" if manager else """EXISTS (
+		SELECT 1 FROM `tabWhatsApp Core Team Member` scoped_member
+		WHERE scoped_member.parent = team.name
+			AND scoped_member.parenttype = 'WhatsApp Core Team'
+			AND scoped_member.parentfield = 'members'
+			AND scoped_member.enabled = 1
+			AND scoped_member.user = %(user)s
+	)"""
+	return frappe.db.sql(
+		f"""
+		SELECT
+			team.name,
+			team.team_name,
+			team.icon,
+			team.description,
+			team.enabled,
+			(
+				SELECT COUNT(*) FROM `tabWhatsApp Core Team Member` member_count
+				WHERE member_count.parent = team.name
+					AND member_count.parenttype = 'WhatsApp Core Team'
+					AND member_count.parentfield = 'members'
+			) AS member_count,
+			(
+				SELECT COUNT(*) FROM `tabWhatsApp Core Team Contact` contact_count
+				WHERE contact_count.parent = team.name
+					AND contact_count.parenttype = 'WhatsApp Core Team'
+					AND contact_count.parentfield = 'contacts'
+			) AS contact_count
+		FROM `tabWhatsApp Core Team` team
+		WHERE team.enabled = 1
+			AND {visibility}
+		ORDER BY team.team_name ASC
+		LIMIT %(limit)s
+		""",
+		values,
+		as_dict=True,
+	)
+
+
+@frappe.whitelist()
+@require_core_access()
+def search_team_options(search=None, limit=50) -> list[dict]:
+	"""Return a permission-scoped, bounded LinkField page ordered newest first."""
+	user = frappe.session.user
+	manager = user == "Administrator" or bool(
+		set(frappe.get_roles(user)) & CORE_MANAGEMENT_ROLES
+	)
+	values = {
+		"user": user,
+		"search": f"%{str(search or '').strip()}%",
+		"limit": max(1, min(cint(limit or 50), 100)),
+	}
+	visibility = "1 = 1" if manager else """EXISTS (
+		SELECT 1 FROM `tabWhatsApp Core Team Member` scoped_member
+		WHERE scoped_member.parent = team.name
+			AND scoped_member.parenttype = 'WhatsApp Core Team'
+			AND scoped_member.parentfield = 'members'
+			AND scoped_member.enabled = 1
+			AND scoped_member.user = %(user)s
+	)"""
+	return frappe.db.sql(
+		f"""
+		SELECT team.name, team.team_name, team.description, team.icon
+		FROM `tabWhatsApp Core Team` team
+		WHERE team.enabled = 1
+			AND {visibility}
+			AND (
+				team.name LIKE %(search)s
+				OR team.team_name LIKE %(search)s
+				OR team.description LIKE %(search)s
+			)
+		ORDER BY team.creation DESC, team.name DESC
+		LIMIT %(limit)s
+		""",
+		values,
+		as_dict=True,
+	)
 
 
 def _user_options(search=None, limit=50, include=None) -> list[dict]:
@@ -413,20 +519,197 @@ def search_team_users(search=None, limit=50) -> list[dict]:
 @frappe.whitelist()
 @require_core_access(manage=True)
 def team_workspace() -> dict:
-	"""Return the team editor data in one request.
+	"""Compatibility workspace containing summaries only.
 
-	The UI must select real Frappe users instead of accepting unchecked email
-	text. The initial options include every assigned member; remote search keeps
-	the response bounded even on sites with thousands of users.
+	Assignments are loaded by their paginated endpoints when a manager opens one
+	team. This avoids sending every site user and contact to the browser.
 	"""
-	teams = list_teams()
-	members = [member.user for team in teams for member in team.members]
-	contacts = [contact.identity for team in teams for contact in team.contacts]
-	return {
-		"teams": teams,
-		"users": _user_options(include=members),
-		"contacts": contact_options(limit=100, include=contacts),
-	}
+	return {"teams": list_teams(), "users": [], "contacts": []}
+
+
+def _assignment_page(limit=50, offset=0) -> tuple[int, int]:
+	return (
+		max(1, min(cint(limit or 50), 100)),
+		max(0, cint(offset or 0)),
+	)
+
+
+def _assert_team(team: str) -> str:
+	name = str(team or "").strip()
+	if not name or not frappe.db.exists("WhatsApp Core Team", name):
+		frappe.throw("Team not found", frappe.DoesNotExistError)
+	return name
+
+
+def _publish_team(team: str, operation: str) -> None:
+	frappe.db.set_value(
+		"WhatsApp Core Team",
+		team,
+		"modified",
+		frappe.utils.now_datetime(),
+		update_modified=False,
+	)
+	frappe.publish_realtime(
+		"whatsapp_core_team",
+		{"team": team, "operation": operation},
+		after_commit=True,
+	)
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def team_member_page(team: str, search=None, limit=50, offset=0) -> dict:
+	team = _assert_team(team)
+	limit, offset = _assignment_page(limit, offset)
+	values = {"team": team, "limit": limit + 1, "offset": offset}
+	condition = ""
+	query = str(search or "").strip()
+	if query:
+		condition = "AND (member.user LIKE %(search)s OR user.full_name LIKE %(search)s)"
+		values["search"] = f"%{query}%"
+	rows = frappe.db.sql(
+		f"""
+		SELECT member.name, member.user, member.team_role, member.enabled,
+			user.full_name, user.user_image, user.user_type
+		FROM `tabWhatsApp Core Team Member` member
+		LEFT JOIN `tabUser` user ON user.name = member.user
+		WHERE member.parent = %(team)s
+			AND member.parenttype = 'WhatsApp Core Team'
+			AND member.parentfield = 'members'
+			{condition}
+		ORDER BY member.idx ASC, member.creation ASC, member.name ASC
+		LIMIT %(limit)s OFFSET %(offset)s
+		""",
+		values,
+		as_dict=True,
+	)
+	return {"rows": rows[:limit], "has_more": len(rows) > limit, "offset": offset}
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def team_contact_page(team: str, search=None, limit=50, offset=0) -> dict:
+	team = _assert_team(team)
+	limit, offset = _assignment_page(limit, offset)
+	values = {"team": team, "limit": limit + 1, "offset": offset}
+	condition = ""
+	query = str(search or "").strip()
+	if query:
+		condition = """AND (
+			contact.identity LIKE %(search)s
+			OR identity.display_value LIKE %(search)s
+			OR identity.normalized_value LIKE %(search)s
+		)"""
+		values["search"] = f"%{query}%"
+	rows = frappe.db.sql(
+		f"""
+		SELECT contact.name, contact.identity, contact.enabled,
+			identity.display_value, identity.normalized_value
+		FROM `tabWhatsApp Core Team Contact` contact
+		LEFT JOIN `tabWhatsApp Core Identity` identity ON identity.name = contact.identity
+		WHERE contact.parent = %(team)s
+			AND contact.parenttype = 'WhatsApp Core Team'
+			AND contact.parentfield = 'contacts'
+			{condition}
+		ORDER BY contact.idx ASC, contact.creation ASC, contact.name ASC
+		LIMIT %(limit)s OFFSET %(offset)s
+		""",
+		values,
+		as_dict=True,
+	)
+	return {"rows": rows[:limit], "has_more": len(rows) > limit, "offset": offset}
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def add_team_member(team: str, user: str, team_role: str = "Agent") -> dict:
+	team = _assert_team(team)
+	user = str(user or "").strip()
+	if not frappe.db.exists("User", {"name": user, "enabled": 1}):
+		frappe.throw(f"Enabled user not found: {user}", frappe.ValidationError)
+	existing = frappe.db.exists(
+		"WhatsApp Core Team Member",
+		{"parent": team, "parenttype": "WhatsApp Core Team", "user": user},
+	)
+	if existing:
+		frappe.db.set_value(
+			"WhatsApp Core Team Member",
+			existing,
+			{"team_role": team_role or "Agent", "enabled": 1},
+		)
+		name = existing
+	else:
+		name = frappe.get_doc({
+			"doctype": "WhatsApp Core Team Member",
+			"parent": team,
+			"parenttype": "WhatsApp Core Team",
+			"parentfield": "members",
+			"user": user,
+			"team_role": team_role or "Agent",
+			"enabled": 1,
+		}).insert(ignore_permissions=True).name
+	_publish_team(team, "member_added")
+	return frappe.get_doc("WhatsApp Core Team Member", name).as_dict()
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def remove_team_member(team: str, user: str) -> dict:
+	team = _assert_team(team)
+	name = frappe.db.get_value(
+		"WhatsApp Core Team Member",
+		{"parent": team, "parenttype": "WhatsApp Core Team", "user": user},
+		"name",
+	)
+	if name:
+		frappe.delete_doc("WhatsApp Core Team Member", name, ignore_permissions=True)
+		_publish_team(team, "member_removed")
+	return {"team": team, "user": user, "removed": bool(name)}
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def add_team_contact(team: str, identity: str) -> dict:
+	team = _assert_team(team)
+	identity = str(identity or "").strip()
+	if not frappe.db.exists(
+		"WhatsApp Core Identity",
+		{"name": identity, "identity_type": "WhatsApp", "status": "Active"},
+	):
+		frappe.throw(f"Active WhatsApp contact not found: {identity}", frappe.ValidationError)
+	existing = frappe.db.exists(
+		"WhatsApp Core Team Contact",
+		{"parent": team, "parenttype": "WhatsApp Core Team", "identity": identity},
+	)
+	if existing:
+		frappe.db.set_value("WhatsApp Core Team Contact", existing, "enabled", 1)
+		name = existing
+	else:
+		name = frappe.get_doc({
+			"doctype": "WhatsApp Core Team Contact",
+			"parent": team,
+			"parenttype": "WhatsApp Core Team",
+			"parentfield": "contacts",
+			"identity": identity,
+			"enabled": 1,
+		}).insert(ignore_permissions=True).name
+	_publish_team(team, "contact_added")
+	return frappe.get_doc("WhatsApp Core Team Contact", name).as_dict()
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def remove_team_contact(team: str, identity: str) -> dict:
+	team = _assert_team(team)
+	name = frappe.db.get_value(
+		"WhatsApp Core Team Contact",
+		{"parent": team, "parenttype": "WhatsApp Core Team", "identity": identity},
+		"name",
+	)
+	if name:
+		frappe.delete_doc("WhatsApp Core Team Contact", name, ignore_permissions=True)
+		_publish_team(team, "contact_removed")
+	return {"team": team, "identity": identity, "removed": bool(name)}
 
 
 @frappe.whitelist()
@@ -439,17 +722,15 @@ def upsert_team(
 	members=None,
 	contacts=None,
 ) -> dict:
+	replace_members = members is not None
+	replace_contacts = contacts is not None
 	if isinstance(members, str):
 		members = frappe.parse_json(members)
-	if members is None:
-		members = []
-	if not isinstance(members, list):
+	if replace_members and not isinstance(members, list):
 		frappe.throw("members must be a list", frappe.ValidationError)
 	if isinstance(contacts, str):
 		contacts = frappe.parse_json(contacts)
-	if contacts is None:
-		contacts = []
-	if not isinstance(contacts, list):
+	if replace_contacts and not isinstance(contacts, list):
 		frappe.throw("contacts must be a list", frappe.ValidationError)
 	name = (team_name or "").strip()
 	if not name:
@@ -463,36 +744,38 @@ def upsert_team(
 	doc.icon = _team_icon(icon)
 	doc.description = description or ""
 	doc.enabled = 1 if _as_bool(enabled) else 0
-	doc.set("members", [])
-	seen = set()
-	for member in members:
-		user = (member.get("user") or "").strip() if isinstance(member, dict) else ""
-		if not user or user in seen:
-			continue
-		if not frappe.db.exists("User", user):
-			frappe.throw(f"User not found: {user}", frappe.ValidationError)
-		seen.add(user)
-		doc.append("members", {
-			"user": user,
-			"team_role": member.get("team_role") or "Agent",
-			"enabled": 1 if member.get("enabled", True) else 0,
-		})
-	doc.set("contacts", [])
-	seen_contacts = set()
-	for contact in contacts:
-		identity = (contact.get("identity") or "").strip() if isinstance(contact, dict) else ""
-		if not identity or identity in seen_contacts:
-			continue
-		if not frappe.db.exists(
-			"WhatsApp Core Identity",
-			{"name": identity, "identity_type": "WhatsApp", "status": "Active"},
-		):
-			frappe.throw(f"Active WhatsApp contact not found: {identity}", frappe.ValidationError)
-		seen_contacts.add(identity)
-		doc.append("contacts", {
-			"identity": identity,
-			"enabled": 1 if contact.get("enabled", True) else 0,
-		})
+	if replace_members:
+		doc.set("members", [])
+		seen = set()
+		for member in members:
+			user = (member.get("user") or "").strip() if isinstance(member, dict) else ""
+			if not user or user in seen:
+				continue
+			if not frappe.db.exists("User", user):
+				frappe.throw(f"User not found: {user}", frappe.ValidationError)
+			seen.add(user)
+			doc.append("members", {
+				"user": user,
+				"team_role": member.get("team_role") or "Agent",
+				"enabled": 1 if member.get("enabled", True) else 0,
+			})
+	if replace_contacts:
+		doc.set("contacts", [])
+		seen_contacts = set()
+		for contact in contacts:
+			identity = (contact.get("identity") or "").strip() if isinstance(contact, dict) else ""
+			if not identity or identity in seen_contacts:
+				continue
+			if not frappe.db.exists(
+				"WhatsApp Core Identity",
+				{"name": identity, "identity_type": "WhatsApp", "status": "Active"},
+			):
+				frappe.throw(f"Active WhatsApp contact not found: {identity}", frappe.ValidationError)
+			seen_contacts.add(identity)
+			doc.append("contacts", {
+				"identity": identity,
+				"enabled": 1 if contact.get("enabled", True) else 0,
+			})
 	doc.save(ignore_permissions=True)
 	frappe.publish_realtime(
 		"whatsapp_core_team",
