@@ -92,6 +92,25 @@ def bootstrap():
 
 @frappe.whitelist()
 @require_core_access(manage=True)
+def onboarding_status():
+	"""Return secret-free transport readiness for Integration activation."""
+	settings = frappe.get_single("WhatsApp Core Settings")
+	return {
+		"site": frappe.local.site,
+		"transport": connection_status(),
+		"accounts": [
+			{
+				"channel": row.channel,
+				"account_name": row.account_name,
+				"is_default": bool(row.is_default),
+			}
+			for row in settings.accounts
+		],
+	}
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
 def dashboard():
 	return {
 		"metrics": {

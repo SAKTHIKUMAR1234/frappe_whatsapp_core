@@ -89,6 +89,31 @@ class TestCoreRoleBoundary(FrappeTestCase):
 			with self.assertRaises(frappe.PermissionError):
 				dashboard()
 
+	def test_manager_onboarding_status_is_secret_free(self):
+		from frappe_whatsapp_core import frontend_api
+
+		settings = SimpleNamespace(
+			accounts=[SimpleNamespace(channel="Core Channel", account_name="Hub Account", is_default=1)]
+		)
+		transport = {
+			"enabled": True,
+			"outbound_enabled": True,
+			"hub_url": "https://hub.example.test",
+			"relay_url": "https://relay.example.test",
+			"credentials_configured": True,
+		}
+		with (
+			patch.object(frontend_api.frappe, "get_roles", return_value=["WhatsApp Manager"]),
+			patch.object(frontend_api.frappe, "get_single", return_value=settings),
+			patch.object(frontend_api, "connection_status", return_value=transport),
+			patch.object(frontend_api.frappe.local, "site", "core.example.test"),
+		):
+			result = frontend_api.onboarding_status()
+		self.assertEqual(result["site"], "core.example.test")
+		self.assertEqual(result["transport"], transport)
+		self.assertEqual(result["accounts"][0]["account_name"], "Hub Account")
+		self.assertNotIn("secret", frappe.as_json(result).lower())
+
 	def test_user_has_no_management_doctype_permissions(self):
 		for doctype in (
 			"WhatsApp Core Group",
