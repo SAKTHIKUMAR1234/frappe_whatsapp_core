@@ -99,7 +99,7 @@ class TestCoreRoleBoundary(FrappeTestCase):
 			"enabled": True,
 			"outbound_enabled": True,
 			"hub_url": "https://hub.example.test",
-			"relay_url": "https://relay.example.test",
+			"data_plane": "hub_gateway",
 			"credentials_configured": True,
 		}
 		with (

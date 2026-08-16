@@ -98,7 +98,6 @@ class TestRichMessages(FrappeTestCase):
 			),
 		]
 		settings = MagicMock()
-		settings.relay_url = ""
 		settings.get_account_name.return_value = "Hub Account"
 		get_settings.return_value = settings
 		call_management.return_value = {"success": True, "media_id": "MEDIA-1"}
@@ -112,9 +111,8 @@ class TestRichMessages(FrappeTestCase):
 class TestProviderPresence(FrappeTestCase):
 	@patch("frappe_whatsapp_core.hub_client.send_raw")
 	@patch("frappe_whatsapp_core.hub_client.get_settings")
-	def test_read_and_typing_use_direct_relay_data_plane(self, get_settings, send_raw):
+	def test_read_and_typing_use_hub_gateway_data_plane(self, get_settings, send_raw):
 		settings = MagicMock()
-		settings.relay_url = "https://relay.example.test"
 		get_settings.return_value = settings
 		send_raw.return_value = {
 			"accepted": True,

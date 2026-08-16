@@ -11,6 +11,15 @@ import requests
 from frappe.utils import get_datetime, get_system_timezone
 
 _session = requests.Session()
+_HUB_RELAY_GATEWAY_METHODS = {
+	"/v1/outbound": "frappe_whatsapp_hub.frappe_whatsapp_hub.api.gateway.outbound",
+	"/v1/outbound/batch": (
+		"frappe_whatsapp_hub.frappe_whatsapp_hub.api.gateway.outbound_batch"
+	),
+	"/v1/commands/outbound": (
+		"frappe_whatsapp_hub.frappe_whatsapp_hub.api.gateway.outbound_command"
+	),
+}
 
 
 def call_management(method: str, args: dict | None = None) -> dict:
@@ -24,10 +33,11 @@ def call_management(method: str, args: dict | None = None) -> dict:
 	if not method.startswith(allowed_prefix):
 		frappe.throw("Invalid WhatsApp Hub management method", frappe.ValidationError)
 	settings = get_settings()
-	url = f"{settings.hub_url}/api/method/{method}"
+	url = f"{_hub_url(settings)}/api/method/{method}"
 	try:
 		response = _session.post(
 			url,
+			allow_redirects=False,
 			headers=settings.get_hub_auth_headers(),
 			json=args or {},
 			timeout=_request_timeout(settings),
@@ -52,8 +62,8 @@ def mark_message_read(
 	*,
 	typing_indicator: bool = False,
 ) -> dict:
-	"""Queue provider read/typing state on the Go data plane when configured."""
-	settings = get_settings(outbound=True)
+	"""Queue provider read/typing state through the managed Hub data plane."""
+	get_settings(outbound=True)
 	message_id = str(message_id or "").strip()
 	if not message_id or message_id.startswith("local:"):
 		frappe.throw("A provider inbound message id is required", frappe.ValidationError)
@@ -93,11 +103,11 @@ def send_raw(
 	idempotency_key: str,
 ) -> dict:
 	settings = get_settings(outbound=True)
-	relay_url = _relay_url(settings)
-	url = f"{relay_url}/v1/outbound"
+	url = _gateway_endpoint(settings, "/v1/outbound")
 	try:
 		response = _session.post(
 			url,
+			allow_redirects=False,
 			headers=settings.get_hub_auth_headers(),
 			json={
 				"account_name": settings.get_account_name(channel),
@@ -171,11 +181,11 @@ def send_batch(messages: list[dict]) -> dict:
 			"idempotency_key": idempotency_key,
 		})
 
-	relay_url = _relay_url(settings)
-	url = f"{relay_url}/v1/outbound/batch"
+	url = _gateway_endpoint(settings, "/v1/outbound/batch")
 	try:
 		response = _session.post(
 			url,
+			allow_redirects=False,
 			headers=settings.get_hub_auth_headers(),
 			json={"messages": normalized},
 			timeout=_request_timeout(settings),
@@ -257,7 +267,8 @@ def publish_outbound_command(
 		request_body["execute_at"] = scheduled_for.isoformat()
 	try:
 		response = _session.post(
-			f"{_relay_url(settings)}/v1/commands/outbound",
+			_gateway_endpoint(settings, "/v1/commands/outbound"),
+			allow_redirects=False,
 			headers=settings.get_hub_auth_headers(),
 			json=request_body,
 			timeout=max(_request_timeout(settings), 120),
@@ -284,8 +295,6 @@ def get_settings(*, outbound: bool = False):
 		frappe.throw("WhatsApp Core is not enabled on this site")
 	if outbound and not settings.outbound_enabled:
 		frappe.throw("Outbound WhatsApp messages are disabled on this site")
-	if outbound and not _relay_url(settings):
-		frappe.throw("WhatsApp Go Relay URL is not configured")
 	if not settings.hub_url:
 		frappe.throw("WhatsApp Core Hub URL is not configured")
 	return settings
@@ -297,8 +306,7 @@ def connection_status() -> dict:
 		"enabled": bool(settings.enabled),
 		"outbound_enabled": bool(settings.outbound_enabled),
 		"hub_url": settings.hub_url or "",
-		"relay_url": getattr(settings, "relay_url", None) or "",
-		"data_plane": "go_relay" if _relay_url(settings) else "not_configured",
+		"data_plane": "hub_gateway",
 		"credentials_configured": bool(
 			settings.get_password("api_key", raise_exception=False)
 			and settings.get_password("api_secret", raise_exception=False)
@@ -311,9 +319,17 @@ def _request_timeout(settings) -> int:
 	return max(2, min(int(settings.request_timeout or 30), 120))
 
 
-def _relay_url(settings) -> str:
-	"""Return the mandatory Go data-plane endpoint for operational requests."""
-	return str(getattr(settings, "relay_url", None) or "").strip().rstrip("/")
+def _gateway_endpoint(settings, path: str) -> str:
+	"""Resolve one of the fixed Hub-to-relay gateway methods."""
+	path = f"/{str(path or '').strip('/')}"
+	method = _HUB_RELAY_GATEWAY_METHODS.get(path)
+	if not method:
+		frappe.throw("Unsupported Hub relay gateway operation", frappe.ValidationError)
+	return f"{_hub_url(settings)}/api/method/{method}"
+
+
+def _hub_url(settings) -> str:
+	return str(settings.hub_url or "").strip().rstrip("/")
 
 
 def _error_message(result) -> str:
