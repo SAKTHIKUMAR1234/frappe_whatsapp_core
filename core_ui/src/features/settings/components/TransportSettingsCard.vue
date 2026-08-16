@@ -24,6 +24,7 @@
 		enabled: false,
 		outbound_enabled: false,
 		hub_url: '',
+		relay_url: '',
 		request_timeout: 30,
 		default_country_calling_code: '91',
 		api_key: '',
@@ -56,6 +57,7 @@
 			form.enabled = Boolean(workspace.transport?.enabled)
 			form.outbound_enabled = Boolean(workspace.transport?.outbound_enabled)
 			form.hub_url = workspace.transport?.hub_url || ''
+			form.relay_url = workspace.transport?.relay_url || ''
 			form.request_timeout = workspace.request_timeout || 30
 			form.default_country_calling_code = workspace.default_country_calling_code || '91'
 			form.api_key = ''
@@ -120,6 +122,7 @@
 				enabled: Number(form.enabled),
 				outbound_enabled: Number(form.outbound_enabled),
 				hub_url: form.hub_url,
+				relay_url: form.relay_url,
 				request_timeout: form.request_timeout,
 				default_country_calling_code: form.default_country_calling_code,
 				api_key: form.api_key,
@@ -130,7 +133,9 @@
 			toast.add({
 				severity: 'success',
 				summary: 'Core transport saved',
-				detail: 'This workspace now uses the managed Hub gateway.',
+				detail: form.relay_url
+					? 'This workspace now sends directly through the durable Go relay.'
+					: 'Operational sending remains disabled until a Go relay URL is configured.',
 				life: 3000,
 			})
 		} catch (error) {
@@ -150,9 +155,9 @@
 	<section class="surface-card transport-card">
 		<header>
 			<div>
-				<div class="eyebrow">Core → Hub gateway → durable Go runtime</div>
+				<div class="eyebrow">Core → Go runtime · Frappe management plane</div>
 				<h2>Durable transport onboarding</h2>
-				<p>Map local channels to the platform-managed transport path.</p>
+				<p>Map local channels and keep Frappe outside the high-volume transport path.</p>
 			</div>
 			<span
 				:class="[
@@ -192,6 +197,18 @@
 						:disabled="!canManage"
 						placeholder="https://whatsapp-hub.example.com"
 					/>
+				</label>
+				<label>
+					<span>Go relay URL</span>
+					<InputText
+						v-model="form.relay_url"
+						:disabled="!canManage"
+						placeholder="https://whatsapp-relay.example.com"
+					/>
+					<small
+						>Messages, reads, media, and live calling bypass Frappe through fixed Go
+						routes.</small
+					>
 				</label>
 				<label>
 					<span>Request timeout</span>

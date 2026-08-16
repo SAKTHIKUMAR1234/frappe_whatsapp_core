@@ -9,8 +9,6 @@ Core knowing anything about bucket credentials.
 
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 import mimetypes
 from pathlib import Path
@@ -20,14 +18,11 @@ import frappe
 from frappe.utils import cint
 from frappe.utils.file_manager import save_file
 
-from frappe_whatsapp_core.hub_client import call_management, get_settings
+from frappe_whatsapp_core.hub_client import download_media, get_settings
 from frappe_whatsapp_core.permissions import require_core_access
 
 MEDIA_MESSAGE_TYPES = {"audio", "document", "image", "sticker", "template", "video"}
 MEDIA_METHOD = "frappe_whatsapp_core.message_media.download_message_media"
-HUB_DOWNLOAD_METHOD = (
-	"frappe_whatsapp_integration.frappe_whatsapp_hub.api.media.download_media"
-)
 
 
 def add_media_url(message) -> None:
@@ -144,22 +139,13 @@ def cache_message_media(message: str):
 				frappe.ValidationError,
 			)
 		settings = get_settings()
-		result = call_management(
-			HUB_DOWNLOAD_METHOD,
-			{
-				"account_name": settings.get_account_name(doc.channel),
-				"media_id": descriptor["id"],
-			},
+		result = download_media(
+			settings.get_account_name(doc.channel),
+			descriptor["id"],
 		)
-		if not result.get("success") or not result.get("content_b64"):
+		if not result.get("success") or not result.get("content"):
 			frappe.throw(result.get("error") or "Meta media download failed")
-		try:
-			content = base64.b64decode(result["content_b64"], validate=True)
-		except (binascii.Error, TypeError, ValueError):
-			frappe.throw(
-				"WhatsApp Hub returned invalid media content",
-				frappe.ValidationError,
-			)
+		content = result["content"]
 		content_type = str(
 			result.get("mime_type") or descriptor.get("mime_type") or ""
 		).strip()

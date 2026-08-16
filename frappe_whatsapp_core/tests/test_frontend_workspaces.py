@@ -18,8 +18,8 @@ from frappe_whatsapp_core.frontend_api import (
 	discover_hub_accounts,
 	health_workspace,
 	polls_workspace,
-	save_contact_source,
 	save_ai_summary_settings,
+	save_contact_source,
 	settings_workspace,
 )
 from frappe_whatsapp_core.materializer import (
@@ -226,7 +226,7 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		}
 		self.assertEqual(discover_hub_accounts()[0]["name"], "Primary Account")
 		call_management.assert_called_once_with(
-			"frappe_whatsapp_integration.frappe_whatsapp_hub.api.onboarding.list_site_accounts"
+			"frappe_whatsapp_hub.frappe_whatsapp_hub.api.onboarding.list_site_accounts"
 		)
 
 	def test_hub_account_mappings_reject_duplicates_and_normalize_default(self):

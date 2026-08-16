@@ -6,11 +6,7 @@ from unittest.mock import MagicMock, patch
 import frappe
 
 from frappe_whatsapp_core.campaigns import _campaign_batch_sender
-from frappe_whatsapp_core.hub_client import (
-	connection_status,
-	publish_outbound_command,
-	send_batch,
-)
+from frappe_whatsapp_core.hub_client import publish_outbound_command, send_batch
 from frappe_whatsapp_core.outbound import (
 	deliver_queued_message,
 	deliver_queued_message_batch,
@@ -20,23 +16,6 @@ from frappe_whatsapp_core.outbound import (
 
 
 class TestBatchTransport(TestCase):
-	def test_connection_status_exposes_only_fixed_hub_gateway(self):
-		settings = SimpleNamespace(
-			enabled=1,
-			outbound_enabled=1,
-			hub_url="https://hub.example.test",
-			accounts=[],
-			get_password=lambda fieldname, raise_exception=False: f"saved-{fieldname}",
-		)
-		with patch(
-			"frappe_whatsapp_core.hub_client.frappe.get_single",
-			return_value=settings,
-		):
-			result = connection_status()
-
-		self.assertEqual(result["data_plane"], "hub_gateway")
-		self.assertNotIn("relay_url", result)
-
 	def test_single_delivery_ends_read_snapshot_before_status_write(self):
 		message = frappe._dict(
 			name="message-1",
@@ -85,6 +64,7 @@ class TestBatchTransport(TestCase):
 	def test_hub_batch_maps_channels_and_uses_one_request(self):
 		settings = SimpleNamespace(
 			hub_url="https://hub.example.test",
+			relay_url="https://relay.example.test",
 			request_timeout=30,
 			get_hub_auth_headers=lambda: {"Authorization": "token test"},
 			get_account_name=lambda channel: f"account:{channel}",
@@ -135,19 +115,16 @@ class TestBatchTransport(TestCase):
 
 		self.assertTrue(result["accepted"])
 		self.assertEqual(post.call_count, 1)
-		self.assertEqual(
-			post.call_args.args[0],
-			"https://hub.example.test/api/method/"
-			"frappe_whatsapp_hub.frappe_whatsapp_hub.api.gateway.outbound_batch",
-		)
+		self.assertEqual(post.call_args.args[0], "https://relay.example.test/v1/outbound/batch")
 		self.assertEqual(
 			post.call_args.kwargs["json"]["messages"][0]["account_name"],
 			"account:channel-1",
 		)
 
-	def test_core_batch_uses_fixed_hub_gateway_method(self):
+	def test_core_batch_posts_directly_to_go_when_relay_url_is_configured(self):
 		settings = SimpleNamespace(
 			hub_url="https://hub.example.test",
+			relay_url="https://relay.example.test/",
 			request_timeout=30,
 			get_hub_auth_headers=lambda: {
 				"Authorization": "token core-key:core-secret"
@@ -177,8 +154,7 @@ class TestBatchTransport(TestCase):
 		self.assertTrue(result["accepted"])
 		self.assertEqual(
 			post.call_args.args[0],
-			"https://hub.example.test/api/method/"
-			"frappe_whatsapp_hub.frappe_whatsapp_hub.api.gateway.outbound_batch",
+			"https://relay.example.test/v1/outbound/batch",
 		)
 
 	def test_core_campaign_sender_defaults_to_batch_transport(self):
@@ -188,6 +164,7 @@ class TestBatchTransport(TestCase):
 	def test_management_publishes_one_runtime_command_to_go(self):
 		settings = SimpleNamespace(
 			hub_url="https://hub.example.test",
+			relay_url="https://relay.example.test",
 			request_timeout=30,
 			get_hub_auth_headers=lambda: {"Authorization": "token core:secret"},
 			get_account_name=lambda channel: f"account:{channel}",
@@ -207,11 +184,7 @@ class TestBatchTransport(TestCase):
 				execute_at="2026-08-13T10:00:00+05:30",
 			)
 		self.assertTrue(result["accepted"])
-		self.assertEqual(
-			post.call_args.args[0],
-			"https://hub.example.test/api/method/"
-			"frappe_whatsapp_hub.frappe_whatsapp_hub.api.gateway.outbound_command",
-		)
+		self.assertEqual(post.call_args.args[0], "https://relay.example.test/v1/commands/outbound")
 		self.assertEqual(post.call_args.kwargs["json"]["command_id"], "campaign-1")
 		self.assertEqual(post.call_args.kwargs["json"]["execute_at"], "2026-08-13T10:00:00+05:30")
 

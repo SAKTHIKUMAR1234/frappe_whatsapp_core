@@ -72,7 +72,7 @@ class TestRichMessages(FrappeTestCase):
 		self.assertEqual(payload["recipient_type"], "group")
 		self.assertEqual(payload["to"], "GROUP-ID")
 
-	@patch("frappe_whatsapp_core.outbound.call_management")
+	@patch("frappe_whatsapp_core.outbound.upload_meta_media")
 	@patch("frappe_whatsapp_core.outbound.get_settings")
 	@patch("frappe_whatsapp_core.outbound.assert_conversation_access")
 	@patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["WhatsApp User"])
@@ -87,7 +87,7 @@ class TestRichMessages(FrappeTestCase):
 		_get_roles,
 		_assert_access,
 		get_settings,
-		call_management,
+		upload_meta_media,
 	):
 		get_doc.side_effect = [
 			SimpleNamespace(channel="CHANNEL-1"),
@@ -100,19 +100,21 @@ class TestRichMessages(FrappeTestCase):
 		settings = MagicMock()
 		settings.get_account_name.return_value = "Hub Account"
 		get_settings.return_value = settings
-		call_management.return_value = {"success": True, "media_id": "MEDIA-1"}
+		upload_meta_media.return_value = {"success": True, "media_id": "MEDIA-1"}
 
 		result = upload_media("CONVERSATION-1", "/private/files/photo.webp")
 
 		self.assertEqual(result["media_id"], "MEDIA-1")
-		self.assertEqual(call_management.call_args.args[1]["content_type"], "image/webp")
+		self.assertEqual(upload_meta_media.call_args.kwargs["content_type"], "image/webp")
+		self.assertEqual(upload_meta_media.call_args.args[1], b"image-bytes")
 
 
 class TestProviderPresence(FrappeTestCase):
 	@patch("frappe_whatsapp_core.hub_client.send_raw")
 	@patch("frappe_whatsapp_core.hub_client.get_settings")
-	def test_read_and_typing_use_hub_gateway_data_plane(self, get_settings, send_raw):
+	def test_read_and_typing_use_direct_relay_data_plane(self, get_settings, send_raw):
 		settings = MagicMock()
+		settings.relay_url = "https://relay.example.test"
 		get_settings.return_value = settings
 		send_raw.return_value = {
 			"accepted": True,

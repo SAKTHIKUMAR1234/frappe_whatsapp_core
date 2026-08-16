@@ -8,7 +8,6 @@ import json
 import mimetypes
 import re
 import uuid
-from base64 import b64encode
 from copy import deepcopy
 from urllib.parse import urlsplit
 
@@ -17,13 +16,15 @@ from frappe.utils import add_to_date, cint, now_datetime
 
 from frappe_whatsapp_core.delivery import enqueue_delivery_status_handlers
 from frappe_whatsapp_core.hub_client import (
-	call_management,
 	connection_status,
 	get_settings,
 	send_raw,
 )
 from frappe_whatsapp_core.hub_client import (
 	send_batch as send_hub_batch,
+)
+from frappe_whatsapp_core.hub_client import (
+	upload_media as upload_meta_media,
 )
 from frappe_whatsapp_core.identity import (
 	is_business_scoped_user_id,
@@ -620,17 +621,14 @@ def upload_media_internal(
 			frappe.ValidationError,
 		)
 	settings = get_settings(outbound=True)
-	result = call_management(
-		"frappe_whatsapp_integration.frappe_whatsapp_hub.api.media.upload_media",
-		{
-			"account_name": settings.get_account_name(conversation.channel),
-			"file_content_b64": b64encode(content).decode(),
-			"content_type": (
-				mimetypes.guess_type(file_doc.file_name or "")[0]
-				or "application/octet-stream"
-			),
-			"filename": file_doc.file_name or "file",
-		},
+	result = upload_meta_media(
+		settings.get_account_name(conversation.channel),
+		content,
+		content_type=(
+			mimetypes.guess_type(file_doc.file_name or "")[0]
+			or "application/octet-stream"
+		),
+		filename=file_doc.file_name or "file",
 	)
 	if not result.get("success") or not result.get("media_id"):
 		frappe.throw(result.get("error") or "Meta media upload failed")

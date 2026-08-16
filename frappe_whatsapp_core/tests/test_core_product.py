@@ -43,6 +43,7 @@ class TestCoreProduct(FrappeTestCase):
 		settings.enabled = 1
 		settings.outbound_enabled = 1
 		settings.hub_url = "https://hub.example.test/"
+		settings.relay_url = "https://relay.example.test/"
 		settings.api_key = f"key-{self.suffix}"
 		settings.api_secret = f"secret-{self.suffix}"
 		settings.request_timeout = 20
@@ -55,6 +56,7 @@ class TestCoreProduct(FrappeTestCase):
 		settings.reload()
 
 		self.assertEqual(settings.hub_url, "https://hub.example.test")
+		self.assertEqual(settings.relay_url, "https://relay.example.test")
 		self.assertEqual(settings.get_account_name(self.channel.name), f"account-{self.suffix}")
 		self.assertEqual(settings.get_password("api_key"), f"key-{self.suffix}")
 

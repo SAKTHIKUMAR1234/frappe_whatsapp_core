@@ -9,6 +9,7 @@ from frappe_whatsapp_core.network_security import validate_service_origin
 class WhatsAppCoreSettings(Document):
 	def validate(self):
 		self.hub_url = validate_service_origin(self.hub_url, label="Hub URL")
+		self.relay_url = validate_service_origin(self.relay_url, label="Go Relay URL")
 		self.default_country_calling_code = "".join(
 			character
 			for character in str(self.default_country_calling_code or "91")
@@ -18,6 +19,8 @@ class WhatsAppCoreSettings(Document):
 			frappe.throw("Default country calling code must contain 1 to 3 digits")
 		if self.enabled and not self.hub_url:
 			frappe.throw("Hub URL is required when WhatsApp Core is enabled")
+		if self.enabled and not self.relay_url:
+			frappe.throw("Go Relay URL is required when WhatsApp Core is enabled")
 		if self.outbound_enabled and not self.enabled:
 			frappe.throw("Enable WhatsApp Core before enabling outbound messages")
 

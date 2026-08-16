@@ -7,7 +7,7 @@ import frappe
 from frappe_whatsapp_core.hub_client import call_management, connection_status, get_settings
 from frappe_whatsapp_core.permissions import require_core_access
 
-INTEGRATION_API = "frappe_whatsapp_integration.frappe_whatsapp_hub.api"
+INTEGRATION_API = "frappe_whatsapp_hub.frappe_whatsapp_hub.api"
 
 
 def _call(module: str, method: str, args: dict) -> dict:
