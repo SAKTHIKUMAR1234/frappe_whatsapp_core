@@ -34,7 +34,7 @@ class WhatsAppCoreSettings(Document):
 			if row.account_name in account_names:
 				frappe.throw(f"Hub account is mapped more than once: {row.account_name}")
 			account_names.add(row.account_name)
-			if row.template_service_user:
+			if row.get("template_service_user"):
 				from frappe_whatsapp_core.permissions import is_dedicated_transport_user
 
 				if not is_dedicated_transport_user(

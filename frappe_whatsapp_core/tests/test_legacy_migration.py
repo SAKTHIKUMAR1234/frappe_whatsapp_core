@@ -18,12 +18,56 @@ from frappe_whatsapp_core.legacy_migration import (
 	_provider_id,
 	_reattach_legacy_files,
 	_recipient_status,
+	_template_components,
 	legacy_source_plan,
 )
 
 
 class TestLegacyMigrationContract(FrappeTestCase):
+	@patch("frappe_whatsapp_core.legacy_migration.frappe.get_doc")
+	@patch("frappe_whatsapp_core.legacy_migration.frappe.get_all")
+	def test_template_children_can_be_read_after_legacy_controller_removal(
+		self, get_all, get_doc
+	):
+		get_all.return_value = [
+			frappe._dict(idx=1, variable_type="body", variable_number=1, sample_value="One")
+		]
+		components = _template_components(
+			{
+				"doctype": "Retired WhatsApp Template",
+				"body_field": "body",
+				"samples": {
+					"doctype": "Retired WhatsApp Template Sample",
+					"field": "samples",
+					"component_field": "variable_type",
+					"position_field": "variable_number",
+					"value_field": "sample_value",
+				},
+			},
+			frappe._dict(name="LEGACY-TEMPLATE", body="Hello {{1}}"),
+		)
+
+		self.assertEqual(components[0]["example"], {"body_text": [["One"]]})
+		get_doc.assert_not_called()
+		get_all.assert_called_once_with(
+			"Retired WhatsApp Template Sample",
+			filters={
+				"parent": "LEGACY-TEMPLATE",
+				"parenttype": "Retired WhatsApp Template",
+				"parentfield": "samples",
+			},
+			fields=["*"],
+			order_by="idx asc",
+			limit_page_length=1000,
+		)
+
 	def test_channel_migration_creates_one_idempotent_account_mapping(self):
+		frappe.db.set_single_value(
+			"WhatsApp Core Settings", "hub_url", "https://hub.example.test"
+		)
+		frappe.db.set_single_value(
+			"WhatsApp Core Settings", "relay_url", "https://relay.example.test"
+		)
 		suffix = frappe.generate_hash(length=8).lower()
 		account_name = f"legacy-account-{suffix}"
 		config = {

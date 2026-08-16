@@ -995,12 +995,10 @@ def _template_components(source: dict, row) -> list:
 	footer = _text(row.get(source.get("footer_field")))
 	if footer:
 		components.append({"type": "FOOTER", "text": footer})
-	template_doc = None
 	button_source = source.get("buttons") or {}
 	if button_source:
-		template_doc = frappe.get_doc(source["doctype"], row.name)
 		buttons = []
-		for child in template_doc.get(button_source.get("field")) or []:
+		for child in _template_child_rows(source, row, button_source):
 			button = {
 				"type": _text(child.get(button_source.get("type_field"))).upper(),
 				"text": _text(child.get(button_source.get("text_field"))),
@@ -1014,9 +1012,8 @@ def _template_components(source: dict, row) -> list:
 			components.append({"type": "BUTTONS", "buttons": buttons})
 	sample_source = source.get("samples") or {}
 	if sample_source:
-		template_doc = template_doc or frappe.get_doc(source["doctype"], row.name)
 		samples = defaultdict(list)
-		for child in template_doc.get(sample_source.get("field")) or []:
+		for child in _template_child_rows(source, row, sample_source):
 			component = _text(child.get(sample_source.get("component_field"))).upper()
 			value = child.get(sample_source.get("value_field"))
 			if component and value not in (None, ""):
@@ -1041,6 +1038,26 @@ def _template_components(source: dict, row) -> list:
 			elif component_name == "BODY":
 				component["example"] = {"body_text": [ordered]}
 	return components
+
+
+def _template_child_rows(source: dict, row, child_source: dict) -> list:
+	"""Read legacy template children without requiring their Python controller."""
+	fieldname = child_source.get("field")
+	child_doctype = child_source.get("doctype")
+	if child_doctype:
+		return frappe.get_all(
+			child_doctype,
+			filters={
+				"parent": row.name,
+				"parenttype": source["doctype"],
+				"parentfield": fieldname,
+			},
+			fields=["*"],
+			order_by="idx asc",
+			limit_page_length=1000,
+		)
+	template_doc = frappe.get_doc(source["doctype"], row.name)
+	return template_doc.get(fieldname) or []
 
 
 def _sample_sort_key(value) -> tuple:

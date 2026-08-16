@@ -31,6 +31,8 @@ class TestLegacyCompatibility(FrappeTestCase):
 		}).insert(ignore_permissions=True)
 		self.account = f"compat-account-{suffix}"
 		settings = frappe.get_single("WhatsApp Core Settings")
+		settings.hub_url = "https://hub.example.test"
+		settings.relay_url = "https://relay.example.test"
 		settings.set("accounts", [{
 			"channel": self.channel.name,
 			"account_name": self.account,
