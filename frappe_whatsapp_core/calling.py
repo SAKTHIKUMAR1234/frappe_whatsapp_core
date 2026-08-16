@@ -1,11 +1,22 @@
 """Site-scoped Core facade for the complete WhatsApp Calling surface."""
 
-import base64
 import mimetypes
 from pathlib import Path
 
 import frappe
 
+from frappe_whatsapp_core.hub_client import (
+	call_action as relay_call_action,
+)
+from frappe_whatsapp_core.hub_client import (
+	download_media,
+	get_media_url,
+	send_account_raw,
+	upload_media,
+)
+from frappe_whatsapp_core.hub_client import (
+	get_call_permission as relay_get_call_permission,
+)
 from frappe_whatsapp_core.identity import contact_options
 from frappe_whatsapp_core.meta_flows import _accounts, _call, _resolve_account_name, _workspace_failure
 from frappe_whatsapp_core.outbound import resolve_recipient_phone
@@ -23,6 +34,40 @@ def _contact_target(identity=None, to_number=None, recipient=None, operation=Non
 			None,
 		)
 	return to_number, recipient
+
+
+def _set_target(payload, to_number=None, recipient=None):
+	if not to_number and not recipient:
+		frappe.throw("A phone number or business-scoped recipient is required", frappe.ValidationError)
+	if to_number:
+		payload["to"] = str(to_number)
+	if recipient:
+		payload["recipient"] = str(recipient)
+
+
+def _json_object(value, label):
+	if isinstance(value, str):
+		value = frappe.parse_json(value)
+	if value is not None and not isinstance(value, dict):
+		frappe.throw(f"{label} must be an object", frappe.ValidationError)
+	return value
+
+
+def _consent_option(value, label):
+	value = _json_object(value, label)
+	if value is None:
+		return None
+	status = str(value.get("status") or "").upper()
+	if status not in {"ENABLED", "DISABLED"}:
+		frappe.throw(f"{label}.status must be ENABLED or DISABLED", frappe.ValidationError)
+	result = {"status": status}
+	if status == "ENABLED":
+		purpose = str(value.get("purpose") or "").strip()
+		language = str(value.get("announcement_language") or "").strip()
+		if not purpose or len(purpose) > 250 or not language:
+			frappe.throw(f"{label} requires purpose and announcement language", frappe.ValidationError)
+		result.update({"purpose": purpose, "announcement_language": language})
+	return result
 
 
 @frappe.whitelist()
@@ -94,9 +139,11 @@ def get_call_permission(account_name, user_wa_id=None, recipient=None, identity=
 	user_wa_id, recipient = _contact_target(
 		identity, user_wa_id, recipient, "get_call_permission"
 	)
-	return _call("calling", "get_call_permission", {
-		"account_name": _resolve_account_name(account_name), "user_wa_id": user_wa_id, "recipient": recipient,
-	})
+	return relay_get_call_permission(
+		_resolve_account_name(account_name),
+		user_wa_id=user_wa_id,
+		recipient=recipient,
+	)
 
 
 @frappe.whitelist()
@@ -112,10 +159,23 @@ def request_call_permission(
 	to_number, recipient = _contact_target(
 		identity, to_number, recipient, "request_call_permission"
 	)
-	return _call("calling", "request_call_permission", {
-		"account_name": _resolve_account_name(account_name), "body_text": body_text,
-		"to_number": to_number, "recipient": recipient, "idempotency_key": idempotency_key,
-	})
+	body_text = str(body_text or "").strip()
+	if not body_text:
+		frappe.throw("body_text is required", frappe.ValidationError)
+	payload = {
+		"messaging_product": "whatsapp",
+		"recipient_type": "individual",
+		"type": "interactive",
+		"interactive": {
+			"type": "call_permission_request",
+			"action": {"name": "call_permission_request"},
+			"body": {"text": body_text},
+		},
+	}
+	_set_target(payload, to_number, recipient)
+	return send_account_raw(
+		_resolve_account_name(account_name), payload, idempotency_key,
+	)
 
 
 @frappe.whitelist()
@@ -134,16 +194,33 @@ def send_call_button(
 	to_number, recipient = _contact_target(
 		identity, to_number, recipient, "send_call_button"
 	)
-	return _call("calling", "send_call_button", {
-		"account_name": _resolve_account_name(account_name),
-		"body_text": body_text,
-		"to_number": to_number,
-		"recipient": recipient,
-		"display_text": display_text,
-		"ttl_minutes": ttl_minutes,
-		"payload": payload,
-		"idempotency_key": idempotency_key,
-	})
+	body_text = str(body_text or "").strip()
+	display_text = str(display_text or "Call Now").strip()
+	ttl_minutes = int(ttl_minutes or 10080)
+	if not body_text or not 1 <= len(display_text) <= 20:
+		frappe.throw("Valid body_text and display_text are required", frappe.ValidationError)
+	if not 1 <= ttl_minutes <= 43200:
+		frappe.throw("ttl_minutes must be between 1 and 43200", frappe.ValidationError)
+	parameters = {"display_text": display_text, "ttl_minutes": ttl_minutes}
+	if payload is not None:
+		payload = str(payload)
+		if len(payload) > 512:
+			frappe.throw("payload cannot exceed 512 characters", frappe.ValidationError)
+		parameters["payload"] = payload
+	message = {
+		"messaging_product": "whatsapp",
+		"recipient_type": "individual",
+		"type": "interactive",
+		"interactive": {
+			"type": "voice_call",
+			"body": {"text": body_text},
+			"action": {"name": "voice_call", "parameters": parameters},
+		},
+	}
+	_set_target(message, to_number, recipient)
+	return send_account_raw(
+		_resolve_account_name(account_name), message, idempotency_key,
+	)
 
 
 @frappe.whitelist()
@@ -162,16 +239,38 @@ def send_call_button_template(
 	to_number, recipient = _contact_target(
 		identity, to_number, recipient, "send_call_button_template"
 	)
-	return _call("calling", "send_call_button_template", {
-		"account_name": _resolve_account_name(account_name),
-		"template_name": template_name,
-		"language_code": language_code,
-		"to_number": to_number,
-		"recipient": recipient,
-		"ttl_minutes": ttl_minutes,
-		"payload": payload,
-		"idempotency_key": idempotency_key,
-	})
+	parameters = []
+	if ttl_minutes is not None:
+		ttl_minutes = int(ttl_minutes)
+		if not 1 <= ttl_minutes <= 43200:
+			frappe.throw("ttl_minutes must be between 1 and 43200", frappe.ValidationError)
+		parameters.append({"type": "ttl_minutes", "ttl_minutes": ttl_minutes})
+	if payload is not None:
+		payload = str(payload)
+		if len(payload) > 512:
+			frappe.throw("payload cannot exceed 512 characters", frappe.ValidationError)
+		parameters.append({"type": "payload", "payload": payload})
+	template_name = str(template_name or "").strip()
+	if not template_name:
+		frappe.throw("template_name is required", frappe.ValidationError)
+	template = {
+		"name": template_name,
+		"language": {"code": str(language_code or "en").strip()},
+	}
+	if parameters:
+		template["components"] = [{
+			"type": "button", "sub_type": "voice_call", "parameters": parameters,
+		}]
+	message = {
+		"messaging_product": "whatsapp",
+		"recipient_type": "individual",
+		"type": "template",
+		"template": template,
+	}
+	_set_target(message, to_number, recipient)
+	return send_account_raw(
+		_resolve_account_name(account_name), message, idempotency_key,
+	)
 
 
 @frappe.whitelist()
@@ -197,27 +296,28 @@ def upload_voicemail_announcement(account_name, file_url, description=None):
 	content_type = mimetypes.guess_type(file_doc.file_name or "")[0] or "application/octet-stream"
 	if content_type != "audio/ogg":
 		frappe.throw("Voicemail announcement must be an OPUS OGG file", frappe.ValidationError)
-	return _call("media", "upload_media", {
-		"account_name": _resolve_account_name(account_name),
-		"file_content_b64": base64.b64encode(content).decode(),
-		"content_type": "audio/ogg; codecs=opus",
-		"filename": file_doc.file_name or "announcement.ogg",
-		"use_case": "call_voicemail_announcement",
-		"description": description,
-	})
+	return upload_media(
+		_resolve_account_name(account_name),
+		content,
+		content_type="audio/ogg; codecs=opus",
+		filename=file_doc.file_name or "announcement.ogg",
+		use_case="call_voicemail_announcement",
+		description=description,
+	)
 
 
 @frappe.whitelist()
 @require_core_access(manage=True)
 def get_call_artifact(account_name, media_id, download=0):
-	method = "download_media" if int(download or 0) else "get_media_url"
-	result = _call("media", method, {
-		"account_name": _resolve_account_name(account_name),
-		"media_id": media_id,
-	})
+	account_name = _resolve_account_name(account_name)
+	result = (
+		download_media(account_name, media_id)
+		if int(download or 0)
+		else get_media_url(account_name, media_id)
+	)
 	if not int(download or 0) or not result.get("success"):
 		return result
-	content = result.get("content_b64")
+	content = result.get("content")
 	if not content:
 		frappe.throw("Integration returned an empty call artifact", frappe.ValidationError)
 	call = frappe.db.get_value(
@@ -244,7 +344,7 @@ def get_call_artifact(account_name, media_id, download=0):
 
 	file_doc = save_file(
 		filename,
-		base64.b64decode(content, validate=True),
+		content,
 		"WhatsApp Core Call",
 		call.name,
 		is_private=1,
@@ -282,11 +382,27 @@ def call_action(
 	to_number, recipient = _contact_target(
 		identity, to_number, recipient, "call_action"
 	)
-	return _call("calling", "call_action", {
-		"account_name": _resolve_account_name(account_name), "action": action,
-		"call_id": call_id, "to_number": to_number, "recipient": recipient,
-		"sdp_type": sdp_type, "sdp": sdp,
-		"biz_opaque_callback_data": biz_opaque_callback_data,
-		"recording": recording,
-		"transcription": transcription,
-	})
+	action = str(action or "").lower()
+	if action not in {"connect", "pre_accept", "accept", "reject", "terminate"}:
+		frappe.throw("Invalid call action", frappe.ValidationError)
+	payload = {"messaging_product": "whatsapp", "action": action}
+	if action == "connect":
+		_set_target(payload, to_number, recipient)
+	else:
+		if not call_id:
+			frappe.throw("call_id is required", frappe.ValidationError)
+		payload["call_id"] = call_id
+	if action in {"connect", "pre_accept", "accept"}:
+		if sdp_type not in {"offer", "answer"} or not sdp:
+			frappe.throw("A valid SDP offer or answer is required", frappe.ValidationError)
+		payload["session"] = {"sdp_type": sdp_type, "sdp": sdp}
+	if biz_opaque_callback_data:
+		payload["biz_opaque_callback_data"] = str(biz_opaque_callback_data)[:512]
+	if recording is not None or transcription is not None:
+		if action not in {"connect", "accept"}:
+			frappe.throw("Recording controls require connect or accept", frappe.ValidationError)
+		if recording is not None:
+			payload["recording"] = _consent_option(recording, "recording")
+		if transcription is not None:
+			payload["transcription"] = _consent_option(transcription, "transcription")
+	return relay_call_action(_resolve_account_name(account_name), payload)

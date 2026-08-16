@@ -98,7 +98,7 @@ def request_template_upsert(template=None, template_key=None) -> dict:
 		frappe.throw("Template name is required", frappe.ValidationError)
 
 	result = call_management(
-		"frappe_whatsapp_integration.frappe_whatsapp_hub.api.templates.upsert_template_for_site",
+		"frappe_whatsapp_hub.frappe_whatsapp_hub.api.templates.upsert_template_for_site",
 		{
 			"site_name": frappe.local.site,
 			"hub_template_name": existing.hub_template_name if existing else None,

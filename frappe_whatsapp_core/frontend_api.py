@@ -9,6 +9,11 @@ import re
 import frappe
 from frappe.utils import cint
 
+from frappe_whatsapp_core.ai_summaries import (
+	get_identity_summary,
+	summarize_identities,
+	summarize_identity,
+)
 from frappe_whatsapp_core.campaigns import (
 	authorize_campaign,
 	campaign_summary,
@@ -34,11 +39,6 @@ from frappe_whatsapp_core.permissions import (
 	require_system_manager,
 )
 from frappe_whatsapp_core.topics import unclassified_messages, upsert_topic
-from frappe_whatsapp_core.ai_summaries import (
-	get_identity_summary,
-	summarize_identities,
-	summarize_identity,
-)
 
 
 @frappe.whitelist(allow_guest=True)
@@ -802,7 +802,7 @@ def settings_workspace():
 def discover_hub_accounts():
 	"""Return tenant-scoped Hub accounts without exposing Meta credentials."""
 	result = call_management(
-		"frappe_whatsapp_integration.frappe_whatsapp_hub.api.onboarding.list_site_accounts"
+		"frappe_whatsapp_hub.frappe_whatsapp_hub.api.onboarding.list_site_accounts"
 	)
 	return result.get("accounts") or []
 

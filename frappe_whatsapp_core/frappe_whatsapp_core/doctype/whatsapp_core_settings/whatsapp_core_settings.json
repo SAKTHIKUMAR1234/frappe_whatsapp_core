@@ -52,7 +52,7 @@
 			"fieldname": "relay_url",
 			"fieldtype": "Data",
 			"label": "Go Relay URL",
-			"description": "Direct Go data-plane URL. Outbound sends bypass Integration Frappe when configured."
+			"description": "Required direct Go data-plane origin for webhooks, messages, media, and call operations; never the Hub Frappe API origin"
 		},
 		{
 			"fieldname": "column_connection",

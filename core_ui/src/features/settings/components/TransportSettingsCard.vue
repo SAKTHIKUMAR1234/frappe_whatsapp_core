@@ -205,7 +205,10 @@
 						:disabled="!canManage"
 						placeholder="https://whatsapp-relay.example.com"
 					/>
-					<small>Outbound messages, read receipts, and typing bypass Frappe.</small>
+					<small
+						>Messages, reads, media, and live calling bypass Frappe through fixed Go
+						routes.</small
+					>
 				</label>
 				<label>
 					<span>Request timeout</span>

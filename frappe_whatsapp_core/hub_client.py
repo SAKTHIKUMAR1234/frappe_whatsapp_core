@@ -12,6 +12,61 @@ from frappe.utils import get_datetime, get_system_timezone
 
 _session = requests.Session()
 
+_CURRENT_HUB_API = "frappe_whatsapp_hub.frappe_whatsapp_hub.api"
+_LEGACY_HUB_API = "frappe_whatsapp_integration.frappe_whatsapp_hub.api"
+
+# This is the complete Core-to-Hub control-plane contract. A caller cannot turn
+# call_management into a generic authenticated Frappe or Meta proxy.
+_MANAGEMENT_METHODS = frozenset({
+	"calling.build_call_deep_link",
+	"calling.get_call_settings",
+	"calling.update_call_settings",
+	"flow_endpoint.provision",
+	"flow_endpoint.status",
+	"groups.approve_join_requests",
+	"groups.create_group",
+	"groups.delete_group",
+	"groups.get_group",
+	"groups.get_invite_link",
+	"groups.list_groups",
+	"groups.list_join_requests",
+	"groups.reject_join_requests",
+	"groups.remove_participants",
+	"groups.reset_invite_link",
+	"groups.update_group",
+	"groups.update_group_picture",
+	"meta_flows.create_flow",
+	"meta_flows.delete_flow",
+	"meta_flows.deprecate_flow",
+	"meta_flows.get_business_public_key",
+	"meta_flows.get_flow",
+	"meta_flows.get_flow_json",
+	"meta_flows.list_flow_assets",
+	"meta_flows.list_flows",
+	"meta_flows.migrate_flows",
+	"meta_flows.publish_flow",
+	"meta_flows.set_business_public_key",
+	"meta_flows.update_flow_metadata",
+	"meta_flows.upload_flow_json",
+	"onboarding.get_account_meta_context",
+	"onboarding.list_site_accounts",
+	"templates.upsert_template_for_site",
+})
+
+# Operational routes are fixed here and in the Go server's mux. Only these
+# paths may bypass Frappe; no URL or Meta resource is accepted from callers.
+_RELAY_OPERATIONS = {
+	"call_action": ("POST", "/v1/meta/calls"),
+	"call_permission": ("GET", "/v1/meta/call-permissions"),
+	"command": ("POST", "/v1/commands/outbound"),
+	"media_content": ("GET", "/v1/meta/media/{media_id}/content"),
+	"media_delete": ("DELETE", "/v1/meta/media/{media_id}"),
+	"media_info": ("GET", "/v1/meta/media/{media_id}"),
+	"media_upload": ("POST", "/v1/meta/media"),
+	"outbound": ("POST", "/v1/outbound"),
+	"outbound_batch": ("POST", "/v1/outbound/batch"),
+}
+
 
 def call_management(method: str, args: dict | None = None) -> dict:
 	"""Call an authenticated Integration Hub management API.
@@ -20,14 +75,19 @@ def call_management(method: str, args: dict | None = None) -> dict:
 	operation, while this site keeps only its configured Hub account mapping.
 	"""
 	method = str(method or "").strip()
-	allowed_prefix = "frappe_whatsapp_integration.frappe_whatsapp_hub.api."
-	if not method.startswith(allowed_prefix):
+	suffix = ""
+	for prefix in (_CURRENT_HUB_API, _LEGACY_HUB_API):
+		if method.startswith(f"{prefix}."):
+			suffix = method[len(prefix) + 1:]
+			break
+	if suffix not in _MANAGEMENT_METHODS:
 		frappe.throw("Invalid WhatsApp Hub management method", frappe.ValidationError)
 	settings = get_settings()
-	url = f"{settings.hub_url}/api/method/{method}"
+	url = f"{_hub_url(settings)}/api/method/{_CURRENT_HUB_API}.{suffix}"
 	try:
 		response = _session.post(
 			url,
+			allow_redirects=False,
 			headers=settings.get_hub_auth_headers(),
 			json=args or {},
 			timeout=_request_timeout(settings),
@@ -53,7 +113,6 @@ def mark_message_read(
 	typing_indicator: bool = False,
 ) -> dict:
 	"""Queue provider read/typing state on the Go data plane when configured."""
-	settings = get_settings(outbound=True)
 	message_id = str(message_id or "").strip()
 	if not message_id or message_id.startswith("local:"):
 		frappe.throw("A provider inbound message id is required", frappe.ValidationError)
@@ -91,20 +150,24 @@ def send_raw(
 	channel: str,
 	payload: dict,
 	idempotency_key: str,
+	*,
+	endpoint: str = "messages",
 ) -> dict:
+	endpoint = _outbound_endpoint(endpoint)
 	settings = get_settings(outbound=True)
-	relay_url = _relay_url(settings)
-	url = f"{relay_url}/v1/outbound"
+	request_body = {
+		"account_name": settings.get_account_name(channel),
+		"payload": payload,
+		"idempotency_key": idempotency_key,
+	}
+	if endpoint != "messages":
+		request_body["endpoint"] = endpoint
 	try:
-		response = _session.post(
-			url,
+		response = _relay_request(
+			"outbound",
+			settings=settings,
 			headers=settings.get_hub_auth_headers(),
-			json={
-				"account_name": settings.get_account_name(channel),
-				"payload": payload,
-				"idempotency_key": idempotency_key,
-			},
-			timeout=_request_timeout(settings),
+			json=request_body,
 		)
 	except requests.RequestException as exception:
 		return {
@@ -160,25 +223,27 @@ def send_batch(messages: list[dict]) -> dict:
 		channel = str(message.get("channel") or "").strip()
 		payload = message.get("payload")
 		idempotency_key = str(message.get("idempotency_key") or "").strip()
+		endpoint = _outbound_endpoint(message.get("endpoint"))
 		if not channel or not isinstance(payload, dict) or not idempotency_key:
 			frappe.throw(
 				"Every Hub batch item requires channel, payload, and idempotency_key",
 				frappe.ValidationError,
 			)
-		normalized.append({
+		item = {
 			"account_name": settings.get_account_name(channel),
 			"payload": payload,
 			"idempotency_key": idempotency_key,
-		})
+		}
+		if endpoint != "messages":
+			item["endpoint"] = endpoint
+		normalized.append(item)
 
-	relay_url = _relay_url(settings)
-	url = f"{relay_url}/v1/outbound/batch"
 	try:
-		response = _session.post(
-			url,
+		response = _relay_request(
+			"outbound_batch",
+			settings=settings,
 			headers=settings.get_hub_auth_headers(),
 			json={"messages": normalized},
-			timeout=_request_timeout(settings),
 		)
 	except requests.RequestException as exception:
 		return {
@@ -239,16 +304,20 @@ def publish_outbound_command(
 		channel = str(message.get("channel") or "").strip()
 		payload = message.get("payload")
 		idempotency_key = str(message.get("idempotency_key") or "").strip()
+		endpoint = _outbound_endpoint(message.get("endpoint"))
 		if not channel or not isinstance(payload, dict) or not idempotency_key:
 			frappe.throw(
 				"Every runtime message requires channel, payload, and idempotency_key",
 				frappe.ValidationError,
 			)
-		normalized.append({
+		item = {
 			"account_name": settings.get_account_name(channel),
 			"payload": payload,
 			"idempotency_key": idempotency_key,
-		})
+		}
+		if endpoint != "messages":
+			item["endpoint"] = endpoint
+		normalized.append(item)
 	request_body = {"command_id": command_id, "messages": normalized}
 	if execute_at:
 		scheduled_for = get_datetime(execute_at)
@@ -256,8 +325,9 @@ def publish_outbound_command(
 			scheduled_for = scheduled_for.replace(tzinfo=ZoneInfo(get_system_timezone()))
 		request_body["execute_at"] = scheduled_for.isoformat()
 	try:
-		response = _session.post(
-			f"{_relay_url(settings)}/v1/commands/outbound",
+		response = _relay_request(
+			"command",
+			settings=settings,
 			headers=settings.get_hub_auth_headers(),
 			json=request_body,
 			timeout=max(_request_timeout(settings), 120),
@@ -278,13 +348,219 @@ def publish_outbound_command(
 	return {"accepted": True, **result}
 
 
-def get_settings(*, outbound: bool = False):
+def send_account_raw(
+	account_name: str,
+	payload: dict,
+	idempotency_key: str | None = None,
+	*,
+	endpoint: str = "messages",
+) -> dict:
+	"""Queue an operational message for an already resolved Hub account."""
+	settings = get_settings(outbound=True)
+	account_name = _mapped_account_name(settings, account_name)
+	request_body = {"account_name": account_name, "payload": payload}
+	if idempotency_key:
+		request_body["idempotency_key"] = str(idempotency_key)
+	endpoint = _outbound_endpoint(endpoint)
+	if endpoint != "messages":
+		request_body["endpoint"] = endpoint
+	return _relay_json_operation(
+		"outbound",
+		settings=settings,
+		json=request_body,
+	)
+
+
+def call_action(account_name: str, payload: dict) -> dict:
+	settings = get_settings(outbound=True)
+	return _relay_json_operation(
+		"call_action",
+		settings=settings,
+		json={
+			"account_name": _mapped_account_name(settings, account_name),
+			"payload": payload,
+		},
+	)
+
+
+def get_call_permission(
+	account_name: str,
+	*,
+	user_wa_id: str | None = None,
+	recipient: str | None = None,
+) -> dict:
+	settings = get_settings(relay=True)
+	parameters = {
+		"account_name": _mapped_account_name(settings, account_name),
+	}
+	if user_wa_id:
+		parameters["user_wa_id"] = str(user_wa_id)
+	if recipient:
+		parameters["recipient"] = str(recipient)
+	return _relay_json_operation(
+		"call_permission",
+		settings=settings,
+		params=parameters,
+	)
+
+
+def upload_media(
+	account_name: str,
+	content: bytes,
+	*,
+	content_type: str,
+	filename: str,
+	use_case: str | None = None,
+	description: str | None = None,
+) -> dict:
+	settings = get_settings(outbound=True)
+	if not isinstance(content, bytes) or not content:
+		frappe.throw("Media content is empty", frappe.ValidationError)
+	if len(content) > 100 * 1024 * 1024:
+		frappe.throw("Media exceeds the 100 MB relay limit", frappe.ValidationError)
+	parameters = {
+		"account_name": _mapped_account_name(settings, account_name),
+		"filename": str(filename or "file"),
+	}
+	if use_case:
+		parameters["use_case"] = str(use_case)
+	if description:
+		parameters["description"] = str(description)
+	return _relay_json_operation(
+		"media_upload",
+		settings=settings,
+		params=parameters,
+		data=content,
+		headers={
+			**settings.get_hub_auth_headers(),
+			"Content-Type": str(content_type or "application/octet-stream"),
+		},
+		timeout=max(_request_timeout(settings), 120),
+	)
+
+
+def get_media_url(account_name: str, media_id: str) -> dict:
+	settings = get_settings(relay=True)
+	return _relay_json_operation(
+		"media_info",
+		settings=settings,
+		media_id=media_id,
+		params={"account_name": _mapped_account_name(settings, account_name)},
+	)
+
+
+def download_media(account_name: str, media_id: str) -> dict:
+	settings = get_settings(relay=True)
+	try:
+		response = _relay_request(
+			"media_content",
+			settings=settings,
+			media_id=media_id,
+			params={"account_name": _mapped_account_name(settings, account_name)},
+			headers=settings.get_hub_auth_headers(),
+			timeout=max(_request_timeout(settings), 120),
+		)
+	except requests.RequestException as exception:
+		frappe.throw(f"WhatsApp relay is unavailable: {exception}", frappe.ValidationError)
+	if not response.ok:
+		frappe.throw(_response_error(response), frappe.ValidationError)
+	return {
+		"success": True,
+		"content": response.content,
+		"mime_type": response.headers.get("Content-Type", "application/octet-stream"),
+	}
+
+
+def delete_media(account_name: str, media_id: str) -> dict:
+	settings = get_settings(outbound=True)
+	return _relay_json_operation(
+		"media_delete",
+		settings=settings,
+		media_id=media_id,
+		params={"account_name": _mapped_account_name(settings, account_name)},
+	)
+
+
+def _relay_json_operation(operation: str, *, settings, **kwargs) -> dict:
+	try:
+		response = _relay_request(
+			operation,
+			settings=settings,
+			headers=kwargs.pop("headers", settings.get_hub_auth_headers()),
+			**kwargs,
+		)
+	except requests.RequestException as exception:
+		frappe.throw(f"WhatsApp relay is unavailable: {exception}", frappe.ValidationError)
+	try:
+		result = response.json()
+	except ValueError:
+		result = {"raw": response.text[:2000]}
+	if not response.ok:
+		frappe.throw(_error_message(result), frappe.ValidationError)
+	if not isinstance(result, dict):
+		frappe.throw("WhatsApp relay returned an invalid response", frappe.ValidationError)
+	return result
+
+
+def _relay_request(
+	operation: str,
+	*,
+	settings,
+	media_id: str | None = None,
+	headers: dict | None = None,
+	timeout: int | None = None,
+	**kwargs,
+):
+	method_path = _RELAY_OPERATIONS.get(str(operation or ""))
+	if not method_path:
+		frappe.throw("Unsupported WhatsApp relay operation", frappe.ValidationError)
+	method, path = method_path
+	if "{media_id}" in path:
+		media_id = str(media_id or "").strip()
+		if not media_id or len(media_id) > 256 or not all(
+			character.isalnum() or character in "_-" for character in media_id
+		):
+			frappe.throw("Invalid WhatsApp media id", frappe.ValidationError)
+		path = path.format(media_id=media_id)
+	url = f"{_relay_url(settings)}{path}"
+	request_method = {
+		"DELETE": _session.delete,
+		"GET": _session.get,
+		"POST": _session.post,
+	}[method]
+	return request_method(
+		url,
+		headers=headers or settings.get_hub_auth_headers(),
+		timeout=timeout or _request_timeout(settings),
+		allow_redirects=False,
+		**kwargs,
+	)
+
+
+def _response_error(response) -> str:
+	try:
+		return _error_message(response.json())
+	except ValueError:
+		return str(response.text or "WhatsApp relay request failed")[:2000]
+
+
+def _mapped_account_name(settings, account_name: str) -> str:
+	account_name = str(account_name or "").strip()
+	if account_name not in {
+		str(row.account_name or "").strip()
+		for row in settings.accounts
+	}:
+		frappe.throw("Hub account is not mapped to this Core site", frappe.PermissionError)
+	return account_name
+
+
+def get_settings(*, outbound: bool = False, relay: bool = False):
 	settings = frappe.get_single("WhatsApp Core Settings")
 	if not settings.enabled:
 		frappe.throw("WhatsApp Core is not enabled on this site")
 	if outbound and not settings.outbound_enabled:
 		frappe.throw("Outbound WhatsApp messages are disabled on this site")
-	if outbound and not _relay_url(settings):
+	if (outbound or relay) and not _relay_url(settings):
 		frappe.throw("WhatsApp Go Relay URL is not configured")
 	if not settings.hub_url:
 		frappe.throw("WhatsApp Core Hub URL is not configured")
@@ -314,6 +590,17 @@ def _request_timeout(settings) -> int:
 def _relay_url(settings) -> str:
 	"""Return the mandatory Go data-plane endpoint for operational requests."""
 	return str(getattr(settings, "relay_url", None) or "").strip().rstrip("/")
+
+
+def _hub_url(settings) -> str:
+	return str(settings.hub_url or "").strip().rstrip("/")
+
+
+def _outbound_endpoint(value) -> str:
+	endpoint = str(value or "messages").strip().lower().strip("/")
+	if endpoint not in {"messages", "marketing_messages"}:
+		frappe.throw("Unsupported Meta transport endpoint", frappe.ValidationError)
+	return endpoint
 
 
 def _error_message(result) -> str:

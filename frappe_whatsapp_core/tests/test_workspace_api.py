@@ -1,4 +1,3 @@
-import base64
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -317,10 +316,10 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertIn(media.name, row.media_url)
 
 	@patch("frappe_whatsapp_core.message_media.save_file")
-	@patch("frappe_whatsapp_core.message_media.call_management")
+	@patch("frappe_whatsapp_core.message_media.download_media")
 	@patch("frappe_whatsapp_core.message_media.get_settings")
 	def test_message_media_download_uses_channel_mapping_and_private_cache(
-		self, get_settings, call_management, save_file
+		self, get_settings, download_media, save_file
 	):
 		media = frappe.get_doc({
 			"doctype": "WhatsApp Core Message",
@@ -340,9 +339,9 @@ class TestWorkspaceAPI(FrappeTestCase):
 		}).insert(ignore_permissions=True)
 		settings = SimpleNamespace(get_account_name=lambda channel: "ACCOUNT-1")
 		get_settings.return_value = settings
-		call_management.return_value = {
+		download_media.return_value = {
 			"success": True,
-			"content_b64": base64.b64encode(b"pdf-content").decode(),
+			"content": b"pdf-content",
 			"mime_type": "application/pdf",
 		}
 		save_file.return_value = SimpleNamespace(
@@ -354,8 +353,7 @@ class TestWorkspaceAPI(FrappeTestCase):
 
 		download_message_media(media.name)
 
-		self.assertEqual(call_management.call_args.args[1]["account_name"], "ACCOUNT-1")
-		self.assertEqual(call_management.call_args.args[1]["media_id"], "MEDIA-DOC")
+		download_media.assert_called_once_with("ACCOUNT-1", "MEDIA-DOC")
 		self.assertEqual(frappe.local.response.filecontent, b"pdf-content")
 		self.assertEqual(frappe.local.response.display_content_as, "attachment")
 		save_file.assert_called_once()

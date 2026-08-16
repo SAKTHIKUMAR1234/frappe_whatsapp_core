@@ -2,6 +2,7 @@
 
 import frappe
 
+from frappe_whatsapp_core.hub_client import send_account_raw
 from frappe_whatsapp_core.identity import contact_options
 from frappe_whatsapp_core.materializer import (
 	get_or_create_conversation,
@@ -255,8 +256,8 @@ def send_group_invite_template(
 ):
 	"""Queue an invite template locally when addressed by phone.
 
-	BSUID-only recipients are passed to Integration because Core cannot create a
-	phone identity for them without inventing a number.
+	BSUID-only recipients are queued directly through the Go relay because Core
+	cannot create a phone identity for them without inventing a number.
 	"""
 	selected = _account(account_name)
 	if isinstance(additional_body_parameters, str):
@@ -265,15 +266,28 @@ def send_group_invite_template(
 	if not isinstance(additional_body_parameters, list):
 		frappe.throw("additional_body_parameters must be a list", frappe.ValidationError)
 	if not to_number and not identity:
-		return _call("groups", "send_group_invite_template", {
-			"account_name": selected,
-			"group_id": group_id,
-			"template_name": template_name,
-			"language_code": language_code,
-			"recipient": recipient,
-			"additional_body_parameters": additional_body_parameters,
-			"idempotency_key": idempotency_key,
-		})
+		if not recipient:
+			frappe.throw("A recipient is required", frappe.ValidationError)
+		payload = {
+			"messaging_product": "whatsapp",
+			"recipient_type": "individual",
+			"recipient": str(recipient),
+			"type": "template",
+			"template": {
+				"name": str(template_name or "").strip(),
+				"language": {"code": str(language_code or "en").strip()},
+				"components": [{
+					"type": "body",
+					"parameters": [
+						{"type": "group_id", "group_id": group_id},
+						*additional_body_parameters,
+					],
+				}],
+			},
+		}
+		if not payload["template"]["name"]:
+			frappe.throw("template_name is required", frappe.ValidationError)
+		return send_account_raw(selected, payload, idempotency_key)
 	account = next((row for row in _accounts() if row["account_name"] == selected), None)
 	if not account:
 		frappe.throw("Hub account is not mapped to this Core site", frappe.PermissionError)
@@ -355,7 +369,22 @@ def send_group_message(account_name, group_id, message_type, content, idempotenc
 @frappe.whitelist()
 @require_core_access(manage=True)
 def pin_group_message(account_name, group_id, message_id, operation="pin", expiration_days=None):
-	return _call("groups", "pin_group_message", {
-		"account_name": _account(account_name), "group_id": group_id,
-		"message_id": message_id, "operation": operation, "expiration_days": expiration_days,
-	})
+	operation = str(operation or "").lower()
+	if operation not in {"pin", "unpin"}:
+		frappe.throw("operation must be pin or unpin", frappe.ValidationError)
+	pin = {"type": operation, "message_id": message_id}
+	if operation == "pin":
+		days = int(expiration_days or 0)
+		if not 1 <= days <= 30:
+			frappe.throw("expiration_days must be between 1 and 30", frappe.ValidationError)
+		pin["expiration_days"] = days
+	return send_account_raw(
+		_account(account_name),
+		{
+			"messaging_product": "whatsapp",
+			"recipient_type": "group",
+			"to": str(group_id),
+			"type": "pin",
+			"pin": pin,
+		},
+	)

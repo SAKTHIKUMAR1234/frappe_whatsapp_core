@@ -9,6 +9,7 @@ from frappe_whatsapp_core.groups import (
 	_sync_group_summaries,
 	group_activity,
 	group_workspace,
+	pin_group_message,
 	send_group_invite_template,
 	send_group_message,
 )
@@ -140,32 +141,52 @@ class TestGroupsAndCalling(FrappeTestCase):
 		self.assertEqual(result["conversation"], "GROUP-INVITE-CONVERSATION")
 		queue_template.assert_called_once()
 
+	@patch("frappe_whatsapp_core.groups._account", return_value="Hub Account")
+	@patch("frappe_whatsapp_core.groups.send_account_raw", return_value={"success": True})
+	def test_group_bsuid_invite_and_pin_use_direct_relay(self, relay_send, account):
+		send_group_invite_template(
+			"Hub Account", "GROUP-1", "group_invite",
+			recipient="US.Customer1", idempotency_key="invite-1",
+		)
+		invite = relay_send.call_args_list[0]
+		self.assertEqual(invite.args[1]["recipient"], "US.Customer1")
+		self.assertEqual(invite.args[2], "invite-1")
+
+		pin_group_message("Hub Account", "GROUP-1", "wamid.1", "pin", 7)
+		pin = relay_send.call_args_list[1]
+		self.assertEqual(pin.args[1]["type"], "pin")
+		self.assertEqual(pin.args[1]["pin"]["expiration_days"], 7)
+
 	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
-	@patch("frappe_whatsapp_core.calling._call", return_value={"data": [{"permission": "granted"}]})
-	def test_call_permission_uses_hub(self, call, resolve):
+	@patch("frappe_whatsapp_core.calling.relay_get_call_permission", return_value={"data": [{"permission": "granted"}]})
+	def test_call_permission_uses_relay(self, relay_permission, resolve):
 		result = get_call_permission("Hub Account", user_wa_id="919876543210")
 		self.assertEqual(result["data"][0]["permission"], "granted")
-		self.assertEqual(call.call_args.args[0:2], ("calling", "get_call_permission"))
+		relay_permission.assert_called_once_with(
+			"Hub Account", user_wa_id="919876543210", recipient=None,
+		)
 
 	@patch("frappe_whatsapp_core.calling.resolve_recipient_phone", return_value="919876543219")
 	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
-	@patch("frappe_whatsapp_core.calling._call", return_value={"data": []})
-	def test_call_permission_resolves_selected_core_contact(self, call, resolve, phone):
+	@patch("frappe_whatsapp_core.calling.relay_get_call_permission", return_value={"data": []})
+	def test_call_permission_resolves_selected_core_contact(self, relay_permission, resolve, phone):
 		get_call_permission("Hub Account", identity="CONTACT-1")
 		phone.assert_called_once_with(
 			"CONTACT-1", context={"operation": "get_call_permission"}
 		)
-		self.assertEqual(call.call_args.args[2]["user_wa_id"], "919876543219")
-		self.assertIsNone(call.call_args.args[2]["recipient"])
+		relay_permission.assert_called_once_with(
+			"Hub Account", user_wa_id="919876543219", recipient=None,
+		)
 
 	@patch("frappe_whatsapp_core.calling.resolve_recipient_phone", return_value="919876543219")
 	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
-	@patch("frappe_whatsapp_core.calling._call", return_value={"success": True})
-	def test_call_invitation_resolves_selected_core_contact(self, call, resolve, phone):
+	@patch("frappe_whatsapp_core.calling.send_account_raw", return_value={"success": True})
+	def test_call_invitation_resolves_selected_core_contact(self, relay_send, resolve, phone):
 		send_call_button("Hub Account", "Call us", identity="CONTACT-1")
-		payload = call.call_args.args[2]
-		self.assertEqual(payload["to_number"], "919876543219")
-		self.assertIsNone(payload["recipient"])
+		payload = relay_send.call_args.args[1]
+		self.assertEqual(payload["to"], "919876543219")
+		self.assertNotIn("recipient", payload)
+		self.assertEqual(payload["interactive"]["type"], "voice_call")
 
 	def test_group_identity_and_call_are_first_class(self):
 		one = get_or_create_group_identity("GROUP-1")

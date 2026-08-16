@@ -17,6 +17,8 @@ class WhatsAppCoreSettings(Document):
 			frappe.throw("Default country calling code must contain 1 to 3 digits")
 		if self.enabled and not self.hub_url:
 			frappe.throw("Hub URL is required when WhatsApp Core is enabled")
+		if self.enabled and not self.relay_url:
+			frappe.throw("Go Relay URL is required when WhatsApp Core is enabled")
 		if self.outbound_enabled and not self.enabled:
 			frappe.throw("Enable WhatsApp Core before enabling outbound messages")
 
