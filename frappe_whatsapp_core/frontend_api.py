@@ -934,6 +934,7 @@ def save_core_settings(
 	enabled=0,
 	outbound_enabled=0,
 	hub_url: str = "",
+	relay_url: str = "",
 	accounts=None,
 	request_timeout: int = 30,
 	default_country_calling_code: str = "91",
@@ -944,6 +945,7 @@ def save_core_settings(
 	settings.enabled = int(bool(cint(enabled)))
 	settings.outbound_enabled = int(bool(cint(outbound_enabled)))
 	settings.hub_url = str(hub_url or "").strip()
+	settings.relay_url = str(relay_url or "").strip()
 	settings.request_timeout = max(2, min(int(request_timeout or 30), 120))
 	settings.default_country_calling_code = str(default_country_calling_code or "91")
 	accounts = _validated_hub_account_mappings(accounts)

@@ -7,6 +7,7 @@ from frappe.model.document import Document
 class WhatsAppCoreSettings(Document):
 	def validate(self):
 		self.hub_url = (self.hub_url or "").strip().rstrip("/")
+		self.relay_url = (self.relay_url or "").strip().rstrip("/")
 		self.default_country_calling_code = "".join(
 			character
 			for character in str(self.default_country_calling_code or "91")
