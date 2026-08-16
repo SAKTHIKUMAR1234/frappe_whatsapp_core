@@ -1,14 +1,19 @@
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 
 import frappe
 from frappe.utils import convert_utc_to_system_timezone, get_datetime, now_datetime
 
 from frappe_whatsapp_core.campaigns import refresh_campaigns_for_messages
-from frappe_whatsapp_core.delivery import advance_delivery_status
+from frappe_whatsapp_core.delivery import (
+	advance_delivery_status,
+	enqueue_delivery_status_handlers,
+)
 from frappe_whatsapp_core.identity import (
 	get_or_create_identity as get_or_create_core_identity,
+	link_business_scoped_user_id_change,
 )
 from frappe_whatsapp_core.party_bindings import ensure_party_bindings
 
@@ -26,14 +31,36 @@ def materialize_event(event, payload, channel_cache=None):
 				if channel is None:
 					channel = get_or_create_channel(phone_number_id, entry.get("id"))
 					channel_cache[str(phone_number_id)] = channel
+				contacts = value.get("contacts") or []
 				for message in value.get("messages") or []:
-					results.append(materialize_inbound_message(event, channel, message))
+					results.append(materialize_inbound_message(
+						event,
+						channel,
+						message,
+						contact=_matching_contact(message, contacts, "Inbound"),
+					))
 				for message in value.get("message_echoes") or []:
-					results.append(materialize_provider_message(event, channel, message, "Outbound"))
+					results.append(materialize_provider_message(
+						event,
+						channel,
+						message,
+						"Outbound",
+						contact=_matching_contact(message, contacts, "Outbound"),
+					))
 				for status in value.get("statuses") or []:
-					results.append(materialize_status(channel, status, event=event))
+					results.append(materialize_status(
+						channel,
+						status,
+						event=event,
+						contact=_matching_status_contact(status, contacts),
+					))
 				for call in value.get("calls") or []:
-					results.append(materialize_call(event, channel, call))
+					results.append(materialize_call(
+						event,
+						channel,
+						call,
+						contact=_matching_contact(call, contacts, "Inbound"),
+					))
 				for group_event in value.get("groups") or []:
 					results.append(
 						materialize_group_event(
@@ -44,7 +71,15 @@ def materialize_event(event, payload, channel_cache=None):
 						)
 					)
 			results.extend(materialize_history(event, entry, value))
-			results.extend(materialize_state_sync(value))
+			results.extend(materialize_state_sync(
+				value,
+				channel if phone_number_id else None,
+			))
+			results.extend(materialize_identity_updates(
+				value,
+				change.get("field") or "",
+				channel if phone_number_id else None,
+			))
 	return results
 
 
@@ -85,8 +120,13 @@ def get_or_create_channel(phone_number_id, waba_id=None):
 	return doc
 
 
-def get_or_create_identity(value):
-	return get_or_create_core_identity(value)
+def get_or_create_identity(value, *, scope=None, aliases=None, resolve=True):
+	return get_or_create_core_identity(
+		value,
+		resolve=resolve,
+		scope=scope,
+		aliases=aliases,
+	)
 
 
 def get_or_create_conversation(channel, identity):
@@ -108,11 +148,20 @@ def get_or_create_conversation(channel, identity):
 	return doc
 
 
-def materialize_inbound_message(event, channel, provider_message):
-	return materialize_provider_message(event, channel, provider_message, "Inbound")
+def materialize_inbound_message(event, channel, provider_message, contact=None):
+	return materialize_provider_message(
+		event, channel, provider_message, "Inbound", contact=contact
+	)
 
 
-def materialize_provider_message(event, channel, provider_message, direction="Inbound"):
+def materialize_provider_message(
+	event,
+	channel,
+	provider_message,
+	direction="Inbound",
+	*,
+	contact=None,
+):
 	"""Project inbound, history, or Business App echo messages into one model."""
 	message_type = str(provider_message.get("type") or "unknown").lower()
 	if message_type in {"edit", "revoke"}:
@@ -130,9 +179,46 @@ def materialize_provider_message(event, channel, provider_message, direction="In
 		if direction == "Inbound"
 		else provider_message.get("to") or provider_message.get("recipient_id")
 	)
-	if not group_id and not str(remote_number or "").strip():
+	remote_user_id = (
+		provider_message.get("from_user_id")
+		if direction == "Inbound"
+		else provider_message.get("to_user_id") or provider_message.get("recipient_user_id")
+	)
+	remote_parent_user_id = (
+		provider_message.get("from_parent_user_id")
+		if direction == "Inbound"
+		else provider_message.get("to_parent_user_id") or provider_message.get("recipient_parent_user_id")
+	)
+	aliases = _identity_aliases(
+		contact,
+		phone=remote_number,
+		user_id=remote_user_id,
+		parent_user_id=remote_parent_user_id,
+	)
+	identity = _system_identity_change(channel, provider_message, aliases)
+	if not group_id and not identity and not any(
+		str(value or "").strip()
+		for value in (remote_user_id, remote_parent_user_id, remote_number)
+	):
 		return {"kind": "message", "status": "ignored", "reason": "missing_remote_identity"}
-	identity = get_or_create_group_identity(group_id) if group_id else get_or_create_identity(remote_number or "")
+	if group_id:
+		identity = get_or_create_group_identity(group_id)
+		if remote_user_id or remote_number:
+			participant = get_or_create_identity(
+				remote_user_id or remote_parent_user_id or remote_number,
+				scope=channel.name if remote_user_id or remote_parent_user_id else None,
+				aliases=aliases,
+			)
+			ensure_party_bindings(
+				participant.name,
+				{"channel": channel.name, "provider_message": provider_message},
+			)
+	elif not identity:
+		identity = get_or_create_identity(
+			remote_user_id or remote_parent_user_id or remote_number,
+			scope=channel.name if remote_user_id or remote_parent_user_id else None,
+			aliases=aliases,
+		)
 	if not group_id:
 		ensure_party_bindings(identity.name, {"channel": channel.name, "provider_message": provider_message})
 	conversation = get_or_create_conversation(channel, identity)
@@ -167,6 +253,113 @@ def materialize_provider_message(event, channel, provider_message, direction="In
 	conversation.last_message_at = provider_timestamp
 	conversation.save(ignore_permissions=True)
 	return {"kind": "message", "status": "created", "name": doc.name}
+
+
+def _matching_contact(provider_row, contacts, direction="Inbound"):
+	if not isinstance(contacts, list):
+		return None
+	keys = (
+		("from_user_id", "from_parent_user_id", "from")
+		if direction == "Inbound"
+		else (
+			"to_user_id", "recipient_user_id", "to_parent_user_id",
+			"recipient_parent_user_id", "to", "recipient_id",
+		)
+	)
+	identifiers = {
+		str(provider_row.get(key) or "").strip()
+		for key in keys
+		if str(provider_row.get(key) or "").strip()
+	}
+	for contact in contacts:
+		if not isinstance(contact, dict):
+			continue
+		contact_ids = {
+			str(contact.get(key) or "").strip()
+			for key in ("user_id", "parent_user_id", "wa_id")
+			if str(contact.get(key) or "").strip()
+		}
+		if identifiers.intersection(contact_ids):
+			return contact
+	return None
+
+
+def _matching_status_contact(provider_status, contacts):
+	if not isinstance(contacts, list):
+		return None
+	identifiers = {
+		str(provider_status.get(key) or "").strip()
+		for key in (
+			"recipient_id", "recipient_user_id", "recipient_parent_user_id",
+			"parent_recipient_user_id", "recipient_participant_id",
+			"participant_recipient_id", "recipient_participant_user_id",
+			"recipient_participant_parent_user_id",
+		)
+		if str(provider_status.get(key) or "").strip()
+	}
+	for contact in contacts:
+		if not isinstance(contact, dict):
+			continue
+		contact_ids = {
+			str(contact.get(key) or "").strip()
+			for key in ("user_id", "parent_user_id", "wa_id")
+			if str(contact.get(key) or "").strip()
+		}
+		if identifiers.intersection(contact_ids):
+			return contact
+	return None
+
+
+def _identity_aliases(contact=None, *, phone=None, user_id=None, parent_user_id=None):
+	contact = contact if isinstance(contact, dict) else {}
+	profile = contact.get("profile") if isinstance(contact.get("profile"), dict) else {}
+	return {
+		"phone": phone or contact.get("wa_id"),
+		"user_id": user_id or contact.get("user_id"),
+		"parent_user_id": parent_user_id or contact.get("parent_user_id"),
+		"profile": profile,
+		"username": profile.get("username") or contact.get("username"),
+		"profile_name": profile.get("name"),
+	}
+
+
+def _system_identity_change(channel, provider_message, aliases):
+	if str(provider_message.get("type") or "").lower() != "system":
+		return None
+	system = provider_message.get("system") or {}
+	if not isinstance(system, dict) or str(system.get("type") or "").lower() not in {
+		"user_changed_user_id", "user_changed_number",
+	}:
+		return None
+	body_match = re.search(
+		r"(?i)changed\s+from\s+([A-Za-z]{2}\.(?:[A-Za-z0-9]{1,128}|ENT\.[A-Za-z0-9]{1,128}))\s+to\s+([A-Za-z]{2}\.(?:[A-Za-z0-9]{1,128}|ENT\.[A-Za-z0-9]{1,128}))",
+		str(system.get("body") or ""),
+	)
+	old_user_id = (
+		system.get("old_user_id")
+		or system.get("previous_user_id")
+		or (body_match.group(1) if body_match else None)
+		or provider_message.get("from_user_id")
+	)
+	new_user_id = (
+		system.get("new_user_id")
+		or system.get("user_id")
+		or (body_match.group(2) if body_match else None)
+	)
+	if not old_user_id or not new_user_id:
+		return None
+	return link_business_scoped_user_id_change(
+		old_user_id,
+		new_user_id,
+		scope=channel.name,
+		aliases={
+			**aliases,
+			"user_id": new_user_id,
+			"parent_user_id": system.get("parent_user_id") or aliases.get("parent_user_id"),
+			"previous_parent_user_id": system.get("previous_parent_user_id"),
+			"phone": system.get("wa_id") or aliases.get("phone"),
+		},
+	)
 
 
 def materialize_message_mutation(event, channel, provider_message, mutation_type):
@@ -251,7 +444,7 @@ def materialize_history(event, entry, value):
 	return results
 
 
-def materialize_state_sync(value):
+def materialize_state_sync(value, channel=None):
 	"""Resolve coexistence contacts; raw state remains durable in the Core Event."""
 	results = []
 	states = value.get("state_sync") or []
@@ -264,13 +457,159 @@ def materialize_state_sync(value):
 		for contact in contacts:
 			if not isinstance(contact, dict):
 				continue
-			contact_value = contact.get("wa_id") or contact.get("phone_number") or contact.get("phone")
+			contact_value = (
+				contact.get("user_id")
+				or contact.get("parent_user_id")
+				or contact.get("wa_id")
+				or contact.get("phone_number")
+				or contact.get("phone")
+			)
 			if contact_value:
-				identity = get_or_create_identity(contact_value)
+				identity = get_or_create_identity(
+					contact_value,
+					scope=(
+						channel.name
+						if channel and (contact.get("user_id") or contact.get("parent_user_id"))
+						else None
+					),
+					aliases=_identity_aliases(
+						contact,
+						phone=contact.get("wa_id") or contact.get("phone_number") or contact.get("phone"),
+					),
+				)
 				results.append({"kind": "state_sync", "status": "resolved", "name": identity.name})
 		if not contacts:
 			results.append({"kind": "state_sync", "status": "recorded"})
 	return results
+
+
+def materialize_identity_updates(value, webhook_field, channel):
+	"""Resolve identity-bearing management webhooks without inventing phone IDs."""
+	if not channel:
+		return []
+	if webhook_field == "user_id_update":
+		return _materialize_user_id_update(value, channel)
+	rows = []
+	if webhook_field == "user_preferences":
+		rows = value.get("user_preferences") or []
+	elif webhook_field == "group_participants_update":
+		rows = value.get("group_participants_update") or []
+	if isinstance(rows, dict):
+		rows = [rows]
+	results = []
+	for row in rows:
+		if not isinstance(row, dict):
+			continue
+		user_id = row.get("user_id") or row.get("parent_user_id")
+		phone = row.get("wa_id") or row.get("input")
+		if not user_id and not phone:
+			results.append({
+				"kind": webhook_field,
+				"status": "ignored",
+				"reason": "missing_remote_identity",
+			})
+			continue
+		contact = _matching_identity_update_contact(user_id, phone, value.get("contacts") or [])
+		identity = get_or_create_identity(
+			user_id or phone,
+			scope=channel.name if user_id else None,
+			aliases=_identity_aliases(
+				{**contact, **row},
+				phone=phone,
+				user_id=row.get("user_id"),
+				parent_user_id=row.get("parent_user_id"),
+			),
+		)
+		if webhook_field == "user_preferences":
+			_record_user_preference(identity, row)
+		results.append({"kind": webhook_field, "status": "resolved", "name": identity.name})
+	return results
+
+
+def _record_user_preference(identity, row):
+	category = str(row.get("category") or "").strip().upper()
+	preference = str(row.get("value") or row.get("preference") or "").strip().upper()
+	if not category or preference not in {"STOP", "RESUME"}:
+		return
+	attributes = identity.attributes or {}
+	if isinstance(attributes, str):
+		attributes = frappe.parse_json(attributes)
+	if not isinstance(attributes, dict):
+		attributes = {}
+	preferences = dict(attributes.get("user_preferences") or {})
+	existing = preferences.get(category) or {}
+	if not _preference_update_wins(existing, preference, row.get("timestamp")):
+		return
+	preferences[category] = {
+		"value": preference,
+		"timestamp": str(row.get("timestamp") or ""),
+	}
+	attributes["user_preferences"] = preferences
+	identity.attributes = attributes
+	identity.save(ignore_permissions=True)
+
+
+def _preference_update_wins(existing, incoming_value, incoming_timestamp):
+	if not existing:
+		return True
+	try:
+		existing_timestamp = float(existing.get("timestamp"))
+		new_timestamp = float(incoming_timestamp)
+	except (TypeError, ValueError):
+		return incoming_value == "STOP" and str(existing.get("value") or "").upper() != "STOP"
+	if new_timestamp != existing_timestamp:
+		return new_timestamp > existing_timestamp
+	return incoming_value == "STOP" and str(existing.get("value") or "").upper() != "STOP"
+
+
+def _materialize_user_id_update(value, channel):
+	rows = value.get("user_id_update") or []
+	if isinstance(rows, dict):
+		rows = [rows]
+	contacts = value.get("contacts") or []
+	results = []
+	for row in rows:
+		if not isinstance(row, dict):
+			continue
+		user_ids = row.get("user_id") or {}
+		parent_ids = row.get("parent_user_id") or {}
+		if not isinstance(user_ids, dict) or not isinstance(parent_ids, dict):
+			results.append({
+				"kind": "user_id_update", "status": "ignored", "reason": "invalid_identity_update",
+			})
+			continue
+		old_user_id = user_ids.get("previous")
+		new_user_id = user_ids.get("current")
+		if not old_user_id or not new_user_id:
+			results.append({
+				"kind": "user_id_update", "status": "ignored", "reason": "missing_remote_identity",
+			})
+			continue
+		contact = _matching_identity_update_contact(new_user_id, row.get("wa_id"), contacts)
+		identity = link_business_scoped_user_id_change(
+			old_user_id,
+			new_user_id,
+			scope=channel.name,
+			aliases=_identity_aliases(
+				contact,
+				phone=row.get("wa_id") or contact.get("wa_id"),
+				user_id=new_user_id,
+				parent_user_id=parent_ids.get("current") or contact.get("parent_user_id"),
+			) | {"previous_parent_user_id": parent_ids.get("previous")},
+		)
+		results.append({"kind": "user_id_update", "status": "resolved", "name": identity.name})
+	return results
+
+
+def _matching_identity_update_contact(user_id, wa_id, contacts):
+	for contact in contacts:
+		if not isinstance(contact, dict):
+			continue
+		if user_id and user_id in {contact.get("user_id"), contact.get("parent_user_id")}:
+			return contact
+		if wa_id and wa_id == contact.get("wa_id"):
+			return contact
+	return {}
 
 
 def get_or_create_group_identity(group_id):
@@ -316,7 +655,7 @@ def sync_group_identity(group):
 	return identity
 
 
-def materialize_call(event, channel, provider_call):
+def materialize_call(event, channel, provider_call, contact=None):
 	call_id = str(provider_call.get("id") or provider_call.get("call_id") or "").strip()
 	if not call_id:
 		return {"kind": "call", "status": "ignored", "reason": "missing_call_id"}
@@ -327,6 +666,20 @@ def materialize_call(event, channel, provider_call):
 		"channel": channel.name,
 		"status": status, "last_event": provider_call,
 	}
+	remote_user_id = provider_call.get("from_user_id") or provider_call.get("to_user_id")
+	remote_parent_user_id = provider_call.get("from_parent_user_id") or provider_call.get("to_parent_user_id")
+	remote_number = provider_call.get("from") or provider_call.get("to") or provider_call.get("recipient")
+	if remote_user_id or remote_parent_user_id or remote_number:
+		get_or_create_identity(
+			remote_user_id or remote_parent_user_id or remote_number,
+			scope=channel.name if remote_user_id or remote_parent_user_id else None,
+			aliases=_identity_aliases(
+				contact,
+				phone=remote_number,
+				user_id=remote_user_id,
+				parent_user_id=remote_parent_user_id,
+			),
+		)
 	direction = provider_call.get("direction")
 	if direction or not existing:
 		direction = str(
@@ -335,9 +688,9 @@ def materialize_call(event, channel, provider_call):
 		).title()
 		values["direction"] = direction if direction in {"Inbound", "Outbound"} else "Inbound"
 	for fieldname, value in {
-		"remote_number": provider_call.get("from") or provider_call.get("to") or provider_call.get("recipient"),
-		"remote_user_id": provider_call.get("from_user_id") or provider_call.get("to_user_id"),
-		"remote_parent_user_id": provider_call.get("from_parent_user_id") or provider_call.get("to_parent_user_id"),
+		"remote_number": remote_number,
+		"remote_user_id": remote_user_id,
+		"remote_parent_user_id": remote_parent_user_id,
 		"remote_username": provider_call.get("from_username") or provider_call.get("to_username"),
 		"callback_data": provider_call.get("biz_opaque_callback_data"),
 		"cta_payload": provider_call.get("cta_payload"),
@@ -445,7 +798,11 @@ def _materialize_group_members(event, group, provider_group):
 	results = []
 	event_type = str(provider_group.get("type") or "")
 	if event_type in {"group_join_request_created", "group_join_request_revoked"}:
-		participant = provider_group.get("wa_id")
+		participant = (
+			provider_group.get("user_id")
+			or provider_group.get("parent_user_id")
+			or provider_group.get("wa_id")
+		)
 		if participant:
 			results.append(_upsert_group_member(
 				event,
@@ -453,24 +810,39 @@ def _materialize_group_members(event, group, provider_group):
 				participant,
 				"Pending" if event_type.endswith("created") else "Revoked",
 				provider_group,
+				provider_group,
 			))
 	for item in provider_group.get("added_participants") or []:
-		participant = item.get("wa_id") or item.get("input")
+		participant = item.get("user_id") or item.get("parent_user_id") or item.get("wa_id") or item.get("input")
 		if participant:
-			results.append(_upsert_group_member(event, group, participant, "Active", provider_group))
+			results.append(_upsert_group_member(event, group, participant, "Active", provider_group, item))
 	for item in provider_group.get("removed_participants") or []:
-		participant = item.get("wa_id") or item.get("input")
+		participant = item.get("user_id") or item.get("parent_user_id") or item.get("wa_id") or item.get("input")
 		if participant:
-			results.append(_upsert_group_member(event, group, participant, "Removed", provider_group))
+			results.append(_upsert_group_member(event, group, participant, "Removed", provider_group, item))
 	for item in provider_group.get("failed_participants") or []:
-		participant = item.get("wa_id") or item.get("input")
+		participant = item.get("user_id") or item.get("parent_user_id") or item.get("wa_id") or item.get("input")
 		if participant:
-			results.append(_upsert_group_member(event, group, participant, "Failed", provider_group))
+			results.append(_upsert_group_member(event, group, participant, "Failed", provider_group, item))
 	return results
 
 
-def _upsert_group_member(event, group, participant, status, provider_group):
+def _upsert_group_member(event, group, participant, status, provider_group, participant_data=None):
 	participant = str(participant).strip()
+	participant_data = participant_data if isinstance(participant_data, dict) else {}
+	user_id = participant_data.get("user_id") or participant_data.get("parent_user_id")
+	if user_id or participant_data.get("wa_id") or participant_data.get("input"):
+		identity = get_or_create_identity(
+			user_id or participant_data.get("wa_id") or participant_data.get("input"),
+			scope=group.channel if user_id else None,
+			aliases=_identity_aliases(
+				participant_data,
+				phone=participant_data.get("wa_id") or participant_data.get("input"),
+				user_id=participant_data.get("user_id"),
+				parent_user_id=participant_data.get("parent_user_id"),
+			),
+		)
+		participant = str(identity.normalized_value or participant).strip()
 	member_key = hashlib.sha256(f"{group.name}:{participant}".encode()).hexdigest()
 	values = {
 		"doctype": "WhatsApp Core Group Member",
@@ -524,6 +896,9 @@ def inbound_message_body(message_type: str, content) -> str:
 			return _flow_response_summary(response)
 	if message_type == "location":
 		return str(content.get("name") or content.get("address") or f"Location: {content.get('latitude')}, {content.get('longitude')}")
+	if message_type == "system":
+		system_type = str(content.get("type") or "").replace("_", " ").strip()
+		return system_type.title() if system_type else "[System update]"
 	return str(content.get("body") or f"[{message_type.replace('_', ' ').title()}]")
 
 
@@ -545,7 +920,7 @@ def _flow_response_summary(response) -> str:
 	return "Flow submitted" + (f" · {' · '.join(values)}" if values else "")
 
 
-def materialize_status(channel, provider_status, event=None):
+def materialize_status(channel, provider_status, event=None, contact=None):
 	provider_id = provider_status.get("id")
 	if not provider_id:
 		return {"kind": "status", "status": "ignored", "reason": "missing_provider_id"}
@@ -555,27 +930,44 @@ def materialize_status(channel, provider_status, event=None):
 		"name",
 	)
 	participant_id = (
-		provider_status.get("recipient_participant_id")
+		provider_status.get("recipient_participant_user_id")
+		or provider_status.get("recipient_participant_parent_user_id")
+		or provider_status.get("recipient_participant_id")
 		or provider_status.get("participant_recipient_id")
 	)
 	if provider_status.get("recipient_type") == "group" and participant_id:
+		_materialize_status_identity(channel, provider_status, contact, group=True)
 		return materialize_group_receipt(event, channel, provider_status, message_name)
 	if not message_name:
 		return {"kind": "status", "status": "orphan", "provider_message_id": provider_id}
-	status = (provider_status.get("status") or "sent").title()
+	_materialize_status_identity(channel, provider_status, contact, message_name=message_name)
+	status = str(provider_status.get("status") or "").strip().title()
 	allowed = {"Queued", "Sent", "Delivered", "Read", "Failed", "Deleted"}
-	incoming = status if status in allowed else "Sent"
+	if status not in allowed:
+		return {
+			"kind": "status",
+			"status": "ignored",
+			"reason": "unknown_provider_status",
+			"provider_message_id": provider_id,
+			"provider_status": status,
+		}
+	incoming = status
 	current = frappe.db.get_value(
 		"WhatsApp Core Message",
 		message_name,
 		"delivery_status",
 	)
-	frappe.db.set_value(
-		"WhatsApp Core Message",
-		message_name,
-		"delivery_status",
-		advance_delivery_status(current, incoming),
-	)
+	next_status = advance_delivery_status(current, incoming)
+	updates = {"delivery_status": next_status}
+	provider_template_id = str(provider_status.get("template_id") or "").strip()
+	if provider_template_id:
+		updates["provider_template_id"] = provider_template_id[:140]
+	frappe.db.set_value("WhatsApp Core Message", message_name, updates)
+	if next_status != current:
+		enqueue_delivery_status_handlers({
+			"message_name": message_name,
+			"delivery_status": next_status,
+		})
 	if frappe.flags.whatsapp_core_batch_processing:
 		pending = getattr(
 			frappe.flags,
@@ -591,10 +983,72 @@ def materialize_status(channel, provider_status, event=None):
 	return {"kind": "status", "status": "updated", "name": message_name}
 
 
+def _materialize_status_identity(channel, provider_status, contact, *, message_name=None, group=False):
+	user_id = (
+		provider_status.get("recipient_participant_user_id")
+		if group
+		else provider_status.get("recipient_user_id")
+	) or ""
+	parent_user_id = (
+		provider_status.get("recipient_participant_parent_user_id")
+		if group
+		else provider_status.get("recipient_parent_user_id")
+	) or ("" if group else provider_status.get("parent_recipient_user_id"))
+	phone = (
+		(
+			provider_status.get("recipient_participant_id")
+			or provider_status.get("participant_recipient_id")
+		)
+		if group
+		else provider_status.get("recipient_id")
+	) or ""
+	if contact:
+		user_id = user_id or contact.get("user_id") or ""
+		parent_user_id = parent_user_id or contact.get("parent_user_id") or ""
+		phone = phone or contact.get("wa_id") or ""
+	if not user_id and not parent_user_id:
+		return None
+	if message_name and not phone:
+		conversation = frappe.db.get_value(
+			"WhatsApp Core Message", message_name, "conversation"
+		)
+		identity_name = frappe.db.get_value(
+			"WhatsApp Core Conversation", conversation, "remote_identity"
+		)
+		identity = frappe.get_doc("WhatsApp Core Identity", identity_name)
+		if getattr(identity, "identifier_type", None) == "Phone":
+			phone = identity.normalized_value
+	resolved = get_or_create_identity(
+		user_id or parent_user_id,
+		scope=channel.name,
+		aliases=_identity_aliases(
+			contact,
+			phone=phone,
+			user_id=user_id,
+			parent_user_id=parent_user_id,
+		),
+	)
+	if message_name:
+		conversation = frappe.db.get_value(
+			"WhatsApp Core Message", message_name, "conversation"
+		)
+		remote_identity = frappe.db.get_value(
+			"WhatsApp Core Conversation", conversation, "remote_identity"
+		)
+		if remote_identity != resolved.name:
+			frappe.throw(
+				"Status recipient does not match the outbound message conversation",
+				frappe.ValidationError,
+			)
+	return resolved
+
+
 def materialize_group_receipt(event, channel, provider_status, message_name=None):
 	group_id = str(provider_status.get("recipient_id") or "").strip()
 	participant = str(
-		provider_status.get("recipient_participant_id")
+		provider_status.get("recipient_participant_user_id")
+		or provider_status.get("recipient_participant_parent_user_id")
+		or provider_status.get("recipient_participant_id")
 		or provider_status.get("participant_recipient_id")
 		or ""
 	).strip()

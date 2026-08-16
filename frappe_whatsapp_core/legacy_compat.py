@@ -100,6 +100,7 @@ def queue_text_by_phone(
 	phone_number_id: str | None = None,
 	source: str = "Legacy compatibility",
 	enqueue_delivery: bool = True,
+	client_message_id: str | None = None,
 ) -> dict:
 	conversation = conversation_for_phone(
 		phone_number,
@@ -110,6 +111,7 @@ def queue_text_by_phone(
 		conversation.name,
 		body,
 		source,
+		client_message_id=client_message_id,
 		enqueue_delivery=enqueue_delivery,
 	)
 
@@ -127,6 +129,7 @@ def queue_template_by_phone(
 	phone_number_id: str | None = None,
 	source: str = "Legacy compatibility",
 	enqueue_delivery: bool = True,
+	client_message_id: str | None = None,
 ) -> dict:
 	conversation = conversation_for_phone(
 		phone_number,
@@ -153,6 +156,7 @@ def queue_template_by_phone(
 		language_code,
 		components,
 		source,
+		client_message_id=client_message_id,
 		enqueue_delivery=enqueue_delivery,
 	)
 	if local_file_url:

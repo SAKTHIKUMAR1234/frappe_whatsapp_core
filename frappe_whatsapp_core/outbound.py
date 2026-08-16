@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import mimetypes
 import re
 import uuid
 from base64 import b64encode
 from copy import deepcopy
+from urllib.parse import urlsplit
 
 import frappe
-from frappe.utils import add_to_date, now_datetime
+from frappe.utils import add_to_date, cint, now_datetime
 
+from frappe_whatsapp_core.delivery import enqueue_delivery_status_handlers
 from frappe_whatsapp_core.hub_client import (
 	call_management,
 	connection_status,
@@ -22,27 +25,37 @@ from frappe_whatsapp_core.hub_client import (
 from frappe_whatsapp_core.hub_client import (
 	send_batch as send_hub_batch,
 )
-from frappe_whatsapp_core.identity import phone_candidates
+from frappe_whatsapp_core.identity import (
+	is_business_scoped_user_id,
+	is_parent_business_scoped_user_id,
+	normalize_business_scoped_user_id,
+	phone_candidates,
+)
 from frappe_whatsapp_core.materializer import (
 	get_or_create_conversation,
 	get_or_create_identity,
 	normalize_phone,
 )
 from frappe_whatsapp_core.permissions import assert_conversation_access, require_core_access
+from frappe_whatsapp_core.realtime import publish_invalidation
 
 
-def outbound_ready() -> bool:
+def outbound_ready(channel: str | None = None) -> bool:
 	status = connection_status()
-	return bool(
+	ready = bool(
 		status["enabled"]
 		and status["outbound_enabled"]
 		and status["credentials_configured"]
 		and status["account_count"]
 	)
+	if not ready or not channel:
+		return ready
+	settings = frappe.get_single("WhatsApp Core Settings")
+	return any(row.channel == channel and row.account_name for row in settings.accounts)
 
 
 def resolve_recipient_phone(identity, context: dict | None = None) -> str:
-	"""Resolve the delivery number, falling back to the Core Identity value."""
+	"""Resolve the exact Meta recipient (phone or portfolio-scoped BSUID)."""
 	if isinstance(identity, str):
 		identity = frappe.get_cached_doc("WhatsApp Core Identity", identity)
 	if getattr(identity, "status", "Active") != "Active":
@@ -50,6 +63,20 @@ def resolve_recipient_phone(identity, context: dict | None = None) -> str:
 			"This WhatsApp contact is blocked from outbound messaging",
 			frappe.ValidationError,
 		)
+	context = context or {}
+	attributes = _json_dict(getattr(identity, "attributes", None))
+	bsuid = str(attributes.get("business_scoped_user_id") or "").strip()
+	if getattr(identity, "identifier_type", None) == "BSUID" and not bsuid:
+		bsuid = str(identity.normalized_value or "").strip()
+	if bsuid and not context.get("require_phone"):
+		scope = getattr(identity, "identity_scope", None)
+		if context.get("channel") and scope and scope != context["channel"]:
+			frappe.throw(
+				"This business-scoped user ID belongs to another WhatsApp account",
+				frappe.ValidationError,
+			)
+		return normalize_business_scoped_user_id(bsuid)
+
 	paths = frappe.get_hooks("whatsapp_core_recipient_phone_resolver") or []
 	if isinstance(paths, str):
 		paths = [paths]
@@ -60,21 +87,28 @@ def resolve_recipient_phone(identity, context: dict | None = None) -> str:
 			frappe.ValidationError,
 		)
 
-	value = identity.normalized_value
+	phone_aliases = attributes.get("phone_aliases") or []
+	value = (
+		phone_aliases[-1]
+		if phone_aliases
+		else ""
+		if bsuid
+		else identity.normalized_value
+	)
 	if paths:
 		resolved = frappe.get_attr(paths[0])(
 			identity=identity,
-			context=context or {},
+			context=context,
 		)
 		if isinstance(resolved, dict):
 			resolved = resolved.get("phone_number")
 		if resolved:
 			value = resolved
-	else:
-		value = _linked_recipient_phone(identity, context or {}) or value
+	elif not bsuid:
+		value = _linked_recipient_phone(identity, context) or value
 
 	default_country_code = str(
-		(context or {}).get("default_country_calling_code")
+		context.get("default_country_calling_code")
 		or frappe.conf.get("whatsapp_default_country_calling_code")
 		or "91"
 	)
@@ -184,6 +218,17 @@ def outbound_state(conversation: str | None = None) -> dict:
 		reasons.append("Hub credentials are not configured")
 	if not status["account_count"]:
 		reasons.append("No Hub account is mapped")
+	conversation_channel = (
+		frappe.db.get_value("WhatsApp Core Conversation", conversation, "channel")
+		if conversation
+		else None
+	)
+	if (
+		conversation_channel
+		and status["account_count"]
+		and not outbound_ready(conversation_channel)
+	):
+		reasons.append("This conversation channel is not mapped to a Hub account")
 	context = {
 		"conversation": conversation,
 		"message_type": "text",
@@ -229,7 +274,7 @@ def start_conversation(
 			frappe.throw("Select an active WhatsApp Core contact", frappe.ValidationError)
 		resolved_phone = resolve_recipient_phone(
 			identity_doc,
-			context={"operation": "start_conversation"},
+			context={"operation": "start_conversation", "channel": channel_doc.name},
 		)
 	else:
 		default_country_code = (
@@ -239,15 +284,29 @@ def start_conversation(
 			)
 			or "91"
 		)
-		normalized = normalize_phone(
-			phone_number,
-			assume_local=True,
-			country_code=default_country_code,
-		)
-		if not 7 <= len(normalized) <= 15:
-			frappe.throw("Enter a valid international phone number")
-		identity_doc = get_or_create_identity(normalized)
-		resolved_phone = identity_doc.normalized_value
+		if is_business_scoped_user_id(phone_number):
+			normalized = normalize_business_scoped_user_id(phone_number)
+			alias_type = (
+				"parent_user_id"
+				if is_parent_business_scoped_user_id(normalized)
+				else "user_id"
+			)
+			identity_doc = get_or_create_identity(
+				normalized,
+				scope=channel_doc.name,
+				aliases={alias_type: normalized},
+			)
+			resolved_phone = normalized
+		else:
+			normalized = normalize_phone(
+				phone_number,
+				assume_local=True,
+				country_code=default_country_code,
+			)
+			if not 7 <= len(normalized) <= 15:
+				frappe.throw("Enter a valid international phone number")
+			identity_doc = get_or_create_identity(normalized)
+			resolved_phone = identity_doc.normalized_value
 		if display_name and identity_doc.display_value in {"", identity_doc.normalized_value}:
 			identity_doc.display_value = display_name.strip()[:140]
 			identity_doc.save(ignore_permissions=True)
@@ -267,6 +326,7 @@ def queue_text(
 	source: str = "Core UI",
 	context_message_id: str | None = None,
 	client_message_id: str | None = None,
+	preview_url=0,
 ) -> dict:
 	return queue_text_internal(
 		conversation_name,
@@ -274,6 +334,7 @@ def queue_text(
 		source,
 		context_message_id=context_message_id,
 		client_message_id=client_message_id,
+		preview_url=preview_url,
 	)
 
 
@@ -284,6 +345,7 @@ def queue_text_internal(
 	*,
 	context_message_id: str | None = None,
 	client_message_id: str | None = None,
+	preview_url=False,
 	enqueue_delivery: bool = True,
 	_batch_context: dict | None = None,
 ) -> dict:
@@ -292,6 +354,7 @@ def queue_text_internal(
 		frappe.throw("Message cannot be empty")
 	if len(body) > 4096:
 		frappe.throw("Message cannot exceed 4096 characters")
+	preview_url = bool(cint(preview_url))
 	return _queue_message(
 		conversation_name,
 		"text",
@@ -300,10 +363,151 @@ def queue_text_internal(
 			"body": body,
 			"source": source,
 			"context_message_id": _provider_context_id(context_message_id),
+			**({"preview_url": True} if preview_url else {}),
 		},
 		client_message_id=client_message_id,
 		enqueue_delivery=enqueue_delivery,
 		_batch_context=_batch_context,
+	)
+
+
+@frappe.whitelist()
+@require_core_access()
+def queue_direct_text(
+	conversation_name: str,
+	body: str,
+	category: str,
+	source: str = "Core UI",
+	client_message_id: str | None = None,
+	ttl_seconds=None,
+	template_name: str | None = None,
+) -> dict:
+	"""Queue an allow-listed Meta Direct Send text as a durable Core message."""
+	return queue_direct_text_internal(
+		conversation_name,
+		body,
+		category,
+		source,
+		client_message_id=client_message_id,
+		ttl_seconds=ttl_seconds,
+		template_name=template_name,
+	)
+
+
+def queue_direct_text_internal(
+	conversation_name: str,
+	body: str,
+	category: str,
+	source: str = "Core",
+	*,
+	client_message_id: str | None = None,
+	ttl_seconds=None,
+	template_name: str | None = None,
+	enqueue_delivery: bool = True,
+) -> dict:
+	body = str(body or "").strip()
+	if not body:
+		frappe.throw("Message cannot be empty")
+	if len(body) > 4096:
+		frappe.throw("Message cannot exceed 4096 characters")
+	direct_send_category = _direct_send_category(category, required=True)
+	ttl_seconds = _direct_send_ttl_seconds(ttl_seconds, direct_send_category)
+	template_name = _direct_send_template_name(template_name, direct_send_category)
+	return _queue_message(
+		conversation_name,
+		"text",
+		body,
+		{
+			"body": body,
+			"source": source,
+			"direct_send_category": direct_send_category,
+			**(
+				{"direct_send_ttl_seconds": ttl_seconds}
+				if ttl_seconds is not None
+				else {}
+			),
+			**(
+				{"direct_send_template_name": template_name}
+				if template_name
+				else {}
+			),
+		},
+		client_message_id=client_message_id,
+		enqueue_delivery=enqueue_delivery,
+	)
+
+
+@frappe.whitelist()
+@require_core_access()
+def queue_direct_interactive(
+	conversation_name: str,
+	payload: dict | str,
+	category: str = "utility",
+	source: str = "Core UI",
+	client_message_id: str | None = None,
+	ttl_seconds=None,
+	template_name: str | None = None,
+) -> dict:
+	"""Queue a bounded Direct Send CTA or reply-button message."""
+	return queue_direct_interactive_internal(
+		conversation_name,
+		payload,
+		category,
+		source,
+		client_message_id=client_message_id,
+		ttl_seconds=ttl_seconds,
+		template_name=template_name,
+	)
+
+
+def queue_direct_interactive_internal(
+	conversation_name: str,
+	payload: dict | str,
+	category: str = "utility",
+	source: str = "Core",
+	*,
+	client_message_id: str | None = None,
+	ttl_seconds=None,
+	template_name: str | None = None,
+	enqueue_delivery: bool = True,
+) -> dict:
+	category = _direct_send_category(category, required=True)
+	if category != "utility":
+		frappe.throw(
+			"Authentication Direct Send supports text messages only",
+			frappe.ValidationError,
+		)
+	if isinstance(payload, str):
+		payload = frappe.parse_json(payload)
+	if not isinstance(payload, dict):
+		frappe.throw("Direct Send payload must be an object", frappe.ValidationError)
+	normalized = _validate_direct_send_interactive(
+		_validate_rich_payload("interactive", payload)
+	)
+	ttl_seconds = _direct_send_ttl_seconds(ttl_seconds, category)
+	template_name = _direct_send_template_name(template_name, category)
+	body = _rich_message_body("interactive", normalized).strip()[:4096]
+	return _queue_message(
+		conversation_name,
+		"interactive",
+		body,
+		{
+			"payload": normalized,
+			"source": source,
+			"direct_send_category": category,
+			**(
+				{"direct_send_ttl_seconds": ttl_seconds}
+				if ttl_seconds is not None
+				else {}
+			),
+			**(
+				{"direct_send_template_name": template_name}
+				if template_name
+				else {}
+			),
+		},
+		client_message_id=client_message_id,
+		enqueue_delivery=enqueue_delivery,
 	)
 
 
@@ -446,6 +650,7 @@ def queue_template(
 	language_code: str = "",
 	components: list | str | None = None,
 	source: str = "Core UI",
+	client_message_id: str | None = None,
 ) -> dict:
 	return queue_template_internal(
 		conversation_name,
@@ -453,7 +658,61 @@ def queue_template(
 		language_code,
 		components,
 		source,
+		client_message_id=client_message_id,
 	)
+
+
+@frappe.whitelist()
+@require_core_access()
+def queue_marketing_template(
+	conversation_name: str,
+	template: str,
+	language_code: str = "",
+	components: list | str | None = None,
+	product_policy: dict | str | None = None,
+	message_activity_sharing=None,
+	source: str = "Core UI",
+	client_message_id: str | None = None,
+) -> dict:
+	"""Queue a durable template explicitly for Meta's Marketing Messages API."""
+	_assert_marketing_preference(conversation_name)
+	if isinstance(product_policy, str):
+		product_policy = frappe.parse_json(product_policy)
+	if product_policy is not None and not isinstance(product_policy, dict):
+		frappe.throw("product_policy must be an object", frappe.ValidationError)
+	marketing_options = {}
+	if product_policy:
+		marketing_options["product_policy"] = product_policy
+	if message_activity_sharing not in (None, ""):
+		marketing_options["message_activity_sharing"] = bool(cint(message_activity_sharing))
+	return queue_template_internal(
+		conversation_name,
+		template,
+		language_code,
+		components,
+		source,
+		client_message_id=client_message_id,
+		transport_endpoint="marketing_messages",
+		marketing_options=marketing_options,
+	)
+
+
+def _assert_marketing_preference(conversation_name):
+	identity_name = frappe.db.get_value(
+		"WhatsApp Core Conversation", conversation_name, "remote_identity"
+	)
+	if not identity_name:
+		frappe.throw("Conversation was not found", frappe.DoesNotExistError)
+	attributes = frappe.db.get_value("WhatsApp Core Identity", identity_name, "attributes") or {}
+	if isinstance(attributes, str):
+		attributes = frappe.parse_json(attributes)
+	preferences = attributes.get("user_preferences") if isinstance(attributes, dict) else {}
+	marketing = (preferences or {}).get("MARKETING_MESSAGES") or {}
+	if str(marketing.get("value") or "").upper() == "STOP":
+		frappe.throw(
+			"Meta reports that this recipient has stopped marketing messages",
+			frappe.ValidationError,
+		)
 
 
 def queue_template_internal(
@@ -463,23 +722,43 @@ def queue_template_internal(
 	components: list | str | None = None,
 	source: str = "Core",
 	*,
+	client_message_id: str | None = None,
 	enqueue_delivery: bool = True,
 	_batch_context: dict | None = None,
 	_template_doc=None,
+	transport_endpoint: str = "messages",
+	marketing_options: dict | None = None,
 ) -> dict:
-	template_doc = _template_doc or _approved_template(template)
+	conversation_channel = frappe.db.get_value(
+		"WhatsApp Core Conversation", conversation_name, "channel"
+	)
+	if not conversation_channel:
+		frappe.throw("Conversation was not found", frappe.DoesNotExistError)
+	template_doc = _template_doc or _approved_template(template, channel=conversation_channel)
+	if not template_doc.channel or template_doc.channel != conversation_channel:
+		frappe.throw(
+			"Template is not assigned to this conversation's WhatsApp account",
+			frappe.PermissionError,
+		)
 	if components is None:
 		components = []
 	elif isinstance(components, str):
 		components = frappe.parse_json(components)
 	if not isinstance(components, list):
 		frappe.throw("Template components must be a list")
+	_validate_template_send_parameters(template_doc, components)
 	language_code = (
 		str(language_code or "").strip()
 		or template_doc.language_code
 		or "en"
 	)
 	snapshot = template_message_snapshot(template_doc, components)
+	transport_endpoint = _transport_endpoint(transport_endpoint)
+	if transport_endpoint == "marketing_messages" and str(template_doc.category or "").upper() != "MARKETING":
+		frappe.throw(
+			"Only approved MARKETING templates can use marketing_messages",
+			frappe.ValidationError,
+		)
 	return _queue_message(
 		conversation_name,
 		"template",
@@ -491,7 +770,16 @@ def queue_template_internal(
 			"components": components,
 			"template_snapshot": snapshot,
 			"source": source,
+			**(
+				{
+					"transport_endpoint": transport_endpoint,
+					"marketing_options": deepcopy(marketing_options or {}),
+				}
+				if transport_endpoint != "messages"
+				else {}
+			),
 		},
+		client_message_id=client_message_id,
 		enqueue_delivery=enqueue_delivery,
 		_batch_context=_batch_context,
 	)
@@ -609,12 +897,73 @@ def _template_supplied_parameters(
 
 def _render_template_text(text: str, parameters: list[dict]) -> str:
 	values = [_template_parameter_text(parameter) for parameter in parameters]
+	named_values = {
+		str(parameter.get("parameter_name") or "").strip(): _template_parameter_text(parameter)
+		for parameter in parameters
+		if isinstance(parameter, dict) and parameter.get("parameter_name")
+	}
 
 	def replace(match):
 		position = int(match.group(1)) - 1
 		return values[position] if 0 <= position < len(values) else match.group(0)
 
-	return re.sub(r"\{\{\s*(\d+)\s*\}\}", replace, str(text or ""))
+	rendered = re.sub(r"\{\{\s*(\d+)\s*\}\}", replace, str(text or ""))
+	return re.sub(
+		r"\{\{\s*([a-z][a-z0-9_]*)\s*\}\}",
+		lambda match: named_values.get(match.group(1), match.group(0)),
+		rendered,
+	)
+
+
+def _validate_template_send_parameters(template_doc, components: list[dict]) -> None:
+	parameter_format = str(
+		getattr(template_doc, "parameter_format", None) or "POSITIONAL"
+	).strip().upper()
+	if parameter_format not in {"POSITIONAL", "NAMED"}:
+		frappe.throw("Template parameter format is invalid", frappe.ValidationError)
+	definitions = _json_list(getattr(template_doc, "components", None))
+	for component_type in ("header", "body"):
+		definition = _template_component(definitions, component_type.upper())
+		text = str(definition.get("text") or "")
+		numeric = re.findall(r"\{\{\s*\d+\s*\}\}", text)
+		expected = list(dict.fromkeys(
+			re.findall(r"\{\{\s*([a-z][a-z0-9_]*)\s*\}\}", text)
+		))
+		if parameter_format == "POSITIONAL":
+			if expected:
+				frappe.throw(
+					f"POSITIONAL {component_type.upper()} cannot use named placeholders",
+					frappe.ValidationError,
+				)
+			continue
+		if numeric:
+			frappe.throw(
+				f"NAMED {component_type.upper()} cannot use positional placeholders",
+				frappe.ValidationError,
+			)
+		parameters = _template_supplied_parameters(components, component_type)
+		if not expected and not parameters:
+			continue
+		provided = []
+		for parameter in parameters:
+			if not isinstance(parameter, dict):
+				frappe.throw(
+					"Named template parameters must be objects",
+					frappe.ValidationError,
+				)
+			name = str(parameter.get("parameter_name") or "").strip()
+			if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+				frappe.throw(
+					"Every NAMED template text parameter requires parameter_name",
+					frappe.ValidationError,
+				)
+			provided.append(name)
+		if len(provided) != len(set(provided)) or set(provided) != set(expected):
+			frappe.throw(
+				f"NAMED {component_type.upper()} parameters must exactly match: "
+				+ ", ".join(expected),
+				frappe.ValidationError,
+			)
 
 
 def _template_parameter_text(parameter) -> str:
@@ -715,11 +1064,10 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 	template = campaign_template_document(campaign) if content_type == "Template" else None
 	results = {}
 	message_names = []
-	message_payloads = []
 	conversation_names = []
 	# Transport readiness is invariant for this bounded batch. Rechecking and
 	# decrypting the same Single DocType for every recipient is avoidable work.
-	if not outbound_ready():
+	if not outbound_ready(channel.name):
 		frappe.throw(
 			"WhatsApp outbound is not fully configured and enabled",
 			frappe.ValidationError,
@@ -770,7 +1118,6 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 			# worker. The durable transport call itself happens only after commit.
 			_message_payload(message, recipient_phone)
 			message_names.append(message.name)
-			message_payloads.append(dict(message))
 			conversation_names.append(conversation.name)
 			results[recipient.name] = {
 				"success": True,
@@ -800,21 +1147,7 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 			""",
 			{"conversation_names": list(dict.fromkeys(conversation_names))},
 		)
-		frappe.publish_realtime(
-			"whatsapp_core_batch_committed",
-			{
-				"event_count": 0,
-				"completed": 0,
-				"failed": 0,
-				"kinds": ["message"],
-				"conversations": list(dict.fromkeys(conversation_names)),
-				"message_changes": [
-					{"kind": "message", "status": "created", "message": row}
-					for row in message_payloads
-				],
-			},
-			after_commit=True,
-		)
+		publish_invalidation("whatsapp_core_batch_committed")
 
 	if message_names:
 		frappe.enqueue(
@@ -826,16 +1159,19 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 	return results
 
 
-def freeze_campaign_template(template_name: str) -> dict:
+def freeze_campaign_template(template_name: str, channel: str | None = None) -> dict:
 	"""Return the approved catalog data a campaign must retain for its full run."""
-	template = _approved_template(template_name)
+	template = _approved_template(template_name, channel=channel)
 	return {
 		"name": template.name,
+		"account_name": template.account_name,
+		"channel": template.channel,
 		"template_name": template.template_name,
 		"language_code": template.language_code or "en",
 		"category": template.category or "",
 		"approval_status": template.approval_status,
 		"enabled": bool(template.enabled),
+		"parameter_format": template.parameter_format or "POSITIONAL",
 		"header_type": template.header_type or "",
 		"header_content": template.header_content or "",
 		"body_text": template.body_text or "",
@@ -890,11 +1226,14 @@ def deliver_queued_message_batch(message_names: list[str]) -> None:
 				"WhatsApp Core Identity",
 				conversation.remote_identity,
 			)
+			if _message_transport_endpoint(message) == "marketing_messages":
+				_assert_marketing_preference(conversation.name)
 			context = {
 				"source": "message",
 				"message": message.name,
 				"conversation": conversation.name,
 				"channel": message.channel,
+				"require_phone": _message_requires_phone(message),
 			}
 			group_id = _group_id(identity)
 			recipient = group_id or resolve_recipient_phone(identity, context)
@@ -907,6 +1246,7 @@ def deliver_queued_message_batch(message_names: list[str]) -> None:
 					recipient_type="group" if group_id else "individual",
 				),
 				"idempotency_key": message.idempotency_key,
+				"endpoint": _message_transport_endpoint(message),
 			})
 		except Exception as exception:
 			preparation_failures.append(
@@ -934,6 +1274,7 @@ def deliver_queued_message_batch(message_names: list[str]) -> None:
 			"channel": item["channel"],
 			"payload": item["payload"],
 			"idempotency_key": item["idempotency_key"],
+			"endpoint": item["endpoint"],
 		}
 		for item in submissions
 	])
@@ -1010,11 +1351,18 @@ def deliver_queued_message(message_name: str) -> None:
 			"WhatsApp Core Identity",
 			conversation.remote_identity,
 		)
+		if _message_transport_endpoint(message) == "marketing_messages":
+			try:
+				_assert_marketing_preference(conversation.name)
+			except frappe.ValidationError as exception:
+				_mark_failed(message, {"error": str(exception), "retryable": False})
+				return
 		context = {
 			"source": "message",
 			"message": message.name,
 			"conversation": conversation.name,
 			"channel": message.channel,
+			"require_phone": _message_requires_phone(message),
 		}
 		group_id = _group_id(identity)
 		recipient = group_id or resolve_recipient_phone(identity, context)
@@ -1023,10 +1371,13 @@ def deliver_queued_message(message_name: str) -> None:
 			recipient,
 			recipient_type="group" if group_id else "individual",
 		)
+		endpoint = _message_transport_endpoint(message)
+		arguments = {"endpoint": endpoint} if endpoint != "messages" else {}
 		result = send_raw(
 			message.channel,
 			payload,
 			message.idempotency_key,
+			**arguments,
 		)
 		# The provider may have committed a status callback during send_raw().
 		# Refresh the transaction boundary so the monotonic UPDATE below operates
@@ -1084,18 +1435,9 @@ def _queue_message(
 	batch_context = _batch_context or {}
 	if not batch_context:
 		assert_conversation_access(conversation_name)
-	if not batch_context and not outbound_ready():
-		frappe.throw(
-			"WhatsApp outbound is not fully configured and enabled",
-			frappe.ValidationError,
-		)
 	conversation = batch_context.get("conversation") or frappe.get_doc(
 		"WhatsApp Core Conversation", conversation_name
 	)
-	identity = batch_context.get("identity") or frappe.get_cached_doc(
-		"WhatsApp Core Identity", conversation.remote_identity
-	)
-	group_id = _group_id(identity)
 	if not batch_context:
 		frappe.has_permission(
 			"WhatsApp Core Conversation",
@@ -1103,9 +1445,46 @@ def _queue_message(
 			doc=conversation,
 			throw=True,
 		)
+	local_id = f"local:{_client_uuid(client_message_id)}"
+	expected_content = {"client_message_id": local_id, **content}
+	if client_message_id:
+		existing = _message_by_client_id(local_id, channel=conversation.channel)
+		if existing:
+			return _validated_message_replay(
+				existing,
+				conversation=conversation,
+				message_type=message_type,
+				body=body,
+				content=expected_content,
+			)
+	if not batch_context and not outbound_ready(conversation.channel):
+		frappe.throw(
+			"WhatsApp outbound is not configured for this conversation channel",
+			frappe.ValidationError,
+		)
+	identity = batch_context.get("identity") or frappe.get_cached_doc(
+		"WhatsApp Core Identity", conversation.remote_identity
+	)
+	group_id = _group_id(identity)
+	direct_send_category = _direct_send_category(content.get("direct_send_category"))
+	if direct_send_category and group_id:
+		frappe.throw(
+			"Meta Direct Send does not support group conversations",
+			frappe.ValidationError,
+		)
+	if not group_id and _content_requires_phone(message_type, content):
+		resolve_recipient_phone(
+			identity,
+			{
+				"operation": "phone_only_message",
+				"channel": conversation.channel,
+				"require_phone": True,
+			},
+		)
 	if (
 		not group_id
 		and message_type != "template"
+		and not direct_send_category
 		and not _within_service_window(conversation.name)
 	):
 		frappe.throw(
@@ -1124,44 +1503,108 @@ def _queue_message(
 		message_type=message_type,
 		content=content,
 	)
-	local_id = f"local:{_client_uuid(client_message_id)}"
 	message_key = hashlib.sha256(
 		f"{conversation.channel}:{local_id}".encode()
 	).hexdigest()
-	message = frappe.get_doc({
-		"doctype": "WhatsApp Core Message",
-		"message_key": message_key,
-		"idempotency_key": message_key,
-		"conversation": conversation.name,
-		"channel": conversation.channel,
-		"provider_message_id": local_id,
-		"direction": "Outbound",
-		"message_type": message_type,
-		"body": body,
-		"content": json.dumps(
-			{"client_message_id": local_id, **content},
-			separators=(",", ":"),
-			ensure_ascii=False,
-		),
-		"provider_timestamp": now_datetime(),
-		"delivery_status": "Queued",
-	}).insert(ignore_permissions=True)
+	try:
+		message = frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": message_key,
+			"idempotency_key": message_key,
+			"conversation": conversation.name,
+			"channel": conversation.channel,
+			"provider_message_id": local_id,
+			"direction": "Outbound",
+			"message_type": message_type,
+			"body": body,
+			"content": json.dumps(
+				expected_content,
+				separators=(",", ":"),
+				ensure_ascii=False,
+			),
+			"provider_timestamp": now_datetime(),
+			"delivery_status": "Queued",
+		}).insert(ignore_permissions=True)
+	except (frappe.DuplicateEntryError, frappe.UniqueValidationError):
+		if not client_message_id:
+			raise
+		# A concurrent request can pass the optimistic lookup and win the unique
+		# provider/idempotency-key insert. SELECT FOR UPDATE is a current read, so
+		# it observes the winner even under MariaDB's repeatable-read isolation.
+		existing = _message_by_client_id(
+			local_id,
+			channel=conversation.channel,
+			for_update=True,
+		)
+		if not existing:
+			raise
+		return _validated_message_replay(
+			existing,
+			conversation=conversation,
+			message_type=message_type,
+			body=body,
+			content=expected_content,
+		)
 	if not batch_context:
 		conversation.last_message_at = message.provider_timestamp
 		conversation.save(ignore_permissions=True)
 	if enqueue_delivery:
 		_enqueue_message_delivery(message.name)
-	message_payload = message.as_dict()
-	message_payload["sender_name"] = (
+	message_payload = _message_response(message)
+	if not batch_context:
+		publish_invalidation("whatsapp_core_message")
+	return message_payload
+
+
+def _message_by_client_id(
+	local_id: str,
+	*,
+	channel: str,
+	for_update: bool = False,
+):
+	# Delivery replaces the provisional provider_message_id with Meta's wamid.
+	# The channel-scoped idempotency key remains immutable for the lifetime of
+	# the row, so it is the authoritative replay lookup before and after send.
+	idempotency_key = hashlib.sha256(f"{channel}:{local_id}".encode()).hexdigest()
+	message_name = frappe.db.get_value(
+		"WhatsApp Core Message",
+		{"idempotency_key": idempotency_key},
+		"name",
+		for_update=for_update,
+	)
+	return frappe.get_doc("WhatsApp Core Message", message_name) if message_name else None
+
+
+def _validated_message_replay(
+	message,
+	*,
+	conversation,
+	message_type: str,
+	body: str,
+	content: dict,
+) -> dict:
+	"""Return an exact idempotent replay and reject client-ID reuse."""
+	if (
+		message.direction != "Outbound"
+		or message.conversation != conversation.name
+		or message.channel != conversation.channel
+		or message.message_type != message_type
+		or (message.body or "") != (body or "")
+		or _json_dict(message.content) != content
+	):
+		frappe.throw(
+			"Client message ID is already assigned to a different outbound message",
+			frappe.ValidationError,
+		)
+	return _message_response(message)
+
+
+def _message_response(message) -> dict:
+	payload = message.as_dict()
+	payload["sender_name"] = (
 		frappe.db.get_value("User", message.owner, "full_name") or message.owner
 	)
-	if not batch_context:
-		frappe.publish_realtime(
-			"whatsapp_core_message",
-			{"conversation": conversation.name, "message": message_payload},
-			after_commit=True,
-		)
-	return message_payload
+	return payload
 
 
 def _client_uuid(client_message_id: str | None = None) -> uuid.UUID:
@@ -1201,22 +1644,28 @@ def _run_preflight_hooks(**context) -> None:
 			)
 
 
-def _approved_template(template: str):
+def _approved_template(template: str, *, channel: str | None = None):
 	template_name = str(template or "").strip()
 	if not template_name:
 		frappe.throw("Template is required")
-	record_name = (
-		template_name
-		if frappe.db.exists("WhatsApp Core Template", template_name)
-		else frappe.db.get_value(
-			"WhatsApp Core Template",
-			{"template_name": template_name, "enabled": 1},
-			"name",
+	record_name = template_name if frappe.db.exists("WhatsApp Core Template", template_name) else None
+	if not record_name:
+		filters = {"template_name": template_name, "enabled": 1}
+		if channel:
+			filters["channel"] = channel
+		matches = frappe.get_all(
+			"WhatsApp Core Template", filters=filters, pluck="name", limit_page_length=2
 		)
-	)
+		if len(matches) > 1:
+			frappe.throw("Template name is ambiguous; select its account-scoped record")
+		record_name = matches[0] if matches else None
 	if not record_name:
 		frappe.throw("Template is not assigned to this site")
 	doc = frappe.get_doc("WhatsApp Core Template", record_name)
+	if not doc.account_name or not doc.channel:
+		frappe.throw("Template has no verified WhatsApp account assignment")
+	if channel and doc.channel != channel:
+		frappe.throw("Template is assigned to a different WhatsApp account")
 	if not doc.enabled:
 		frappe.throw("Template is disabled for this site")
 	if doc.approval_status != "APPROVED":
@@ -1231,14 +1680,54 @@ def _message_payload(
 	recipient_type: str = "individual",
 ) -> dict:
 	content = _json_dict(message.content)
+	direct_send_category = _direct_send_category(content.get("direct_send_category"))
+	direct_send_type_allowed = message.message_type == "text" or (
+		message.message_type == "interactive" and direct_send_category == "utility"
+	)
+	if direct_send_category and (not direct_send_type_allowed or recipient_type != "individual"):
+		frappe.throw("Invalid durable Meta Direct Send message", frappe.ValidationError)
+	if (
+		direct_send_category == "authentication"
+		and is_business_scoped_user_id(recipient)
+	):
+		frappe.throw(
+			"Authentication Direct Send requires a recipient phone number",
+			frappe.ValidationError,
+		)
 	payload = {
 		"messaging_product": "whatsapp",
 		"recipient_type": recipient_type,
-		"to": recipient,
 		"type": message.message_type,
 	}
+	if recipient_type == "individual" and is_business_scoped_user_id(recipient):
+		payload["recipient"] = normalize_business_scoped_user_id(recipient)
+	else:
+		payload["to"] = recipient
+	if direct_send_category:
+		payload["category"] = direct_send_category
+		ttl_seconds = _direct_send_ttl_seconds(
+			content.get("direct_send_ttl_seconds"),
+			direct_send_category,
+		)
+		if ttl_seconds is not None:
+			payload["ttl_seconds"] = ttl_seconds
+		template_name = _direct_send_template_name(
+			content.get("direct_send_template_name"),
+			direct_send_category,
+		)
+		if template_name:
+			payload["direct_send_config"] = {"template_name": template_name}
 	if message.message_type == "text":
+		if direct_send_category and (
+			content.get("preview_url") or content.get("context_message_id")
+		):
+			frappe.throw(
+				"Direct Send text does not support previews or reply context",
+				frappe.ValidationError,
+			)
 		payload["text"] = {"body": message.body}
+		if content.get("preview_url") is not None:
+			payload["text"]["preview_url"] = bool(content["preview_url"])
 		if content.get("context_message_id"):
 			payload["context"] = {"message_id": content["context_message_id"]}
 	elif message.message_type == "template":
@@ -1248,9 +1737,17 @@ def _message_payload(
 		}
 		if content.get("components"):
 			payload["template"]["components"] = content["components"]
+		for field, value in (content.get("marketing_options") or {}).items():
+			if field not in {"product_policy", "message_activity_sharing"}:
+				frappe.throw("Unsupported Marketing Messages option", frappe.ValidationError)
+			payload[field] = deepcopy(value)
 	elif message.message_type == "interactive":
 		if content.get("payload"):
 			rich_payload = deepcopy(content["payload"])
+			if direct_send_category:
+				rich_payload = _validate_direct_send_interactive(
+					_validate_rich_payload("interactive", rich_payload)
+				)
 			context_message_id = rich_payload.pop("context_message_id", None)
 			payload["interactive"] = rich_payload
 			if context_message_id:
@@ -1275,6 +1772,82 @@ def _message_payload(
 	else:
 		frappe.throw(f"Unsupported outbound message type: {message.message_type}")
 	return payload
+
+
+def _transport_endpoint(value) -> str:
+	endpoint = str(value or "messages").strip().lower().strip("/")
+	if endpoint not in {"messages", "marketing_messages"}:
+		frappe.throw("Unsupported Meta transport endpoint", frappe.ValidationError)
+	return endpoint
+
+
+def _direct_send_category(value, *, required=False) -> str:
+	category = str(value or "").strip().lower()
+	if not category and not required:
+		return ""
+	if category not in {"utility", "authentication"}:
+		frappe.throw(
+			"Meta Direct Send category must be utility or authentication",
+			frappe.ValidationError,
+		)
+	return category
+
+
+def _direct_send_ttl_seconds(value, category: str) -> int | None:
+	if value in (None, ""):
+		return None
+	if isinstance(value, bool) or not str(value).strip().isdigit():
+		frappe.throw("Direct Send TTL must be an integer number of seconds", frappe.ValidationError)
+	ttl_seconds = int(value)
+	maximum = 900 if category == "authentication" else 43200
+	if not 30 <= ttl_seconds <= maximum:
+		frappe.throw(
+			f"{category.title()} Direct Send TTL must be between 30 and {maximum} seconds",
+			frappe.ValidationError,
+		)
+	return ttl_seconds
+
+
+def _direct_send_template_name(value, category: str) -> str:
+	template_name = str(value or "").strip()
+	if not template_name:
+		return ""
+	if category != "utility":
+		frappe.throw(
+			"Business-named Direct Send templates support utility messages only",
+			frappe.ValidationError,
+		)
+	if len(template_name) > 512 or not re.fullmatch(r"[a-z0-9_]+", template_name):
+		frappe.throw(
+			"Direct Send template name must contain only lowercase letters, numbers, and underscores (maximum 512 characters)",
+			frappe.ValidationError,
+		)
+	return template_name
+
+
+def _message_transport_endpoint(message) -> str:
+	return _transport_endpoint(_json_dict(message.content).get("transport_endpoint"))
+
+
+def _template_requires_phone(content: dict) -> bool:
+	template_record = str(content.get("template_record") or "").strip()
+	if not template_record:
+		return False
+	category = frappe.db.get_value("WhatsApp Core Template", template_record, "category")
+	return str(category or "").upper() == "AUTHENTICATION"
+
+
+def _message_requires_phone(message) -> bool:
+	return _content_requires_phone(message.message_type, _json_dict(message.content))
+
+
+def _content_requires_phone(message_type: str, content: dict) -> bool:
+	return (
+		message_type == "template" and _template_requires_phone(content)
+	) or (
+		_direct_send_category(content.get("direct_send_category"))
+		== "authentication"
+	)
 
 
 def _local_media_file(file_url: str, message_type: str):
@@ -1357,7 +1930,7 @@ def _validate_rich_payload(message_type: str, payload: dict) -> dict:
 	elif message_type == "interactive":
 		interactive_type = str(result.get("type") or "").strip()
 		if interactive_type not in {
-			"button", "list", "product", "product_list", "catalog_message",
+			"button", "cta_url", "list", "product", "product_list", "catalog_message",
 			"flow", "location_request_message", "address_message", "order_details",
 			"order_status",
 		}:
@@ -1365,6 +1938,196 @@ def _validate_rich_payload(message_type: str, payload: dict) -> dict:
 		if not isinstance(result.get("action"), dict):
 			frappe.throw("Interactive message requires an action object", frappe.ValidationError)
 	return result
+
+
+def _validate_direct_send_interactive(payload: dict) -> dict:
+	"""Validate the currently documented Direct Send interactive subset.
+
+	This deliberately accepts only the established Cloud API CTA URL and reply
+	button wire shapes. Direct Send's newer mixed-button samples are not exposed
+	until Meta publishes an unambiguous request schema.
+	"""
+	_allowed_keys(payload, {"type", "header", "body", "footer", "action"}, "interactive")
+	interactive_type = str(payload.get("type") or "")
+	if interactive_type not in {"cta_url", "button"}:
+		frappe.throw(
+			"Direct Send interactive type must be cta_url or button",
+			frappe.ValidationError,
+		)
+	_validate_direct_send_text_object(payload.get("body"), "body", maximum=1024, required=True)
+	if payload.get("footer") is not None:
+		_validate_direct_send_text_object(payload["footer"], "footer", maximum=60, required=True)
+	if payload.get("header") is not None:
+		_validate_direct_send_header(payload["header"])
+	action = payload.get("action")
+	if not isinstance(action, dict):
+		frappe.throw("Direct Send interactive action must be an object", frappe.ValidationError)
+	if interactive_type == "cta_url":
+		_validate_direct_send_cta_action(action)
+	else:
+		_validate_direct_send_reply_action(action)
+	return payload
+
+
+def _validate_direct_send_text_object(
+	value, label: str, *, maximum: int, required: bool
+) -> None:
+	if not isinstance(value, dict):
+		frappe.throw(f"Direct Send {label} must be an object", frappe.ValidationError)
+	_allowed_keys(value, {"text"}, label)
+	text = value.get("text")
+	if (
+		not isinstance(text, str)
+		or text != text.strip()
+		or (required and not text)
+		or len(text) > maximum
+	):
+		frappe.throw(
+			f"Direct Send {label} text must contain 1 to {maximum} characters",
+			frappe.ValidationError,
+		)
+
+
+def _validate_direct_send_header(header) -> None:
+	if not isinstance(header, dict):
+		frappe.throw("Direct Send header must be an object", frappe.ValidationError)
+	header_type = str(header.get("type") or "")
+	if header_type == "text":
+		_allowed_keys(header, {"type", "text"}, "header")
+		text = header.get("text")
+		if not isinstance(text, str) or text != text.strip() or not text or len(text) > 60:
+			frappe.throw(
+				"Direct Send header text must contain 1 to 60 characters",
+				frappe.ValidationError,
+			)
+		return
+	if header_type not in {"image", "video", "document"}:
+		frappe.throw(
+			"Direct Send header type must be text, image, video, or document",
+			frappe.ValidationError,
+		)
+	_allowed_keys(header, {"type", header_type}, "header")
+	media = header.get(header_type)
+	if not isinstance(media, dict):
+		frappe.throw(f"Direct Send {header_type} header is required", frappe.ValidationError)
+	allowed = {"id", "link", "filename"} if header_type == "document" else {"id", "link"}
+	_allowed_keys(media, allowed, f"{header_type} header")
+	for field in set(media) & {"id", "link", "filename"}:
+		value = media[field]
+		if not isinstance(value, str) or value != value.strip():
+			frappe.throw(
+				f"Direct Send {header_type} header {field} must be an exact string",
+				frappe.ValidationError,
+			)
+	sources = [key for key in ("id", "link") if media.get(key)]
+	if not sources:
+		frappe.throw(
+			f"Direct Send {header_type} header requires a media id or link",
+			frappe.ValidationError,
+		)
+	if "link" in sources:
+		_validate_direct_send_url(media["link"], label=f"{header_type} header link")
+	if len(str(media.get("id") or "")) > 512:
+		frappe.throw("Direct Send media id is too long", frappe.ValidationError)
+	if len(str(media.get("filename") or "")) > 240:
+		frappe.throw("Direct Send document filename is too long", frappe.ValidationError)
+
+
+def _validate_direct_send_cta_action(action: dict) -> None:
+	_allowed_keys(action, {"name", "parameters"}, "CTA action")
+	if action.get("name") != "cta_url":
+		frappe.throw("Direct Send CTA action.name must be cta_url", frappe.ValidationError)
+	parameters = action.get("parameters")
+	if not isinstance(parameters, dict):
+		frappe.throw("Direct Send CTA parameters must be an object", frappe.ValidationError)
+	_allowed_keys(parameters, {"display_text", "url"}, "CTA parameters")
+	display_text = parameters.get("display_text")
+	if (
+		not isinstance(display_text, str)
+		or display_text != display_text.strip()
+		or not display_text
+		or len(display_text) > 20
+	):
+		frappe.throw(
+			"Direct Send CTA display text must contain 1 to 20 characters",
+			frappe.ValidationError,
+		)
+	_validate_direct_send_url(parameters.get("url"), label="CTA URL")
+
+
+def _validate_direct_send_reply_action(action: dict) -> None:
+	_allowed_keys(action, {"buttons"}, "reply action")
+	buttons = action.get("buttons")
+	if not isinstance(buttons, list) or not 1 <= len(buttons) <= 3:
+		frappe.throw("Direct Send reply messages require 1 to 3 buttons", frappe.ValidationError)
+	identifiers = set()
+	titles = set()
+	for button in buttons:
+		if not isinstance(button, dict):
+			frappe.throw("Direct Send reply button must be an object", frappe.ValidationError)
+		_allowed_keys(button, {"type", "reply"}, "reply button")
+		if button.get("type") != "reply":
+			frappe.throw("Direct Send button type must be reply", frappe.ValidationError)
+		reply = button.get("reply")
+		if not isinstance(reply, dict):
+			frappe.throw("Direct Send button.reply must be an object", frappe.ValidationError)
+		_allowed_keys(reply, {"id", "title"}, "button.reply")
+		identifier = reply.get("id")
+		title = reply.get("title")
+		if (
+			not isinstance(identifier, str)
+			or identifier != identifier.strip()
+			or not identifier
+			or len(identifier) > 256
+		):
+			frappe.throw("Direct Send reply id must contain 1 to 256 characters", frappe.ValidationError)
+		if identifier in identifiers:
+			frappe.throw("Direct Send reply ids must be unique", frappe.ValidationError)
+		identifiers.add(identifier)
+		if (
+			not isinstance(title, str)
+			or title != title.strip()
+			or not title
+			or len(title) > 20
+		):
+			frappe.throw("Direct Send reply title must contain 1 to 20 characters", frappe.ValidationError)
+		if title in titles:
+			frappe.throw("Direct Send reply titles must be unique", frappe.ValidationError)
+		titles.add(title)
+
+
+def _validate_direct_send_url(value, *, label: str) -> None:
+	if not isinstance(value, str) or value != value.strip():
+		frappe.throw(f"{label} must be an exact string", frappe.ValidationError)
+	url = value
+	if len(url) > 2000:
+		frappe.throw(f"{label} is too long", frappe.ValidationError)
+	parsed = urlsplit(url)
+	try:
+		parsed.port
+	except ValueError:
+		frappe.throw(f"{label} contains an invalid port", frappe.ValidationError)
+	if (
+		parsed.scheme != "https"
+		or not parsed.hostname
+		or parsed.username
+		or parsed.password
+	):
+		frappe.throw(f"{label} must be an absolute HTTPS URL", frappe.ValidationError)
+	try:
+		ipaddress.ip_address(parsed.hostname)
+	except ValueError:
+		return
+	frappe.throw(f"{label} cannot use an IP-address host", frappe.ValidationError)
+
+
+def _allowed_keys(value: dict, allowed: set[str], label: str) -> None:
+	unknown = set(value) - allowed
+	if unknown:
+		frappe.throw(
+			f"Unsupported Direct Send {label} field: {sorted(unknown)[0]}",
+			frappe.ValidationError,
+		)
 
 
 def _provider_context_id(value, *, required: bool = False) -> str:
@@ -1402,6 +2165,9 @@ def _mark_sent(message, provider_message_id: str | None) -> None:
 	# Updating the Document loaded before that network call would then either
 	# raise MariaDB 1020 (stale row) or regress Delivered/Read back to Sent.
 	# Keep this as one atomic, monotonic update against the current database row.
+	previous_status = frappe.db.get_value(
+		"WhatsApp Core Message", message.name, "delivery_status"
+	)
 	frappe.db.sql(
 		"""
 		UPDATE `tabWhatsApp Core Message`
@@ -1433,6 +2199,11 @@ def _mark_sent(message, provider_message_id: str | None) -> None:
 	)
 	if not current:
 		return
+	if current.delivery_status != previous_status:
+		enqueue_delivery_status_handlers({
+			"message_name": message.name,
+			"delivery_status": current.delivery_status,
+		})
 	if provider_message_id:
 		# Direct sends and durable relay-result callbacks share the same provider
 		# race. Wake receipts that arrived before this id was persisted.
@@ -1477,6 +2248,9 @@ def _mark_failed(message, failure: dict) -> None:
 		ensure_ascii=False,
 	)
 	# A late send failure cannot undo an already delivered/read receipt.
+	previous_status = frappe.db.get_value(
+		"WhatsApp Core Message", message.name, "delivery_status"
+	)
 	frappe.db.sql(
 		"""
 		UPDATE `tabWhatsApp Core Message`
@@ -1503,6 +2277,11 @@ def _mark_failed(message, failure: dict) -> None:
 	)
 	if not current:
 		return
+	if current.delivery_status != previous_status:
+		enqueue_delivery_status_handlers({
+			"message_name": message.name,
+			"delivery_status": current.delivery_status,
+		})
 	_reconcile_campaign_message(message.name)
 	_publish_status(current)
 
@@ -1519,16 +2298,7 @@ def _reconcile_campaign_message(message_name: str) -> None:
 
 
 def _publish_status(message) -> None:
-	frappe.publish_realtime(
-		"whatsapp_core_message_status",
-		{
-			"conversation": message.conversation,
-			"message": message.name,
-			"delivery_status": message.delivery_status,
-			"provider_message_id": message.provider_message_id,
-		},
-		after_commit=True,
-	)
+	publish_invalidation("whatsapp_core_message_status")
 
 
 def _json_dict(value) -> dict:

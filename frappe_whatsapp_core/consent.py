@@ -7,7 +7,9 @@ import json
 import frappe
 from frappe.utils import now_datetime
 
+from frappe_whatsapp_core.delivery import enqueue_delivery_status_handlers
 from frappe_whatsapp_core.flows import cancel_flow
+from frappe_whatsapp_core.realtime import publish_invalidation
 
 OPT_OUT_COMMANDS = {"stop", "/stop"}
 
@@ -78,6 +80,10 @@ def suppress_conversation(conversation_name: str, event_key: str) -> dict:
 				"user": frappe.session.user,
 			},
 		)
+		enqueue_delivery_status_handlers([
+			{"message_name": name, "delivery_status": "Failed"}
+			for name in queued_messages
+		])
 
 	skipped_recipients = frappe.get_all(
 		"WhatsApp Core Campaign Recipient",
@@ -103,15 +109,7 @@ def suppress_conversation(conversation_name: str, event_key: str) -> dict:
 			},
 		)
 
-	frappe.publish_realtime(
-		"whatsapp_core_consent",
-		{
-			"conversation": conversation.name,
-			"identity": identity.name,
-			"status": "Opted Out",
-		},
-		after_commit=True,
-	)
+	publish_invalidation("whatsapp_core_consent")
 	return {
 		"status": "blocked",
 		"identity": identity.name,

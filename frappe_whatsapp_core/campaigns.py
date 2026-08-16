@@ -11,6 +11,9 @@ from collections.abc import Iterable
 import frappe
 from frappe.utils import get_datetime, now_datetime
 
+from frappe_whatsapp_core.delivery import enqueue_delivery_status_handlers
+from frappe_whatsapp_core.realtime import publish_invalidation
+
 MAX_PREPARE_RECIPIENTS = 10_000
 DEFAULT_BATCH_SIZE = 40
 DIRTY_CAMPAIGNS_CACHE_KEY = "whatsapp_core_dirty_campaigns"
@@ -216,7 +219,7 @@ def launch_campaign(campaign_name: str) -> dict:
 		from frappe_whatsapp_core.outbound import freeze_campaign_template
 
 		campaign.template_snapshot = json.dumps(
-			freeze_campaign_template(campaign.template),
+			freeze_campaign_template(campaign.template, channel=campaign.channel),
 			separators=(",", ":"),
 			ensure_ascii=False,
 		)
@@ -305,6 +308,10 @@ def _cancel_campaign_once(campaign_name: str) -> dict:
 				}, separators=(",", ":")),
 			},
 		)
+		enqueue_delivery_status_handlers([
+			{"message_name": name, "delivery_status": "Failed"}
+			for name in message_names
+		])
 	frappe.db.set_value(
 		"WhatsApp Core Campaign Recipient",
 		{"campaign": campaign.name, "status": ["in", ["Prepared", "Queued"]]},
@@ -794,6 +801,12 @@ def _validate_campaign_definition(campaign) -> None:
 		)
 		enabled = bool(snapshot.get("enabled")) if snapshot else bool(template.enabled)
 		approval_status = snapshot.get("approval_status") if snapshot else template.approval_status
+		template_channel = snapshot.get("channel") if snapshot else template.channel
+		if not template_channel or template_channel != campaign.channel:
+			frappe.throw(
+				"Template is assigned to a different WhatsApp account",
+				frappe.ValidationError,
+			)
 		if not enabled:
 			frappe.throw(
 				"Template is disabled for this site in the Integration application",
@@ -1003,11 +1016,7 @@ def _publish_campaign(campaign, *, counts: dict | None = None) -> None:
 	else:
 		name = campaign.name
 		status = campaign.status
-	frappe.publish_realtime(
-		"whatsapp_core_campaign",
-		{"campaign": name, "status": status, "counts": counts or {}},
-		after_commit=True,
-	)
+	publish_invalidation("whatsapp_core_campaign")
 
 
 def _apply_campaign_count_deltas(campaign_name: str, deltas: dict[str, int]) -> None:

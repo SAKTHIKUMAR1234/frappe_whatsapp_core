@@ -8,6 +8,15 @@ CORE_ROLES = (
 	"WhatsApp Manager",
 )
 
+TRANSPORT_SERVICE_ROLE = "WhatsApp Core Transport Service"
+TEMPLATE_SERVICE_ROLE = "WhatsApp Core Template Service"
+FLOW_SERVICE_ROLE = "WhatsApp Core Flow Service"
+MACHINE_SERVICE_ROLES = (
+	TRANSPORT_SERVICE_ROLE,
+	TEMPLATE_SERVICE_ROLE,
+	FLOW_SERVICE_ROLE,
+)
+
 LEGACY_ROLE_MAP = {
 	"WhatsApp Core Admin": "WhatsApp Manager",
 	"WhatsApp Core Manager": "WhatsApp Manager",
@@ -25,6 +34,17 @@ def ensure_core_roles():
 				"doctype": "Role",
 				"role_name": role_name,
 				"desk_access": 1,
+				"is_custom": 0,
+			}
+		).insert(ignore_permissions=True)
+	for role_name in MACHINE_SERVICE_ROLES:
+		if frappe.db.exists("Role", role_name):
+			continue
+		frappe.get_doc(
+			{
+				"doctype": "Role",
+				"role_name": role_name,
+				"desk_access": 0,
 				"is_custom": 0,
 			}
 		).insert(ignore_permissions=True)

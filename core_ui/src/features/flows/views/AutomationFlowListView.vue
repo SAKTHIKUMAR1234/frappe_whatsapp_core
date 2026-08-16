@@ -5,6 +5,7 @@
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
 	import AppDialog from '@/components/AppDialog.vue'
+	import FlowTypeSwitch from '@/features/flows/components/FlowTypeSwitch.vue'
 	import InputText from 'primevue/inputtext'
 	import Skeleton from 'primevue/skeleton'
 	import Tag from 'primevue/tag'
@@ -94,6 +95,7 @@
 </script>
 
 <template>
+	<FlowTypeSwitch />
 	<div class="page-heading">
 		<div>
 			<div class="eyebrow">Visual automation</div>

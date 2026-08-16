@@ -17,6 +17,12 @@ function variableNumbers(text) {
 		.sort((left, right) => left - right)
 }
 
+function variableNames(text) {
+	return [...String(text || '').matchAll(/\{\{\s*([a-z][a-z0-9_]*)\s*\}\}/g)]
+		.map((match) => match[1])
+		.filter((value, index, values) => values.indexOf(value) === index)
+}
+
 export function templateParameterDescriptors(template) {
 	const descriptors = []
 	for (const [componentIndex, component] of parseComponents(template).entries()) {
@@ -35,10 +41,33 @@ export function templateParameterDescriptors(template) {
 				})
 				continue
 			}
+			const named =
+				String(template?.parameter_format || 'POSITIONAL').toUpperCase() === 'NAMED'
 			const examples =
 				componentType === 'HEADER'
 					? component?.example?.header_text || []
 					: component?.example?.body_text?.[0] || []
+			if (named) {
+				const namedExamples =
+					componentType === 'HEADER'
+						? component?.example?.header_text_named_params || []
+						: component?.example?.body_text_named_params || []
+				for (const parameterName of variableNames(component?.text)) {
+					const example = namedExamples.find(
+						(row) => String(row?.param_name || '') === parameterName,
+					)?.example
+					descriptors.push({
+						key: `${componentType}:${componentIndex}:${parameterName}`,
+						componentType,
+						componentIndex,
+						kind: 'text',
+						parameterName,
+						label: `${componentType === 'HEADER' ? 'Header' : 'Body'} value ${parameterName}`,
+						example: String(example || ''),
+					})
+				}
+				continue
+			}
 			for (const variable of variableNumbers(component?.text)) {
 				descriptors.push({
 					key: `${componentType}:${componentIndex}:${variable}`,
@@ -99,7 +128,11 @@ export function buildTemplateComponents(descriptors, values) {
 				[descriptor.parameterType]: media,
 			})
 		} else {
-			target.parameters.push({ type: 'text', text: raw })
+			target.parameters.push({
+				type: 'text',
+				text: raw,
+				...(descriptor.parameterName ? { parameter_name: descriptor.parameterName } : {}),
+			})
 		}
 	}
 	return [...grouped.values(), ...components]
@@ -111,7 +144,8 @@ export function templatePreview(template, descriptors, values) {
 		const value = String(
 			values?.[descriptor.key] || descriptor.example || `{{${descriptor.variable}}}`,
 		)
-		text = text.replace(new RegExp(`\\{\\{\\s*${descriptor.variable}\\s*\\}\\}`, 'g'), value)
+		const placeholder = descriptor.parameterName || descriptor.variable
+		text = text.replace(new RegExp(`\\{\\{\\s*${placeholder}\\s*\\}\\}`, 'g'), value)
 	}
 	return text
 }

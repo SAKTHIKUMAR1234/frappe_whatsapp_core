@@ -29,10 +29,12 @@ from frappe_whatsapp_core.permissions import (
 	CORE_APP_ROLES,
 	FLOW_BUILDER_ROLES,
 	require_core_access,
+	require_transport_access,
 	require_document_permission,
 	require_flow_builder_access,
 	require_system_manager,
 )
+from frappe_whatsapp_core.realtime import publish_invalidation
 from frappe_whatsapp_core.topics import unclassified_messages, upsert_topic
 from frappe_whatsapp_core.ai_summaries import (
 	get_identity_summary,
@@ -94,9 +96,143 @@ def bootstrap():
 @require_core_access(manage=True)
 def onboarding_status():
 	"""Return secret-free transport readiness for Integration activation."""
+	return _transport_status_payload()
+
+
+@frappe.whitelist()
+@require_transport_access(capability=None)
+def transport_identity():
+	"""Verify the least-privilege Integration identity without Desk access."""
+	from frappe_whatsapp_core.permissions import current_transport_capability
+
+	capability = current_transport_capability()
+	payload = {**_transport_status_payload(), "capability": capability}
+	if capability in {"template", "all"}:
+		settings = frappe.get_single("WhatsApp Core Settings")
+		payload["allowed_accounts"] = [
+			row.account_name
+			for row in settings.accounts
+			if row.template_service_user == frappe.session.user
+		]
+	return payload
+
+
+@frappe.whitelist(methods=["POST"])
+@require_system_manager()
+def provision_transport_credentials(
+	user_email: str,
+	rotate=0,
+	capability="all",
+	account_name=None,
+):
+	"""Create or explicitly rotate a dedicated Integration callback identity.
+
+	The API secret is returned once and must be stored in Integration's encrypted
+	Connected Site credential fields. Existing Desk/operator users are rejected so
+	the machine credential cannot inherit human privileges.
+	"""
+	from frappe.core.doctype.user.user import generate_keys
+	from frappe.utils import validate_email_address
+	from frappe_whatsapp_core.permissions import (
+		TRANSPORT_CAPABILITY_ROLES,
+		is_dedicated_transport_user,
+	)
+	from frappe_whatsapp_core.setup import ensure_core_roles
+
+	user_email = str(user_email or "").strip().lower()
+	if not validate_email_address(user_email):
+		frappe.throw("A valid dedicated transport email is required", frappe.ValidationError)
+	capability = str(capability or "all").strip().lower()
+	if capability == "all":
+		role_names = set(TRANSPORT_CAPABILITY_ROLES.values())
+	else:
+		role_name = TRANSPORT_CAPABILITY_ROLES.get(capability)
+		if not role_name:
+			frappe.throw("Capability must be all, ingress, template, or flow", frappe.ValidationError)
+		role_names = {role_name}
+	role_label = ", ".join(sorted(role_names))
+	bound_accounts = []
+	if capability in {"template", "all"}:
+		settings = frappe.get_single("WhatsApp Core Settings")
+		mapped_accounts = [
+			str(row.account_name or "").strip()
+			for row in settings.accounts
+			if row.account_name
+		]
+		requested_account = str(account_name or "").strip()
+		if requested_account and requested_account not in mapped_accounts:
+			frappe.throw(
+				"Core service credentials reference an unmapped account_name",
+				frappe.ValidationError,
+			)
+		if not mapped_accounts:
+			frappe.throw("Map at least one Hub account before provisioning Core service credentials")
+		if capability == "all":
+			bound_accounts = mapped_accounts
+		elif requested_account:
+			bound_accounts = [requested_account]
+		elif len(mapped_accounts) == 1:
+			bound_accounts = mapped_accounts
+		else:
+			frappe.throw(
+				"account_name is required when more than one Hub account is mapped",
+				frappe.ValidationError,
+			)
+	ensure_core_roles()
+	existing = frappe.db.exists("User", user_email)
+	if existing:
+		if not is_dedicated_transport_user(user_email, capability=capability):
+			frappe.throw(
+				"The existing user is not an enabled, service-only Website User with exactly "
+				f"the required transport role set ({role_label}). Human, Desk, role-profile, disabled, "
+				"or extra-role identities are never reused.",
+				frappe.ValidationError,
+			)
+		user = frappe.get_doc("User", user_email)
+		if user.api_key and not cint(rotate):
+			frappe.throw(
+				"Transport credentials already exist; confirm explicit rotation",
+				frappe.ValidationError,
+			)
+	else:
+		user = frappe.get_doc({
+			"doctype": "User",
+			"email": user_email,
+			"first_name": "WhatsApp Core Transport",
+			"enabled": 1,
+			"user_type": "Website User",
+			"send_welcome_email": 0,
+			"roles": [{"role": role} for role in sorted(role_names)],
+		}).insert(ignore_permissions=True)
+	if not is_dedicated_transport_user(user.name, capability=capability):
+		frappe.throw(
+			"Transport identity provisioning did not produce a least-privilege service user",
+			frappe.ValidationError,
+		)
+	if capability in {"template", "all"}:
+		for row in settings.accounts:
+			if row.account_name in bound_accounts:
+				row.template_service_user = user.name
+		settings.save(ignore_permissions=True)
+	credentials = generate_keys(user.name)
+	return {
+		"user": user.name,
+		"role": next(iter(role_names)) if len(role_names) == 1 else None,
+		"roles": sorted(role_names),
+		"capability": capability,
+		"account_name": bound_accounts[0] if len(bound_accounts) == 1 else None,
+		"allowed_accounts": bound_accounts,
+		"api_key": credentials["api_key"],
+		"api_secret": credentials["api_secret"],
+		"rotated": bool(existing),
+	}
+
+
+def _transport_status_payload():
 	settings = frappe.get_single("WhatsApp Core Settings")
 	return {
 		"site": frappe.local.site,
+		"service": "frappe_whatsapp_core_transport",
 		"transport": connection_status(),
 		"accounts": [
 			{
@@ -141,7 +277,7 @@ def new_conversation_options():
 		"channels": frappe.get_list(
 			"WhatsApp Core Channel",
 			filters={"enabled": 1},
-			fields=["name", "display_name", "phone_number_id"],
+			fields=["name", "display_name", "phone_number_id", "enabled"],
 			order_by="display_name asc",
 			limit_page_length=100,
 		),
@@ -158,6 +294,7 @@ def list_flows():
 		fields=[
 			"name",
 			"flow_key",
+			"flow_type",
 			"title",
 			"description",
 			"status",
@@ -204,6 +341,8 @@ def campaign_workspace():
 			filters={"enabled": 1},
 			fields=[
 				"name",
+				"account_name",
+				"channel",
 				"template_name",
 				"language_code",
 				"category",
@@ -384,18 +523,29 @@ def campaign_recipient_page(
 
 
 @frappe.whitelist()
-@require_core_access()
-def template_catalog():
+@require_core_access(manage=True)
+def template_catalog(start=0, limit=100):
+	"""Return the complete authoring catalog to Core management users only."""
+	start = max(0, int(start or 0))
+	limit = max(1, min(int(limit or 100), 500))
 	templates = frappe.get_list(
 		"WhatsApp Core Template",
 		fields=[
 			"name",
+			"account_name",
+			"channel",
 			"template_name",
 			"language_code",
 			"category",
 			"approval_status",
+			"status_reason",
+			"correct_category",
 			"enabled",
 			"hub_template_name",
+			"template_id",
+			"message_send_ttl_seconds",
+			"parameter_format",
+			"template_source",
 			"header_type",
 			"header_content",
 			"body_text",
@@ -404,17 +554,34 @@ def template_catalog():
 			"last_synced_at",
 		],
 		order_by="template_name asc",
-		limit_page_length=500,
+		limit_start=start,
+		limit_page_length=limit,
 	)
+	total = frappe.db.count("WhatsApp Core Template")
+	settings = frappe.get_single("WhatsApp Core Settings")
+	accounts = [
+		{
+			"account_name": row.account_name,
+			"channel": row.channel,
+			"display_name": frappe.db.get_value(
+				"WhatsApp Core Channel", row.channel, "display_name"
+			) or row.account_name,
+		}
+		for row in settings.accounts
+		if row.account_name and row.channel
+	]
 	return {
 		"templates": templates,
+		"total": total,
+		"loaded": start + len(templates),
+		"has_more": start + len(templates) < total,
+		"accounts": accounts,
 		"metrics": {
-			"approved": sum(
-				template.approval_status == "APPROVED" and template.enabled
-				for template in templates
+			"approved": frappe.db.count(
+				"WhatsApp Core Template", {"approval_status": "APPROVED", "enabled": 1}
 			),
-			"available": sum(bool(template.enabled) for template in templates),
-			"disabled": sum(not template.enabled for template in templates),
+			"available": frappe.db.count("WhatsApp Core Template", {"enabled": 1}),
+			"disabled": frappe.db.count("WhatsApp Core Template", {"enabled": 0}),
 		},
 	}
 
@@ -920,11 +1087,7 @@ def save_contact_source(source):
 		doc.insert()
 	else:
 		doc.save()
-	frappe.publish_realtime(
-		"whatsapp_core_contact_sources",
-		{"source": doc.name},
-		after_commit=True,
-	)
+	publish_invalidation("whatsapp_core_contact_sources")
 	return doc.as_dict()
 
 

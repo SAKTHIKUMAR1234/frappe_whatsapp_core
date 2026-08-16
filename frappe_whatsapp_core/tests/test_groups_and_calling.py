@@ -212,18 +212,28 @@ class TestGroupsAndCalling(FrappeTestCase):
 			),
 			"Active",
 		)
+		bsuid = "US.GroupReceipt1"
 		receipt = materialize_status(channel, {
 			"id": "WAMID-GROUP-1",
 			"status": "read",
 			"recipient_id": "GROUP-2",
 			"recipient_type": "group",
-			"participant_recipient_id": "919876543210",
+			"recipient_participant_user_id": bsuid,
+			"recipient_participant_parent_user_id": "US.ENT.GroupReceiptParent1",
 			"timestamp": "1785900001",
-		}, event=event)
+		}, event=event, contact={
+			"user_id": bsuid,
+			"parent_user_id": "US.ENT.GroupReceiptParent1",
+			"profile": {"username": "group_reader"},
+		})
 		self.assertEqual(receipt["kind"], "group_receipt")
 		self.assertEqual(
 			frappe.db.get_value("WhatsApp Core Group Receipt", receipt["name"], "status"),
 			"Read",
+		)
+		self.assertEqual(
+			frappe.db.get_value("WhatsApp Core Group Receipt", receipt["name"], "participant_id"),
+			bsuid,
 		)
 
 	def test_group_subject_labels_inbox_and_activity_exposes_provider_messages(self):
@@ -318,7 +328,7 @@ class TestGroupsAndCalling(FrappeTestCase):
 		materialize_call(event, channel, {
 			"id": "CALL-ARTIFACT-1",
 			"event": "call_recording_available",
-			"from_user_id": "BSUID-1",
+			"from_user_id": "US.CallArtifact1",
 			"call_recording": {"audio": {
 				"id": "MEDIA-AUDIO-1", "mime_type": "audio/ogg; codecs=opus",
 				"sha256": "audio-hash", "url": "https://example.test/audio",
@@ -333,7 +343,7 @@ class TestGroupsAndCalling(FrappeTestCase):
 			}},
 		})
 		call = frappe.get_doc("WhatsApp Core Call", "CALL-ARTIFACT-1")
-		self.assertEqual(call.remote_user_id, "BSUID-1")
+		self.assertEqual(call.remote_user_id, "US.CallArtifact1")
 		self.assertEqual(call.recording_media_id, "MEDIA-AUDIO-1")
 		self.assertEqual(call.transcript_media_id, "MEDIA-JSON-1")
 

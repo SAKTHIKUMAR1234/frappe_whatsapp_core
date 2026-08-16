@@ -7,14 +7,18 @@ import frappe
 from frappe.utils import now_datetime
 
 from frappe_whatsapp_core.campaigns import enqueue_campaign_refresh_for_messages
-from frappe_whatsapp_core.delivery import advance_delivery_status
+from frappe_whatsapp_core.delivery import (
+	advance_delivery_status,
+	enqueue_delivery_status_handlers,
+)
 from frappe_whatsapp_core.dispatcher import (
 	enqueue_waiting_status_events,
 	enqueue_event,
 	enqueue_event_batch,
 	process_event_batch,
 )
-from frappe_whatsapp_core.permissions import require_core_access
+from frappe_whatsapp_core.permissions import require_transport_access
+from frappe_whatsapp_core.realtime import publish_invalidation
 
 MAX_RECEIVE_BATCH_SIZE = 1000
 CONTROL_RESULT_PREFIXES = ("read:", "typing:")
@@ -57,7 +61,7 @@ def _provider_id_collision_failure(provider_message_id, owner, result):
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_transport_access()
 def receive():
 	"""Persist one event or a relay-provided batch before business processing."""
 	payload = frappe.request.get_json()
@@ -69,7 +73,7 @@ def receive():
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_transport_access()
 def receive_outbound_result(
 	idempotency_key,
 	status,
@@ -129,21 +133,12 @@ def _apply_outbound_result(
 	)
 	if message:
 		enqueue_campaign_refresh_for_messages([message.name])
-		frappe.publish_realtime(
-			"whatsapp_core_message_status",
-			{
-				"conversation": message.conversation,
-				"message": message.name,
-				"delivery_status": message.delivery_status,
-				"provider_message_id": message.provider_message_id,
-			},
-			after_commit=True,
-		)
+		publish_invalidation("whatsapp_core_message_status")
 	return result
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_transport_access()
 def receive_outbound_results(results):
 	"""Apply up to 100 durable relay results and notify the UI once."""
 	if isinstance(results, str):
@@ -181,44 +176,9 @@ def _receive_outbound_results_once(results):
 		for row in applied
 		if row.get("status") == "applied" and row.get("message")
 	))
-	message_rows = (
-		frappe.get_all(
-			"WhatsApp Core Message",
-			filters={"name": ["in", message_names]},
-			fields=[
-				"name",
-				"conversation",
-				"delivery_status",
-				"provider_message_id",
-			],
-			limit_page_length=len(message_names),
-		)
-		if message_names
-		else []
-	)
-	conversations = list(dict.fromkeys(row.conversation for row in message_rows))
 	if message_names:
 		enqueue_campaign_refresh_for_messages(message_names)
-		frappe.publish_realtime(
-			"whatsapp_core_batch_committed",
-			{
-				"event_count": len(message_names),
-				"completed": len(message_names),
-				"failed": 0,
-				"kinds": ["status"],
-				"conversations": conversations,
-				# Supplying bounded deltas lets every open inbox tab patch its
-				# selected thread in memory.  Omitting them invokes the rolling-
-				# deploy compatibility path, which reloads the whole inbox once per
-				# relay result batch and creates a large browser/server fan-out during
-				# campaigns.
-				"message_changes": [
-					{"status": "updated", "message": row}
-					for row in message_rows
-				],
-			},
-			after_commit=True,
-		)
+		publish_invalidation("whatsapp_core_batch_committed")
 	ignored = sum(row.get("status") == "ignored" for row in applied)
 	unchanged = sum(row.get("status") == "noop" for row in applied)
 	return {
@@ -375,6 +335,13 @@ def _apply_outbound_result_batch(results: list[dict]) -> list[dict]:
 			chunk_size=100,
 			update_modified=False,
 		)
+		enqueue_delivery_status_handlers([
+			{
+				"message_name": message_name,
+				"delivery_status": values["delivery_status"],
+			}
+			for message_name, values in updates.items()
+		])
 	for message_name in updates:
 		frappe.clear_document_cache("WhatsApp Core Message", message_name)
 	return [applied[index] for index in range(len(results))]

@@ -123,7 +123,7 @@
 			:publishing="flowBuilder.publishing.value"
 			:requesting="flowBuilder.requesting.value"
 			:can-manage="flowBuilder.flow.value.can_manage"
-			@back="router.push({ name: 'automation-flows' })"
+			@back="router.push({ name: 'flows', query: { flow_type: 'automation' } })"
 			@open-triggers="triggerDrawerVisible = true"
 			@save="flowBuilder.save()"
 			@validate="flowBuilder.validate"

@@ -7,3 +7,7 @@
 frappe_whatsapp_core.patches.v1_0.add_inbox_query_indexes
 frappe_whatsapp_core.patches.v1_0.add_read_projection_index
 frappe_whatsapp_core.patches.v1_0.add_message_read_ledger
+frappe_whatsapp_core.patches.v1_0.scope_template_catalog
+frappe_whatsapp_core.patches.v1_0.set_custom_flow_type
+frappe_whatsapp_core.patches.v1_0.backfill_identity_aliases
+frappe_whatsapp_core.patches.v1_0.bind_template_service_accounts

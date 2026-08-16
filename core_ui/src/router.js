@@ -51,13 +51,31 @@ const routes = [
 				path: 'flows',
 				name: 'flows',
 				meta: { module: 'flows' },
-				component: () => import('@/features/flows/views/FlowListView.vue'),
+				component: () => import('@/features/flows/views/FlowWorkspaceView.vue'),
 			},
 			{
-				path: 'flows/:flowName',
+				path: 'flows/automation',
+				name: 'automation-flows',
+				redirect: { name: 'flows', query: { flow_type: 'automation' } },
+			},
+			{
+				path: 'flows/automation/:flowName',
+				name: 'automation-flow-builder',
+				meta: { module: 'flows' },
+				component: () => import('@/features/flows/views/AutomationFlowBuilderView.vue'),
+			},
+			{
+				path: 'flows/meta/:flowName',
 				name: 'flow-builder',
 				meta: { module: 'flows' },
 				component: () => import('@/features/flows/views/FlowBuilderView.vue'),
+			},
+			{
+				path: 'flows/:flowName',
+				redirect: (to) => ({
+					name: 'flow-builder',
+					params: { flowName: to.params.flowName },
+				}),
 			},
 			{
 				path: 'groups',

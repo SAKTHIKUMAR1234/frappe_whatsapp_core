@@ -1249,10 +1249,7 @@
 			settings.value = { channels: options.channels || [] }
 			newChatContacts.value = options.contacts || []
 			newChat.value.channel = options.channels?.[0]?.name || ''
-			newChat.value.template =
-				options.templates.find(
-					(template) => template.enabled && template.approval_status === 'APPROVED',
-				)?.name || ''
+			syncNewChatTemplate()
 			newDialog.value = true
 		} catch (error) {
 			toast.add({
@@ -1264,7 +1261,21 @@
 		}
 	}
 
+	function syncNewChatTemplate() {
+		newChat.value.template =
+			catalog.value.templates.find(
+				(template) =>
+					template.channel === newChat.value.channel &&
+					template.enabled &&
+					template.approval_status === 'APPROVED',
+			)?.name || ''
+	}
+
 	function appendMessage(event) {
+		if (event?.changed) {
+			refreshCommittedBatch(event)
+			return
+		}
 		if (!event?.conversation || !event.message) return
 		if (event.message.message_type === 'reaction') {
 			applyReactionMessage(event.message)
@@ -1305,6 +1316,10 @@
 	}
 
 	function updateMessageStatus(event) {
+		if (event?.changed) {
+			refreshCommittedBatch(event)
+			return
+		}
 		if (event?.conversation !== selectedName.value || !detail.value) return
 		const message = detail.value.messages.find((item) => item.name === event.message)
 		if (message) {
@@ -1314,6 +1329,10 @@
 	}
 
 	function updateConversationReader(event) {
+		if (event?.changed) {
+			refreshCommittedBatch(event)
+			return
+		}
 		if (event?.conversation !== selectedName.value || !detail.value || !event.user) return
 		const previous = (detail.value.readers || []).find((reader) => reader.user === event.user)
 		const staleCursor = previous && compareCursorPosition(event, previous) < 0
@@ -1375,8 +1394,11 @@
 
 	function refreshCommittedBatch(event) {
 		pendingBatchEvents.push(event || {})
-		window.clearTimeout(batchRefreshTimer)
+		// Coalesce one bounded window without postponing refresh indefinitely
+		// while a high-volume account is receiving continuous events.
+		if (batchRefreshTimer !== null) return
 		batchRefreshTimer = window.setTimeout(async () => {
+			batchRefreshTimer = null
 			const shouldStickToBottom = atMessageBottom.value
 			const events = pendingBatchEvents.splice(0)
 			const changesByMessage = new Map()
@@ -1619,6 +1641,7 @@
 		clearTimeout(messageSearchTimer)
 		stopTypingSession()
 		window.clearTimeout(batchRefreshTimer)
+		batchRefreshTimer = null
 		discardPendingReadMessages()
 		pendingBatchEvents = []
 		unsubscribers.forEach((unsubscribe) => unsubscribe())
@@ -1901,6 +1924,7 @@
 						:options="settings.channels.filter((item) => item.enabled)"
 						option-label="display_name"
 						option-value="name"
+						@change="syncNewChatTemplate"
 				/></label>
 				<label
 					>Contact<ContactSelect
@@ -1922,7 +1946,10 @@
 						v-model="newChat.template"
 						:options="
 							catalog.templates.filter(
-								(item) => item.enabled && item.approval_status === 'APPROVED',
+								(item) =>
+									item.channel === newChat.channel &&
+									item.enabled &&
+									item.approval_status === 'APPROVED',
 							)
 						"
 						option-label="template_name"

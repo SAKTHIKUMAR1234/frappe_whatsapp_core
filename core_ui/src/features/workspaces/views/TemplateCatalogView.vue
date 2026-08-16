@@ -1,5 +1,5 @@
 <script setup>
-	import { onBeforeUnmount, onMounted, ref } from 'vue'
+	import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 	import Button from 'primevue/button'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
@@ -14,16 +14,22 @@
 	import { useSessionStore } from '@/stores/session'
 
 	const session = useSessionStore()
+	const canManage = computed(() => Boolean(session.boot?.can_manage))
 	let realtimeRefresh = null
 	let unsubscribeTemplate = null
 	let loadSequence = 0
 	const loading = ref(true)
 	const loadError = ref('')
+	const loadingMore = ref(false)
 	const editorVisible = ref(false)
 	const selectedTemplate = ref(null)
 	const catalog = ref({
 		templates: [],
+		accounts: [],
 		metrics: {},
+		total: 0,
+		loaded: 0,
+		has_more: false,
 	})
 
 	async function load({ silent = false } = {}) {
@@ -31,7 +37,10 @@
 		if (!silent) loading.value = true
 		if (!silent) loadError.value = ''
 		try {
-			const result = await call('frappe_whatsapp_core.frontend_api.template_catalog')
+			const result = await call('frappe_whatsapp_core.frontend_api.template_catalog', {
+				start: 0,
+				limit: 100,
+			})
 			if (request !== loadSequence) return
 			catalog.value = result
 		} catch (error) {
@@ -42,6 +51,25 @@
 		}
 	}
 
+	async function loadMore() {
+		if (!catalog.value.has_more || loadingMore.value) return
+		loadingMore.value = true
+		try {
+			const result = await call('frappe_whatsapp_core.frontend_api.template_catalog', {
+				start: catalog.value.loaded,
+				limit: 100,
+			})
+			catalog.value = {
+				...result,
+				templates: [...catalog.value.templates, ...result.templates],
+			}
+		} catch (error) {
+			loadError.value = errorMessage(error, 'Unable to load more templates.')
+		} finally {
+			loadingMore.value = false
+		}
+	}
+
 	function severity(status) {
 		if (status === 'APPROVED') return 'success'
 		if (status === 'REJECTED') return 'danger'
@@ -49,9 +77,21 @@
 		return 'secondary'
 	}
 
-	function openEditor(template = null) {
-		selectedTemplate.value = template
-		editorVisible.value = true
+	async function openEditor(template = null) {
+		if (!template?.name) {
+			selectedTemplate.value = null
+			editorVisible.value = true
+			return
+		}
+		try {
+			selectedTemplate.value = await call(
+				'frappe_whatsapp_core.template_catalog.get_template',
+				{ template_key: template.name },
+			)
+			editorVisible.value = true
+		} catch (error) {
+			loadError.value = errorMessage(error, 'Unable to read the complete template.')
+		}
 	}
 
 	function canEdit(template) {
@@ -85,7 +125,7 @@
 			<Button label="Refresh view" outlined @click="load">
 				<template #icon><RefreshCw :size="16" /></template>
 			</Button>
-			<Button label="Create template" @click="openEditor()">
+			<Button v-if="canManage" label="Create template" @click="openEditor()">
 				<template #icon><Plus :size="16" /></template>
 			</Button>
 		</div>
@@ -115,10 +155,14 @@
 		</section>
 
 		<section class="surface-card catalog-table">
+			<div class="catalog-summary">
+				<span>Showing {{ catalog.templates.length }} of {{ catalog.total || 0 }}</span>
+			</div>
 			<div v-if="loading" class="loading">
 				<Skeleton v-for="index in 5" :key="index" height="58px" />
 			</div>
 			<DataTable v-else :value="catalog.templates" striped-rows>
+				<Column field="account_name" header="Account" />
 				<Column header="Template">
 					<template #body="{ data }">
 						<div class="template-name">
@@ -141,11 +185,22 @@
 				</Column>
 				<Column header="Meta status">
 					<template #body="{ data }">
-						<Tag
-							:value="data.approval_status"
-							:severity="severity(data.approval_status)"
-							rounded
-						/>
+						<div class="status-copy">
+							<Tag
+								:value="data.approval_status"
+								:severity="severity(data.approval_status)"
+								rounded
+							/>
+							<small v-if="data.status_reason">{{ data.status_reason }}</small>
+							<small v-if="data.correct_category">
+								Suggested: {{ data.correct_category }}
+							</small>
+						</div>
+					</template>
+				</Column>
+				<Column header="TTL">
+					<template #body="{ data }">
+						{{ data.message_send_ttl_seconds || 'Meta default' }}
 					</template>
 				</Column>
 				<Column header="Availability">
@@ -157,7 +212,7 @@
 						/>
 					</template>
 				</Column>
-				<Column header="Actions">
+				<Column v-if="canManage" header="Actions">
 					<template #body="{ data }">
 						<Button v-if="canEdit(data)" label="Edit" text @click="openEditor(data)">
 							<template #icon><Pencil :size="15" /></template>
@@ -173,11 +228,21 @@
 					</div>
 				</template>
 			</DataTable>
+			<div v-if="catalog.has_more" class="load-more">
+				<Button
+					:label="loadingMore ? 'Loading…' : 'Load more templates'"
+					outlined
+					:disabled="loadingMore"
+					@click="loadMore"
+				/>
+			</div>
 		</section>
 	</template>
 	<TemplateEditorDialog
+		v-if="canManage"
 		v-model="editorVisible"
 		:template="selectedTemplate"
+		:accounts="catalog.accounts"
 		@saved="templateSaved"
 	/>
 </template>
@@ -226,6 +291,27 @@
 	.pending-copy {
 		color: var(--wa-muted);
 		font-size: 12px;
+	}
+
+	.catalog-summary,
+	.load-more {
+		display: flex;
+		justify-content: flex-end;
+		padding: 10px 4px;
+		color: var(--wa-muted);
+		font-size: 12px;
+	}
+
+	.status-copy {
+		display: grid;
+		justify-items: start;
+		gap: 5px;
+	}
+
+	.status-copy small {
+		max-width: 240px;
+		color: var(--wa-muted);
+		font-size: 11px;
 	}
 
 	.summary-grid article {

@@ -1,4 +1,5 @@
 import json
+import uuid
 from unittest.mock import patch
 
 import frappe
@@ -11,6 +12,7 @@ from frappe_whatsapp_core.legacy_compat import (
 	queue_template_by_phone,
 	queue_text_by_phone,
 )
+from frappe_whatsapp_core.template_catalog import scoped_template_key
 
 
 class TestLegacyCompatibility(FrappeTestCase):
@@ -27,6 +29,14 @@ class TestLegacyCompatibility(FrappeTestCase):
 			"phone_number_id": self.phone_number_id,
 			"enabled": 1,
 		}).insert(ignore_permissions=True)
+		self.account = f"compat-account-{suffix}"
+		settings = frappe.get_single("WhatsApp Core Settings")
+		settings.set("accounts", [{
+			"channel": self.channel.name,
+			"account_name": self.account,
+			"is_default": 1,
+		}])
+		settings.save(ignore_permissions=True)
 		self.phone = f"91{int(suffix, 36) % 10_000_000_000:010d}"
 
 	def test_text_creates_only_a_core_message(self):
@@ -48,7 +58,9 @@ class TestLegacyCompatibility(FrappeTestCase):
 		template_name = f"compat_{frappe.generate_hash(length=6).lower()}"
 		frappe.get_doc({
 			"doctype": "WhatsApp Core Template",
-			"template_key": f"compat:{template_name}:en",
+			"template_key": scoped_template_key(self.account, template_name, "en"),
+			"account_name": self.account,
+			"channel": self.channel.name,
 			"template_name": template_name,
 			"language_code": "en",
 			"approval_status": "APPROVED",
@@ -71,8 +83,145 @@ class TestLegacyCompatibility(FrappeTestCase):
 		self.assertEqual(message.body, "Hello Member")
 		self.assertEqual(
 			content["components"][0]["parameters"][0],
-			{"type": "text", "text": "Member"},
+				{"type": "text", "text": "Member"},
+			)
+
+	def test_template_retry_returns_existing_message_without_duplicate_delivery(self):
+		template_name = f"retry_{frappe.generate_hash(length=6).lower()}"
+		frappe.get_doc({
+			"doctype": "WhatsApp Core Template",
+			"template_key": scoped_template_key(self.account, template_name, "en"),
+			"account_name": self.account,
+			"channel": self.channel.name,
+			"template_name": template_name,
+			"language_code": "en",
+			"approval_status": "APPROVED",
+			"enabled": 1,
+			"body_text": "Retry hello {{1}}",
+		}).insert(ignore_permissions=True)
+		client_message_id = str(uuid.uuid4())
+		with (
+			patch("frappe_whatsapp_core.outbound.outbound_ready", return_value=True),
+			patch("frappe_whatsapp_core.outbound._enqueue_message_delivery") as enqueue,
+		):
+			first = queue_template_by_phone(
+				self.phone,
+				template_name,
+				variables={"body": ["Member"]},
+				phone_number_id=self.phone_number_id,
+				client_message_id=client_message_id,
+			)
+			replayed = queue_template_by_phone(
+				self.phone,
+				template_name,
+				variables={"body": ["Member"]},
+				phone_number_id=self.phone_number_id,
+				client_message_id=client_message_id,
+			)
+
+		self.assertEqual(replayed.name, first.name)
+		self.assertEqual(replayed.conversation, first.conversation)
+		self.assertEqual(replayed.provider_message_id, f"local:{client_message_id}")
+		self.assertIn("sender_name", replayed)
+		self.assertEqual(
+			frappe.db.count(
+				"WhatsApp Core Message",
+				{"provider_message_id": f"local:{client_message_id}"},
+			),
+			1,
 		)
+		enqueue.assert_called_once_with(first.name)
+
+	def test_client_message_id_reuse_with_changed_payload_or_type_fails_closed(self):
+		template_name = f"conflict_{frappe.generate_hash(length=6).lower()}"
+		frappe.get_doc({
+			"doctype": "WhatsApp Core Template",
+			"template_key": scoped_template_key(self.account, template_name, "en"),
+			"account_name": self.account,
+			"channel": self.channel.name,
+			"template_name": template_name,
+			"language_code": "en",
+			"approval_status": "APPROVED",
+			"enabled": 1,
+			"body_text": "Conflict hello {{1}}",
+		}).insert(ignore_permissions=True)
+		client_message_id = str(uuid.uuid4())
+		with patch("frappe_whatsapp_core.outbound.outbound_ready", return_value=True):
+			queue_template_by_phone(
+				self.phone,
+				template_name,
+				variables={"body": ["Original"]},
+				phone_number_id=self.phone_number_id,
+				client_message_id=client_message_id,
+				enqueue_delivery=False,
+			)
+			with self.assertRaises(frappe.ValidationError):
+				queue_template_by_phone(
+					self.phone,
+					template_name,
+					variables={"body": ["Changed"]},
+					phone_number_id=self.phone_number_id,
+					client_message_id=client_message_id,
+					enqueue_delivery=False,
+				)
+			with self.assertRaises(frappe.ValidationError):
+				queue_text_by_phone(
+					self.phone,
+					"Changed type",
+					phone_number_id=self.phone_number_id,
+					client_message_id=client_message_id,
+					enqueue_delivery=False,
+				)
+			with self.assertRaises(frappe.ValidationError):
+				queue_template_by_phone(
+					f"92{self.phone[2:]}",
+					template_name,
+					variables={"body": ["Original"]},
+					phone_number_id=self.phone_number_id,
+					client_message_id=client_message_id,
+					enqueue_delivery=False,
+				)
+
+	def test_duplicate_insert_race_returns_exact_existing_winner(self):
+		client_message_id = str(uuid.uuid4())
+		with (
+			patch("frappe_whatsapp_core.outbound.outbound_ready", return_value=True),
+			patch("frappe_whatsapp_core.outbound._within_service_window", return_value=True),
+		):
+			winner = queue_text_by_phone(
+				self.phone,
+				"Race-safe text",
+				phone_number_id=self.phone_number_id,
+				client_message_id=client_message_id,
+				enqueue_delivery=False,
+			)
+		winner_doc = frappe.get_doc("WhatsApp Core Message", winner.name)
+		with (
+			patch("frappe_whatsapp_core.outbound.outbound_ready", return_value=True),
+			patch("frappe_whatsapp_core.outbound._within_service_window", return_value=True),
+			patch(
+				"frappe_whatsapp_core.outbound._message_by_client_id",
+				side_effect=[None, winner_doc],
+			) as lookup,
+			patch(
+				"frappe.model.document.Document.insert",
+				side_effect=frappe.DuplicateEntryError("concurrent insert"),
+			),
+			patch("frappe_whatsapp_core.outbound._enqueue_message_delivery") as enqueue,
+		):
+			replayed = queue_text_by_phone(
+				self.phone,
+				"Race-safe text",
+				phone_number_id=self.phone_number_id,
+				client_message_id=client_message_id,
+			)
+
+		self.assertEqual(replayed.name, winner.name)
+		self.assertEqual(
+			lookup.call_args_list[-1].kwargs,
+			{"channel": self.channel.name, "for_update": True},
+		)
+		enqueue.assert_not_called()
 
 	def test_media_and_interactive_create_core_messages(self):
 		with (
@@ -104,7 +253,9 @@ class TestLegacyCompatibility(FrappeTestCase):
 		template_name = f"document_{frappe.generate_hash(length=6).lower()}"
 		frappe.get_doc({
 			"doctype": "WhatsApp Core Template",
-			"template_key": f"compat:{template_name}:en",
+			"template_key": scoped_template_key(self.account, template_name, "en"),
+			"account_name": self.account,
+			"channel": self.channel.name,
 			"template_name": template_name,
 			"language_code": "en",
 			"approval_status": "APPROVED",

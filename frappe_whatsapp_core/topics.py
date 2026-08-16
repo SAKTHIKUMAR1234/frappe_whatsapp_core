@@ -8,6 +8,8 @@ import uuid
 
 import frappe
 
+from frappe_whatsapp_core.realtime import publish_invalidation
+
 VALID_STATUSES = {"Open", "Waiting", "Resolved", "Archived"}
 VALID_SOURCES = {"Manual", "External AI", "Flow", "Import"}
 
@@ -63,11 +65,7 @@ def upsert_topic(
 	for message_name in message_names or []:
 		_assign_message(topic, message_name, source, topic.confidence)
 	_refresh_topic(topic)
-	frappe.publish_realtime(
-		"whatsapp_core_topic",
-		{"topic": topic.name, "conversation": topic.conversation, "status": topic.status},
-		after_commit=True,
-	)
+	publish_invalidation("whatsapp_core_topic")
 	return topic.as_dict()
 
 

@@ -8,6 +8,8 @@
 	"field_order": [
 		"identity_key",
 		"identity_type",
+		"identifier_type",
+		"identity_scope",
 		"normalized_value",
 		"display_value",
 		"provider",
@@ -33,11 +35,22 @@
 			"reqd": 1
 		},
 		{
+			"fieldname": "identifier_type",
+			"fieldtype": "Select",
+			"label": "WhatsApp Identifier Type",
+			"options": "Phone\nBSUID\nGroup"
+		},
+		{
+			"fieldname": "identity_scope",
+			"fieldtype": "Link",
+			"label": "WhatsApp Account Scope",
+			"options": "WhatsApp Core Channel"
+		},
+		{
 			"fieldname": "normalized_value",
 			"fieldtype": "Data",
 			"label": "Normalized Value",
 			"reqd": 1,
-			"unique": 1,
 			"in_list_view": 1
 		},
 		{

@@ -7,6 +7,9 @@ from frappe_whatsapp_core.flow_schema import validate_graph
 
 class WhatsAppCoreFlow(Document):
 	def validate(self):
+		self.flow_type = self.flow_type or "Custom Automation"
+		if self.flow_type != "Custom Automation":
+			frappe.throw("Core graph flows must use the Custom Automation type")
 		if self.draft_graph:
 			graph = frappe.parse_json(self.draft_graph)
 			errors = validate_graph(graph) + validate_registered_actions(graph)

@@ -37,6 +37,14 @@ class TestCampaigns(FrappeTestCase):
 			"phone_number_id": f"campaign-{suffix}",
 			"enabled": 1,
 		}).insert(ignore_permissions=True)
+		self.account = f"campaign-account-{suffix}"
+		settings = frappe.get_single("WhatsApp Core Settings")
+		settings.set("accounts", [{
+			"channel": self.channel.name,
+			"account_name": self.account,
+			"is_default": 1,
+		}])
+		settings.save(ignore_permissions=True)
 		self.identities = [
 			frappe.get_doc({
 				"doctype": "WhatsApp Core Identity",
@@ -50,6 +58,7 @@ class TestCampaigns(FrappeTestCase):
 			for index in range(2)
 		]
 		self.template = sync_template_projection({
+			"account_name": self.account,
 			"name": f"campaign_template_{suffix}",
 			"language": "en",
 			"status": "APPROVED",
@@ -76,13 +85,14 @@ class TestCampaigns(FrappeTestCase):
 	def test_template_projection_notifies_open_core_sessions(self):
 		with patch("frappe_whatsapp_core.template_catalog.frappe.publish_realtime") as publish:
 			result = sync_template_projection({
+				"account_name": self.account,
 				"name": f"realtime_{frappe.generate_hash(length=8).lower()}",
 				"language": "en",
 				"status": "APPROVED",
 			})
 		publish.assert_any_call(
 			"whatsapp_core_template",
-			{"template": result["name"]},
+			{"changed": True},
 			after_commit=True,
 		)
 
@@ -101,7 +111,7 @@ class TestCampaigns(FrappeTestCase):
 			)
 		publish.assert_called_with(
 			"whatsapp_core_campaign",
-			{"campaign": self.campaign.name, "status": "Prepared", "counts": {}},
+			{"changed": True},
 			after_commit=True,
 		)
 		self.assertEqual(summary["status"], "Prepared")

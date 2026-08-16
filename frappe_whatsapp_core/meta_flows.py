@@ -108,6 +108,10 @@ def flow_workspace(account_name: str | None = None) -> dict:
 		selected = _resolve_account_name(account_name)
 		context = _context(selected)
 		result = _call("meta_flows", "list_flows", {"waba_name": context["waba_name"]})
+		flows = result.get("data") or []
+		for flow in flows:
+			if isinstance(flow, dict):
+				flow["flow_type"] = "Meta Form"
 		return {
 			"configured": True,
 			"available": True,
@@ -115,7 +119,7 @@ def flow_workspace(account_name: str | None = None) -> dict:
 			"accounts": accounts,
 			"selected_account": selected,
 			"context": context,
-			"flows": result.get("data") or [],
+			"flows": flows,
 		}
 	except Exception as error:
 		return _workspace_failure(

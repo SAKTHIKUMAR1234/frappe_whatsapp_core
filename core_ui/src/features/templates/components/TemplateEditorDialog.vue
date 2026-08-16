@@ -2,61 +2,81 @@
 	import { computed, reactive, ref, watch } from 'vue'
 
 	import AppDialog from '@/components/AppDialog.vue'
+	import Select from 'primevue/select'
 	import { call, errorMessage } from '@/services/frappe'
+	import {
+		formatTemplateComponents,
+		templateForm,
+		templateRequest,
+	} from '@/features/templates/templateAuthoring'
 
 	const props = defineProps({
 		modelValue: { type: Boolean, default: false },
 		template: { type: Object, default: null },
+		accounts: { type: Array, default: () => [] },
 	})
 	const emit = defineEmits(['update:modelValue', 'saved'])
-	const saving = ref(false)
+	const savingAction = ref('')
 	const submitError = ref('')
 	const editing = computed(() => Boolean(props.template?.name))
-	const form = reactive({
-		template_name: '',
-		language_code: 'en',
-		category: 'UTILITY',
-		header_type: '',
-		header_content: '',
-		body_text: '',
-		footer_text: '',
-	})
+	const canSaveDraft = computed(
+		() => !editing.value || props.template?.approval_status === 'DRAFT',
+	)
+	const form = reactive(templateForm())
 
 	function reset() {
-		const row = props.template || {}
-		Object.assign(form, {
-			template_name: row.template_name || '',
-			language_code: row.language_code || 'en',
-			category: row.category || 'UTILITY',
-			header_type: row.header_type || '',
-			header_content: row.header_content || '',
-			body_text: row.body_text || '',
-			footer_text: row.footer_text || '',
-		})
-		submitError.value = ''
+		try {
+			Object.assign(form, templateForm(props.template || {}, props.accounts))
+			submitError.value = ''
+		} catch (error) {
+			submitError.value = `This stored template cannot be edited safely: ${error.message}`
+		}
 	}
 
-	async function submit() {
-		if (!form.template_name.trim() || !form.body_text.trim()) {
-			submitError.value = 'Template name and body are required.'
+	function formatComponents() {
+		try {
+			form.components_json = formatTemplateComponents(form.components_json)
+			submitError.value = ''
+		} catch (error) {
+			submitError.value = error.message
+		}
+	}
+
+	async function save(submit) {
+		let request
+		try {
+			request = templateRequest(form, {
+				templateKey: props.template?.name || null,
+				submit,
+			})
+		} catch (error) {
+			submitError.value = error.message
 			return
 		}
-		saving.value = true
+		savingAction.value = submit ? 'submit' : 'draft'
 		submitError.value = ''
 		try {
 			const result = await call(
 				'frappe_whatsapp_core.template_catalog.request_template_upsert',
-				{
-					template_key: props.template?.name || null,
-					template: { ...form },
-				},
+				request,
 			)
 			emit('saved', result)
+			if (!result?.success) {
+				submitError.value =
+					result?.error ||
+					'Meta did not accept this template. The Integration draft was preserved.'
+				return
+			}
 			emit('update:modelValue', false)
 		} catch (error) {
-			submitError.value = errorMessage(error, 'Unable to submit the template to Meta.')
+			submitError.value = errorMessage(
+				error,
+				submit
+					? 'Meta did not accept this template.'
+					: 'Unable to save the template draft.',
+			)
 		} finally {
-			saving.value = false
+			savingAction.value = ''
 		}
 	}
 
@@ -72,17 +92,39 @@
 <template>
 	<AppDialog
 		:model-value="modelValue"
-		:header="editing ? 'Edit template' : 'Create template'"
+		:header="editing ? 'Edit complete template' : 'Create complete template'"
 		@update:model-value="emit('update:modelValue', $event)"
 	>
-		<form class="template-editor" @submit.prevent="submit">
+		<form class="template-editor" @submit.prevent="save(true)">
+			<div v-if="editing" class="status-panel">
+				<div>
+					<strong>{{ template.approval_status }}</strong>
+					<span>Current Integration / Meta status</span>
+				</div>
+				<p v-if="template.status_reason">{{ template.status_reason }}</p>
+				<p v-if="template.correct_category">
+					Meta suggested category: {{ template.correct_category }}
+				</p>
+			</div>
 			<div class="field-grid">
+				<label>
+					<span>WhatsApp account</span>
+					<Select
+						v-model="form.account_name"
+						:options="accounts"
+						option-label="display_name"
+						option-value="account_name"
+						:disabled="editing"
+						placeholder="Select an account"
+					/>
+				</label>
 				<label>
 					<span>Template name</span>
 					<input
 						v-model="form.template_name"
 						type="text"
 						maxlength="512"
+						pattern="[a-z0-9_]+"
 						placeholder="order_update"
 						:disabled="editing"
 						required
@@ -108,35 +150,43 @@
 					</select>
 				</label>
 				<label>
-					<span>Header</span>
-					<select v-model="form.header_type">
-						<option value="">No header</option>
-						<option value="TEXT">Text</option>
-						<option value="IMAGE">Image</option>
-						<option value="VIDEO">Video</option>
-						<option value="DOCUMENT">Document</option>
-						<option value="LOCATION">Location</option>
+					<span>Message send TTL (optional seconds)</span>
+					<input
+						v-model="form.message_send_ttl_seconds"
+						type="number"
+						min="1"
+						step="1"
+						placeholder="Meta default"
+					/>
+				</label>
+				<label>
+					<span>Parameter format</span>
+					<select v-model="form.parameter_format">
+						<option value="POSITIONAL">Positional variables</option>
+						<option value="NAMED">Named variables</option>
 					</select>
 				</label>
 			</div>
-			<label v-if="form.header_type === 'TEXT'">
-				<span>Header text</span>
-				<input v-model="form.header_content" type="text" maxlength="1024" />
-			</label>
-			<label>
-				<span>Body</span>
+			<label class="components-field">
+				<span>Complete Meta components document</span>
 				<textarea
-					v-model="form.body_text"
-					rows="7"
-					maxlength="4096"
-					placeholder="Use {{1}}, {{2}} for variables."
+					v-model="form.components_json"
+					rows="18"
+					spellcheck="false"
+					placeholder='[{"type":"BODY","text":"Your order {{1}} is ready"}]'
 					required
 				/>
+				<small>
+					This canonical array is preserved end-to-end. It supports text/media headers,
+					examples, quick replies, URL/phone/OTP/Flow/catalog buttons, authentication,
+					carousel cards and forward-compatible Meta component fields.
+				</small>
 			</label>
-			<label>
-				<span>Footer</span>
-				<input v-model="form.footer_text" type="text" maxlength="1024" />
-			</label>
+			<div class="component-actions">
+				<button type="button" class="secondary compact" @click="formatComponents">
+					Validate and format JSON
+				</button>
+			</div>
 			<p v-if="submitError" class="form-error" role="alert">{{ submitError }}</p>
 		</form>
 		<template #footer>
@@ -144,13 +194,27 @@
 				<button
 					type="button"
 					class="secondary"
-					:disabled="saving"
+					:disabled="Boolean(savingAction)"
 					@click="emit('update:modelValue', false)"
 				>
 					Cancel
 				</button>
-				<button type="button" class="primary" :disabled="saving" @click="submit">
-					{{ saving ? 'Submitting…' : 'Submit to Meta' }}
+				<button
+					v-if="canSaveDraft"
+					type="button"
+					class="secondary"
+					:disabled="Boolean(savingAction)"
+					@click="save(false)"
+				>
+					{{ savingAction === 'draft' ? 'Saving…' : 'Save draft' }}
+				</button>
+				<button
+					type="button"
+					class="primary"
+					:disabled="Boolean(savingAction)"
+					@click="save(true)"
+				>
+					{{ savingAction === 'submit' ? 'Submitting…' : 'Submit to Meta' }}
 				</button>
 			</div>
 		</template>
@@ -174,7 +238,8 @@
 		gap: 14px;
 	}
 
-	label span {
+	label span,
+	.status-panel span {
 		color: var(--wa-muted);
 		font-size: 12px;
 		font-weight: 650;
@@ -195,8 +260,11 @@
 	}
 
 	textarea {
-		min-height: 132px;
+		min-height: 270px;
 		resize: vertical;
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+		font-size: 12px;
+		line-height: 1.55;
 	}
 
 	input:focus,
@@ -212,6 +280,27 @@
 		background: var(--wa-surface-soft);
 	}
 
+	.status-panel {
+		display: grid;
+		gap: 7px;
+		padding: 12px;
+		border: 1px solid var(--wa-border);
+		border-radius: 10px;
+		background: var(--wa-surface-soft);
+	}
+
+	.status-panel strong,
+	.status-panel span {
+		display: block;
+	}
+
+	.status-panel p,
+	.components-field small {
+		margin: 0;
+		color: var(--wa-muted);
+		font-size: 12px;
+	}
+
 	.form-error {
 		margin: 0;
 		padding: 10px 12px;
@@ -221,13 +310,15 @@
 		font-size: 12px;
 	}
 
+	.component-actions,
 	.dialog-actions {
 		display: flex;
 		justify-content: flex-end;
 		gap: 9px;
 	}
 
-	.dialog-actions button {
+	.dialog-actions button,
+	.component-actions button {
 		min-height: 44px;
 		padding: 0 16px;
 		border: 1px solid var(--wa-border);
@@ -237,18 +328,22 @@
 		cursor: pointer;
 	}
 
-	.dialog-actions .secondary {
+	.component-actions .compact {
+		min-height: 36px;
+	}
+
+	.secondary {
 		color: var(--wa-text);
 		background: var(--wa-surface);
 	}
 
-	.dialog-actions .primary {
+	.primary {
 		border-color: var(--wa-success);
 		color: white;
 		background: var(--wa-success);
 	}
 
-	.dialog-actions button:disabled {
+	button:disabled {
 		opacity: 0.6;
 		cursor: wait;
 	}

@@ -20,6 +20,7 @@ from frappe_whatsapp_core.outbound import (
 	queue_template_internal,
 	queue_text_internal,
 )
+from frappe_whatsapp_core.realtime import publish_invalidation
 
 
 def handle_core_event(payload, event) -> dict:
@@ -56,7 +57,7 @@ def handle_core_event(payload, event) -> dict:
 	)
 	for call in calls:
 		if not frappe.flags.whatsapp_core_batch_processing:
-			frappe.publish_realtime("whatsapp_core_call", call, after_commit=True)
+			publish_invalidation("whatsapp_core_call")
 	groups = frappe.get_all(
 		"WhatsApp Core Group",
 		filters={"relay_event": event.name},
@@ -68,17 +69,10 @@ def handle_core_event(payload, event) -> dict:
 	)
 	for group in groups:
 		if not frappe.flags.whatsapp_core_batch_processing:
-			frappe.publish_realtime("whatsapp_core_group", group, after_commit=True)
+			publish_invalidation("whatsapp_core_group")
 	for message in messages:
 		if not frappe.flags.whatsapp_core_batch_processing:
-			frappe.publish_realtime(
-				"whatsapp_core_message",
-				{
-					"conversation": message.conversation,
-					"message": message,
-				},
-				after_commit=True,
-			)
+			publish_invalidation("whatsapp_core_message")
 		flow_event = _flow_event(message)
 		response_doc = (
 			record_meta_submission(message, event, flow_event)
@@ -178,6 +172,7 @@ def _dispatch_commands(
 	commands: list[dict],
 ) -> list[dict]:
 	results = []
+	channel = frappe.db.get_value("WhatsApp Core Conversation", conversation, "channel")
 	for command in commands:
 		command_type = command.get("type")
 		if command_type not in {
@@ -189,7 +184,7 @@ def _dispatch_commands(
 			"ask_input",
 		}:
 			continue
-		if not outbound_ready():
+		if not outbound_ready(channel):
 			results.append({
 				"type": command_type,
 				"status": "blocked",

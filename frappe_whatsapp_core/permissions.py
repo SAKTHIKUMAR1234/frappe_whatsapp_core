@@ -26,6 +26,18 @@ CORE_MANAGEMENT_ROLES = {
 	"WhatsApp Manager",
 }
 
+# Machine-to-machine ingress is deliberately separate from every Desk role.
+# Integration/relay credentials must never inherit operator or configuration
+# permissions merely to deliver signed, durable events into Core.
+TRANSPORT_SERVICE_ROLE = "WhatsApp Core Transport Service"
+TEMPLATE_SERVICE_ROLE = "WhatsApp Core Template Service"
+FLOW_SERVICE_ROLE = "WhatsApp Core Flow Service"
+TRANSPORT_CAPABILITY_ROLES = {
+	"ingress": TRANSPORT_SERVICE_ROLE,
+	"template": TEMPLATE_SERVICE_ROLE,
+	"flow": FLOW_SERVICE_ROLE,
+}
+
 
 def _permission_user(user: str | None = None) -> str:
 	return user or frappe.session.user or "Guest"
@@ -148,7 +160,9 @@ def template_permission_query(user: str | None = None, **_kwargs) -> str:
 	if user == "Guest":
 		return "1 = 0"
 	return """`tabWhatsApp Core Template`.enabled = 1
-		AND `tabWhatsApp Core Template`.approval_status = 'APPROVED'"""
+		AND `tabWhatsApp Core Template`.approval_status = 'APPROVED'
+		AND COALESCE(`tabWhatsApp Core Template`.account_name, '') != ''
+		AND COALESCE(`tabWhatsApp Core Template`.channel, '') != ''"""
 
 
 def has_scoped_template_permission(doc, ptype="read", user=None, **_kwargs):
@@ -157,7 +171,12 @@ def has_scoped_template_permission(doc, ptype="read", user=None, **_kwargs):
 		return True
 	if ptype != "read" or user == "Guest":
 		return False
-	return bool(doc.get("enabled") and doc.get("approval_status") == "APPROVED")
+	return bool(
+		doc.get("enabled")
+		and doc.get("approval_status") == "APPROVED"
+		and doc.get("account_name")
+		and doc.get("channel")
+	)
 
 
 def has_scoped_team_permission(doc, ptype="read", user=None, **_kwargs):
@@ -286,6 +305,83 @@ def require_system_manager():
 		return guarded
 
 	return decorator
+
+
+def require_transport_access(capability: str | None = "ingress"):
+	"""Authorize only the dedicated transport identity at machine endpoints.
+
+	Administrator remains available for local recovery and test fixtures.  A user
+	with System Manager or WhatsApp Manager alone is intentionally rejected. Each
+	machine identity is bound to one action family.
+	"""
+	if capability is not None and capability not in TRANSPORT_CAPABILITY_ROLES:
+		raise ValueError(f"Unsupported transport capability: {capability}")
+
+	def decorator(method):
+		@wraps(method)
+		def guarded(*args, **kwargs):
+			user = frappe.session.user
+			if user == "Guest":
+				frappe.throw("Authentication required", frappe.AuthenticationError)
+			if user != "Administrator" and not is_dedicated_transport_user(
+				user, capability=capability
+			):
+				frappe.throw(
+					"WhatsApp Core machine service access is required for this capability",
+					frappe.PermissionError,
+				)
+			return method(*args, **kwargs)
+
+		return guarded
+
+	return decorator
+
+
+def is_dedicated_transport_user(user: str, *, capability: str | None = "ingress") -> bool:
+	"""Return whether ``user`` is an enabled, service-only Website User.
+
+	Checking the User document on every machine request prevents a human or Desk
+	identity from becoming a relay principal merely by acquiring the transport
+	role through a direct assignment or role profile.
+	"""
+	if not user or not frappe.db.exists("User", user):
+		return False
+	identity = frappe.get_doc("User", user)
+	direct_roles = {row.role for row in (identity.roles or [])}
+	all_transport_roles = set(TRANSPORT_CAPABILITY_ROLES.values())
+	if capability == "all":
+		allowed_role_sets = {frozenset(all_transport_roles)}
+	elif capability is not None:
+		allowed_role_sets = {
+			frozenset({TRANSPORT_CAPABILITY_ROLES[capability]}),
+			frozenset(all_transport_roles),
+		}
+	else:
+		allowed_role_sets = {
+			frozenset({role}) for role in all_transport_roles
+		} | {frozenset(all_transport_roles)}
+	return bool(
+		identity.enabled
+		and identity.user_type == "Website User"
+		and not getattr(identity, "role_profile_name", None)
+		and frozenset(direct_roles) in allowed_role_sets
+	)
+
+
+def current_transport_capability(user: str | None = None) -> str:
+	"""Return the action family assigned to one validated machine user."""
+	user = user or frappe.session.user
+	if user == "Administrator":
+		return "administrator"
+	if not is_dedicated_transport_user(user, capability=None):
+		return ""
+	direct_roles = {row.role for row in frappe.get_doc("User", user).roles or []}
+	if direct_roles == set(TRANSPORT_CAPABILITY_ROLES.values()):
+		return "all"
+	return next(
+		(capability for capability, role in TRANSPORT_CAPABILITY_ROLES.items() if role in direct_roles),
+		"",
+	)
 
 
 def require_flow_builder_access(*, manage: bool = False):

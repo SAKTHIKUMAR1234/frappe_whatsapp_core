@@ -7,8 +7,10 @@ import time
 from zoneinfo import ZoneInfo
 
 import frappe
-import requests
 from frappe.utils import get_datetime, get_system_timezone
+
+from frappe_whatsapp_core import safe_http as requests
+from frappe_whatsapp_core.network_security import validate_service_origin
 
 _session = requests.Session()
 _HUB_RELAY_GATEWAY_METHODS = {
@@ -101,19 +103,25 @@ def send_raw(
 	channel: str,
 	payload: dict,
 	idempotency_key: str,
+	*,
+	endpoint: str = "messages",
 ) -> dict:
+	endpoint = _outbound_endpoint(endpoint)
 	settings = get_settings(outbound=True)
 	url = _gateway_endpoint(settings, "/v1/outbound")
+	request_body = {
+		"account_name": settings.get_account_name(channel),
+		"payload": payload,
+		"idempotency_key": idempotency_key,
+	}
+	if endpoint != "messages":
+		request_body["endpoint"] = endpoint
 	try:
 		response = _session.post(
 			url,
 			allow_redirects=False,
 			headers=settings.get_hub_auth_headers(),
-			json={
-				"account_name": settings.get_account_name(channel),
-				"payload": payload,
-				"idempotency_key": idempotency_key,
-			},
+			json=request_body,
 			timeout=_request_timeout(settings),
 		)
 	except requests.RequestException as exception:
@@ -170,16 +178,20 @@ def send_batch(messages: list[dict]) -> dict:
 		channel = str(message.get("channel") or "").strip()
 		payload = message.get("payload")
 		idempotency_key = str(message.get("idempotency_key") or "").strip()
+		endpoint = _outbound_endpoint(message.get("endpoint"))
 		if not channel or not isinstance(payload, dict) or not idempotency_key:
 			frappe.throw(
 				"Every Hub batch item requires channel, payload, and idempotency_key",
 				frappe.ValidationError,
 			)
-		normalized.append({
+		item = {
 			"account_name": settings.get_account_name(channel),
 			"payload": payload,
 			"idempotency_key": idempotency_key,
-		})
+		}
+		if endpoint != "messages":
+			item["endpoint"] = endpoint
+		normalized.append(item)
 
 	url = _gateway_endpoint(settings, "/v1/outbound/batch")
 	try:
@@ -249,16 +261,20 @@ def publish_outbound_command(
 		channel = str(message.get("channel") or "").strip()
 		payload = message.get("payload")
 		idempotency_key = str(message.get("idempotency_key") or "").strip()
+		endpoint = _outbound_endpoint(message.get("endpoint"))
 		if not channel or not isinstance(payload, dict) or not idempotency_key:
 			frappe.throw(
 				"Every runtime message requires channel, payload, and idempotency_key",
 				frappe.ValidationError,
 			)
-		normalized.append({
+		item = {
 			"account_name": settings.get_account_name(channel),
 			"payload": payload,
 			"idempotency_key": idempotency_key,
-		})
+		}
+		if endpoint != "messages":
+			item["endpoint"] = endpoint
+		normalized.append(item)
 	request_body = {"command_id": command_id, "messages": normalized}
 	if execute_at:
 		scheduled_for = get_datetime(execute_at)
@@ -300,6 +316,13 @@ def get_settings(*, outbound: bool = False):
 	return settings
 
 
+def _outbound_endpoint(value) -> str:
+	endpoint = str(value or "messages").strip().lower().strip("/")
+	if endpoint not in {"messages", "marketing_messages"}:
+		frappe.throw("Unsupported Meta transport endpoint", frappe.ValidationError)
+	return endpoint
+
+
 def connection_status() -> dict:
 	settings = frappe.get_single("WhatsApp Core Settings")
 	return {
@@ -329,7 +352,7 @@ def _gateway_endpoint(settings, path: str) -> str:
 
 
 def _hub_url(settings) -> str:
-	return str(settings.hub_url or "").strip().rstrip("/")
+	return validate_service_origin(settings.hub_url, label="Hub URL")
 
 
 def _error_message(result) -> str:

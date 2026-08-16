@@ -75,17 +75,19 @@ def _sync_group_summaries(account_name, rows, accounts):
 def group_workspace(account_name=None, limit=100, after=None, before=None):
 	accounts = []
 	selected = None
-	templates = frappe.get_all(
-		"WhatsApp Core Template",
-		filters={"approval_status": "APPROVED", "enabled": 1},
-		fields=["name", "template_name", "language_code", "body_text"],
-		order_by="template_name asc, language_code asc",
-		limit_page_length=500,
-	)
+	templates = []
 	contacts = contact_options(limit=50)
 	try:
 		accounts = _accounts()
 		selected = _account(account_name)
+		channel = next(row["channel"] for row in accounts if row["account_name"] == selected)
+		templates = frappe.get_all(
+			"WhatsApp Core Template",
+			filters={"approval_status": "APPROVED", "enabled": 1, "channel": channel},
+			fields=["name", "template_name", "language_code", "body_text"],
+			order_by="template_name asc, language_code asc",
+			limit_page_length=500,
+		)
 		result = _call("groups", "list_groups", {
 			"account_name": selected, "limit": limit, "after": after, "before": before,
 		})

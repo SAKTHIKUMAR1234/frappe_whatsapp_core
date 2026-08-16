@@ -57,3 +57,29 @@ class TestMetaFlowEndpoint(FrappeTestCase):
 		self.assertEqual(result["screen"], "SUCCESS")
 		self.assertEqual(result["_http_status"], 200)
 		get_attr.assert_called_once_with("custom_app.flow_handler")
+
+	@patch("frappe_whatsapp_core.flow_endpoint.frappe.get_hooks", return_value=[])
+	@patch("frappe_whatsapp_core.flow_endpoint.frappe.get_doc")
+	@patch("frappe_whatsapp_core.flow_endpoint._cached_response", return_value=None)
+	@patch("frappe_whatsapp_core.flow_endpoint._channel_for", return_value="CHANNEL-1")
+	@patch("frappe_whatsapp_core.flow_endpoint._resolve_account_name", return_value="ACCOUNT-1")
+	def test_client_data_cannot_select_a_privileged_core_action(
+		self, resolve, channel, cached, get_doc, get_hooks
+	):
+		get_doc.return_value = MagicMock()
+		with (
+			patch("frappe_whatsapp_core.flow_endpoint.record_data_exchange"),
+			self.assertRaises(frappe.ValidationError),
+		):
+			handle(
+				"ACCOUNT-1",
+				"PHONE-1",
+				{
+					"action": "data_exchange",
+					"screen": "DETAILS",
+					"data": {
+						"_core_action": "case.create",
+						"_core_params": {"case_type": "privileged"},
+					},
+				},
+			)

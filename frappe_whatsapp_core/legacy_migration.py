@@ -22,6 +22,7 @@ from frappe_whatsapp_core.materializer import (
 	get_or_create_identity,
 )
 from frappe_whatsapp_core.party_bindings import upsert_party_binding
+from frappe_whatsapp_core.template_catalog import scoped_template_key
 
 
 def legacy_source_plan(config: dict) -> dict:
@@ -321,6 +322,8 @@ def refresh_conversation_activity() -> int:
 def _migrate_channels(config: dict) -> dict[str, object]:
 	channels = {}
 	sources, _using_core_fallback = _resolved_channel_sources(config)
+	settings = frappe.get_single("WhatsApp Core Settings")
+	settings_changed = False
 	for source in sources:
 		phone_number_id = str(source.get("phone_number_id") or "").strip()
 		if not phone_number_id:
@@ -331,13 +334,58 @@ def _migrate_channels(config: dict) -> dict[str, object]:
 		).strip()[:140]
 		channel.enabled = 1 if source.get("enabled", True) else 0
 		channel.save(ignore_permissions=True)
-		channels[str(source.get("source_name") or phone_number_id)] = channel
+		source_name = str(source.get("source_name") or phone_number_id).strip()
+		account_name, mapping_created = _ensure_legacy_channel_mapping(
+			settings,
+			channel.name,
+			str(source.get("account_name") or source_name).strip(),
+		)
+		settings_changed = settings_changed or mapping_created
+		channel._legacy_hub_account_name = account_name
+		channels[source_name] = channel
 	if not channels:
 		frappe.throw(
 			f"{config['source_key']} has no configured WhatsApp channel",
 			frappe.ValidationError,
 		)
+	if settings_changed:
+		settings.save(ignore_permissions=True)
 	return channels
+
+
+def _ensure_legacy_channel_mapping(settings, channel: str, account_name: str) -> tuple[str, bool]:
+	"""Return the canonical Hub account for a migrated channel.
+
+	A legacy import can create its Core channel before Integration has projected
+	account routing. Templates, however, must always carry the same account/channel
+	identity used by live transport. Reuse an existing channel mapping when one is
+	present; otherwise create the unambiguous legacy mapping without overwriting a
+	different route.
+	"""
+	for row in settings.accounts:
+		if row.channel == channel:
+			return str(row.account_name or "").strip(), False
+	if not account_name:
+		frappe.throw(
+			f"A Hub account name is required for migrated Core channel {channel}",
+			frappe.ValidationError,
+		)
+	for row in settings.accounts:
+		if row.account_name == account_name:
+			frappe.throw(
+				f"Hub account {account_name} is already mapped to Core channel {row.channel}; "
+				f"it cannot also map to {channel}",
+				frappe.ValidationError,
+			)
+	settings.append(
+		"accounts",
+		{
+			"account_name": account_name,
+			"channel": channel,
+			"is_default": 1 if not settings.accounts else 0,
+		},
+	)
+	return account_name, True
 
 
 def _migrate_contacts(config: dict, channels: dict[str, object]) -> dict:
@@ -862,17 +910,14 @@ def _migrate_templates(config, channels) -> dict:
 		if not template_name:
 			skipped += 1
 			continue
-		account = _text(row.get(source.get("account_field")))
-		template_key = f"{template_name}-{language}"
-		if source.get("account_scoped_key") and account:
-			account_hash = hashlib.sha256(account.encode()).hexdigest()[:12]
-			template_key = f"{template_key}-{account_hash}"
+		route_account = _row_account(source, row, channels)
+		channel = channels.get(route_account)
+		account = str(getattr(channel, "_legacy_hub_account_name", "") or "").strip()
+		if not route_account or not account or not channel:
+			skipped += 1
+			continue
+		template_key = scoped_template_key(account, template_name, language)
 		existing_name = frappe.db.exists("WhatsApp Core Template", template_key)
-		if not existing_name and not source.get("account_scoped_key"):
-			existing_name = frappe.db.exists(
-				"WhatsApp Core Template",
-				{"template_name": template_name, "language_code": language},
-			)
 		if existing_name:
 			existing += 1
 			core_name = existing_name
@@ -894,6 +939,8 @@ def _migrate_templates(config, channels) -> dict:
 				{
 					"doctype": "WhatsApp Core Template",
 					"template_key": template_key,
+					"account_name": account,
+					"channel": channel.name,
 					"template_name": template_name,
 					"language_code": language,
 					"category": _text(row.get(source.get("category_field"))),
@@ -916,6 +963,7 @@ def _migrate_templates(config, channels) -> dict:
 			core_name = core_doc.name
 			inserted += 1
 		for legacy_name in {row.name, template_name}:
+			template_map[(route_account, legacy_name)] = core_name
 			template_map[(account, legacy_name)] = core_name
 			template_map.setdefault(("", legacy_name), core_name)
 	return {

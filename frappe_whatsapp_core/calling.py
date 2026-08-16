@@ -6,22 +6,34 @@ from pathlib import Path
 
 import frappe
 
-from frappe_whatsapp_core.identity import contact_options
+from frappe_whatsapp_core.identity import contact_options, is_business_scoped_user_id
 from frappe_whatsapp_core.meta_flows import _accounts, _call, _resolve_account_name, _workspace_failure
 from frappe_whatsapp_core.outbound import resolve_recipient_phone
 from frappe_whatsapp_core.permissions import require_core_access
 
 
-def _contact_target(identity=None, to_number=None, recipient=None, operation=None):
+def _contact_target(
+	identity=None,
+	to_number=None,
+	recipient=None,
+	operation=None,
+	account_name=None,
+):
 	"""Resolve a Core contact at send time while retaining advanced raw targets."""
 	if identity:
-		return (
-			resolve_recipient_phone(
-				identity,
-				context={"operation": operation or "whatsapp_calling"},
-			),
-			None,
+		channel = frappe.db.get_value(
+			"WhatsApp Core Hub Account",
+			{"parent": "WhatsApp Core Settings", "account_name": account_name},
+			"channel",
 		)
+		target = resolve_recipient_phone(
+				identity,
+				context={
+					"operation": operation or "whatsapp_calling",
+					**({"channel": channel} if channel else {}),
+				},
+			)
+		return (None, target) if is_business_scoped_user_id(target) else (target, None)
 	return to_number, recipient
 
 
@@ -41,19 +53,21 @@ def calling_workspace(account_name=None, include_sip_credentials=0):
 		fields=call_fields,
 		order_by="modified desc", limit_page_length=100,
 	)
-	templates = frappe.get_all(
-		"WhatsApp Core Template",
-		filters={"approval_status": "APPROVED", "enabled": 1},
-		fields=["name", "template_name", "language_code", "body_text"],
-		order_by="template_name asc, language_code asc",
-		limit_page_length=500,
-	)
+	templates = []
 	accounts = []
 	selected = None
 	contacts = contact_options(limit=50)
 	try:
 		accounts = _accounts()
 		selected = _resolve_account_name(account_name)
+		channel = next(row["channel"] for row in accounts if row["account_name"] == selected)
+		templates = frappe.get_all(
+			"WhatsApp Core Template",
+			filters={"approval_status": "APPROVED", "enabled": 1, "channel": channel},
+			fields=["name", "template_name", "language_code", "body_text"],
+			order_by="template_name asc, language_code asc",
+			limit_page_length=500,
+		)
 		settings = _call("calling", "get_call_settings", {
 			"account_name": selected, "include_sip_credentials": include_sip_credentials,
 		})
@@ -92,7 +106,7 @@ def update_call_settings(account_name, calling):
 @require_core_access(manage=True)
 def get_call_permission(account_name, user_wa_id=None, recipient=None, identity=None):
 	user_wa_id, recipient = _contact_target(
-		identity, user_wa_id, recipient, "get_call_permission"
+		identity, user_wa_id, recipient, "get_call_permission", account_name
 	)
 	return _call("calling", "get_call_permission", {
 		"account_name": _resolve_account_name(account_name), "user_wa_id": user_wa_id, "recipient": recipient,
@@ -110,7 +124,7 @@ def request_call_permission(
 	idempotency_key=None,
 ):
 	to_number, recipient = _contact_target(
-		identity, to_number, recipient, "request_call_permission"
+		identity, to_number, recipient, "request_call_permission", account_name
 	)
 	return _call("calling", "request_call_permission", {
 		"account_name": _resolve_account_name(account_name), "body_text": body_text,
@@ -132,7 +146,7 @@ def send_call_button(
 	idempotency_key=None,
 ):
 	to_number, recipient = _contact_target(
-		identity, to_number, recipient, "send_call_button"
+		identity, to_number, recipient, "send_call_button", account_name
 	)
 	return _call("calling", "send_call_button", {
 		"account_name": _resolve_account_name(account_name),
@@ -160,7 +174,7 @@ def send_call_button_template(
 	idempotency_key=None,
 ):
 	to_number, recipient = _contact_target(
-		identity, to_number, recipient, "send_call_button_template"
+		identity, to_number, recipient, "send_call_button_template", account_name
 	)
 	return _call("calling", "send_call_button_template", {
 		"account_name": _resolve_account_name(account_name),
@@ -280,7 +294,7 @@ def call_action(
 	transcription=None,
 ):
 	to_number, recipient = _contact_target(
-		identity, to_number, recipient, "call_action"
+		identity, to_number, recipient, "call_action", account_name
 	)
 	return _call("calling", "call_action", {
 		"account_name": _resolve_account_name(account_name), "action": action,

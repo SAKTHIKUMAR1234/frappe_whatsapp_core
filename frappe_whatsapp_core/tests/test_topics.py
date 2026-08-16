@@ -94,11 +94,7 @@ class TestConversationTopics(FrappeTestCase):
 			)
 		publish.assert_any_call(
 			"whatsapp_core_topic",
-			{
-				"topic": topic.name,
-				"conversation": self.conversation.name,
-				"status": "Open",
-			},
+			{"changed": True},
 			after_commit=True,
 		)
 
@@ -187,7 +183,32 @@ class TestConversationTopics(FrappeTestCase):
 			call for call in publish.call_args_list if call.args[0] == "whatsapp_core_mcp_invocation"
 		]
 		self.assertEqual(len(mcp_calls), 1)
+		self.assertEqual(mcp_calls[0].args[1], {"changed": True})
 		self.assertTrue(mcp_calls[0].kwargs["after_commit"])
+
+	def test_mcp_false_operation_result_is_an_error_not_a_completed_tool(self):
+		with (
+			patch(
+				"frappe_whatsapp_core.mcp_transport.call_tool",
+				return_value={
+					"success": False,
+					"error": "Meta rejected the template",
+					"template": {"approval_status": "DRAFT"},
+				},
+			),
+			patch("frappe_whatsapp_core.mcp_transport._log_invocation") as log,
+		):
+			response = _dispatch({
+				"jsonrpc": "2.0",
+				"id": 8,
+				"method": "tools/call",
+				"params": {"name": "whatsapp.create_template", "arguments": {}},
+			})
+		result = response["result"]
+		self.assertTrue(result["isError"])
+		self.assertFalse(result["structuredContent"]["success"])
+		self.assertIn("Meta rejected", result["content"][0]["text"])
+		self.assertEqual(log.call_args.args[3], "Failed")
 
 	def test_mcp_audit_redacts_credentials_and_large_transport_payloads(self):
 		value = _safe_audit_value({

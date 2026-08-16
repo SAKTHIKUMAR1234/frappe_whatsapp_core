@@ -7,13 +7,20 @@
 	"engine": "InnoDB",
 	"field_order": [
 		"template_key",
+		"account_name",
+		"channel",
 		"template_name",
 		"language_code",
 		"category",
 		"approval_status",
+		"status_reason",
+		"correct_category",
 		"enabled",
 		"hub_template_name",
 		"template_id",
+		"message_send_ttl_seconds",
+		"parameter_format",
+		"template_source",
 		"header_type",
 		"header_content",
 		"body_text",
@@ -29,6 +36,22 @@
 			"reqd": 1,
 			"unique": 1,
 			"in_list_view": 1
+		},
+		{
+			"fieldname": "account_name",
+			"fieldtype": "Data",
+			"label": "Hub Account",
+			"read_only": 1,
+			"search_index": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "channel",
+			"fieldtype": "Link",
+			"label": "Core Channel",
+			"options": "WhatsApp Core Channel",
+			"read_only": 1,
+			"search_index": 1
 		},
 		{
 			"fieldname": "template_name",
@@ -59,6 +82,18 @@
 			"in_list_view": 1
 		},
 		{
+			"fieldname": "status_reason",
+			"fieldtype": "Small Text",
+			"label": "Meta Status Detail",
+			"read_only": 1
+		},
+		{
+			"fieldname": "correct_category",
+			"fieldtype": "Data",
+			"label": "Meta Suggested Category",
+			"read_only": 1
+		},
+		{
 			"fieldname": "enabled",
 			"fieldtype": "Check",
 			"label": "Enabled For This Site",
@@ -76,6 +111,25 @@
 			"label": "Integration Template",
 			"read_only": 1,
 			"hidden": 1
+		},
+		{
+			"fieldname": "message_send_ttl_seconds",
+			"fieldtype": "Int",
+			"label": "Message Send TTL (Seconds)",
+			"read_only": 1
+		},
+		{
+			"default": "POSITIONAL",
+			"fieldname": "parameter_format",
+			"fieldtype": "Data",
+			"label": "Parameter Format",
+			"read_only": 1
+		},
+		{
+			"fieldname": "template_source",
+			"fieldtype": "Data",
+			"label": "Template Source",
+			"read_only": 1
 		},
 		{
 			"fieldname": "header_type",

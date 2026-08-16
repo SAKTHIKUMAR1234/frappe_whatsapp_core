@@ -79,14 +79,24 @@
 	]
 
 	const approvedTemplates = computed(() =>
-		workspace.value.templates.map((template) => ({
-			...template,
-			label: `${template.template_name} · ${template.language_code}`,
-			disabled: template.approval_status !== 'APPROVED',
-		})),
+		workspace.value.templates
+			.filter((template) => template.channel === form.value.channel)
+			.map((template) => ({
+				...template,
+				label: `${template.template_name} · ${template.language_code}`,
+				disabled: template.approval_status !== 'APPROVED',
+			})),
 	)
 	const expectedAuthorization = computed(() =>
 		selectedCampaign.value ? `AUTHORIZE ${selectedCampaign.value.campaign_key}` : '',
+	)
+
+	watch(
+		() => form.value.channel,
+		() => {
+			if (!approvedTemplates.value.some((template) => template.name === form.value.template))
+				form.value.template = ''
+		},
 	)
 
 	watch(

@@ -325,7 +325,11 @@ def conversation(name: str, message_limit: int = 20) -> dict:
 		"outbound": outbound_state(doc.name),
 		"templates": frappe.get_all(
 			"WhatsApp Core Template",
-			filters={"enabled": 1, "approval_status": "APPROVED"},
+			filters={
+				"enabled": 1,
+				"approval_status": "APPROVED",
+				"channel": doc.channel,
+			},
 			fields=[
 				"name",
 				"template_name",

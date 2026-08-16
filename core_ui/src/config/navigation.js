@@ -39,7 +39,7 @@ export const navigation = [
 			{ label: 'AI Queue', route: 'ai-queue', module: 'ai-queue', icon: Bot },
 			{ label: 'Groups', route: 'groups', module: 'groups', icon: MessagesSquare },
 			{ label: 'Calling', route: 'calling', module: 'calling', icon: PhoneCall },
-			{ label: 'Meta Flows', route: 'flows', module: 'flows', icon: Activity },
+			{ label: 'Flow Builder', route: 'flows', module: 'flows', icon: Activity },
 		],
 	},
 	{

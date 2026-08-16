@@ -8,6 +8,7 @@
  "field_order": [
   "channel",
   "account_name",
+  "template_service_user",
   "is_default"
  ],
  "fields": [
@@ -24,6 +25,14 @@
    "fieldtype": "Data",
    "label": "Hub Account Name",
    "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "template_service_user",
+   "fieldtype": "Link",
+   "label": "Template Service User",
+   "options": "User",
+   "description": "Dedicated account-bound Core Template Service identity",
    "in_list_view": 1
   },
   {

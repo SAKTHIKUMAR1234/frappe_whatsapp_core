@@ -18,8 +18,14 @@ class TestCoreRoleSetup(TestCase):
 
 		setup.ensure_core_roles()
 
-		self.assertEqual(get_doc.call_count, 2)
-		created.insert.assert_has_calls([call(ignore_permissions=True), call(ignore_permissions=True)])
+		self.assertEqual(get_doc.call_count, 5)
+		created.insert.assert_has_calls([
+			call(ignore_permissions=True),
+			call(ignore_permissions=True),
+			call(ignore_permissions=True),
+			call(ignore_permissions=True),
+			call(ignore_permissions=True),
+		])
 		migrate.assert_called_once_with()
 
 	@patch("frappe_whatsapp_core.setup.frappe.clear_cache")

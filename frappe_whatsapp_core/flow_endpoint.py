@@ -8,10 +8,9 @@ import time
 
 import frappe
 
-from frappe_whatsapp_core.flow_actions import execute_registered_action
 from frappe_whatsapp_core.flow_responses import record_data_exchange
 from frappe_whatsapp_core.meta_flows import _resolve_account_name
-from frappe_whatsapp_core.permissions import require_core_access
+from frappe_whatsapp_core.permissions import require_transport_access
 
 VALID_ACTIONS = {"ping", "INIT", "BACK", "data_exchange"}
 
@@ -58,24 +57,6 @@ def _dispatch(payload: dict, context: dict) -> dict:
 	if isinstance(payload.get("data"), dict) and payload["data"].get("error"):
 		return {"data": {"acknowledged": True}}
 
-	data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-	action_reference = str(data.get("_core_action") or "").strip()
-	if action_reference:
-		params = data.get("_core_params") or {}
-		if not isinstance(params, dict):
-			frappe.throw("Meta Flow action parameters must be an object", frappe.ValidationError)
-		result = execute_registered_action(
-			action_reference,
-			params,
-			context={**context, "payload": payload},
-		)
-		if isinstance(result, dict) and ("screen" in result or "data" in result):
-			return result
-		return {
-			"screen": str(data.get("_next_screen") or payload.get("screen") or ""),
-			"data": {"result": result},
-		}
-
 	for handler_path in _handlers():
 		response = frappe.get_attr(handler_path)(payload=payload, context=context)
 		if response is not None:
@@ -107,7 +88,7 @@ def _cached_response(request_id: str):
 
 
 @frappe.whitelist(methods=["POST"])
-@require_core_access(manage=True)
+@require_transport_access(capability="flow")
 def handle(account_name: str, channel: str | None = None, payload=None):
 	"""Handle a clear payload from Integration and return a clear response.
 

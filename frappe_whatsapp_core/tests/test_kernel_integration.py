@@ -251,6 +251,14 @@ class TestKernelIntegration(FrappeTestCase):
 		)
 		message.reload()
 		self.assertEqual(message.delivery_status, "Delivered")
+		unknown = materialize_status(
+			channel,
+			{"id": f"wamid.{suffix}", "status": "future_provider_state"},
+		)
+		self.assertEqual(unknown["status"], "ignored")
+		self.assertEqual(unknown["reason"], "unknown_provider_status")
+		message.reload()
+		self.assertEqual(message.delivery_status, "Delivered")
 
 	def test_case_required_fields_and_terminal_transition(self):
 		with self.assertRaises(frappe.ValidationError):

@@ -8,6 +8,7 @@ from frappe_whatsapp_core.legacy_migration import (
 	_campaign_status,
 	_delivery_status,
 	_direction,
+	_migrate_channels,
 	_legacy_key,
 	_legacy_message_content,
 	_local_media_url,
@@ -22,6 +23,37 @@ from frappe_whatsapp_core.legacy_migration import (
 
 
 class TestLegacyMigrationContract(FrappeTestCase):
+	def test_channel_migration_creates_one_idempotent_account_mapping(self):
+		suffix = frappe.generate_hash(length=8).lower()
+		account_name = f"legacy-account-{suffix}"
+		config = {
+			"source_key": "legacy-test",
+			"channels": [{
+				"source_name": account_name,
+				"phone_number_id": f"legacy-phone-{suffix}",
+				"waba_id": f"legacy-waba-{suffix}",
+				"enabled": 1,
+			}],
+		}
+
+		first = _migrate_channels(config)
+		second = _migrate_channels(config)
+
+		self.assertEqual(first[account_name].name, second[account_name].name)
+		mappings = frappe.get_all(
+			"WhatsApp Core Hub Account",
+			filters={
+				"parent": "WhatsApp Core Settings",
+				"parenttype": "WhatsApp Core Settings",
+				"parentfield": "accounts",
+				"account_name": account_name,
+				"channel": first[account_name].name,
+			},
+			pluck="name",
+		)
+		self.assertEqual(len(mappings), 1)
+		self.assertEqual(first[account_name]._legacy_hub_account_name, account_name)
+
 	def test_absolute_legacy_file_url_is_normalized_to_the_local_file_namespace(self):
 		source = {"local_media_fields": ["media_url"]}
 		self.assertEqual(

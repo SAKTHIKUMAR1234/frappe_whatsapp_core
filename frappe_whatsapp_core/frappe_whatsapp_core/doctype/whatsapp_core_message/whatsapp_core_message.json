@@ -12,6 +12,7 @@
 		"relay_event",
 		"channel",
 		"provider_message_id",
+		"provider_template_id",
 		"direction",
 		"message_type",
 		"body",
@@ -61,6 +62,12 @@
 			"label": "Provider Message ID",
 			"reqd": 1,
 			"unique": 1
+		},
+		{
+			"fieldname": "provider_template_id",
+			"fieldtype": "Data",
+			"label": "Provider Template ID",
+			"read_only": 1
 		},
 		{
 			"fieldname": "direction",

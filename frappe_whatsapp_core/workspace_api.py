@@ -23,6 +23,7 @@ from frappe_whatsapp_core.permissions import (
 	conversation_conditions,
 	require_core_access,
 )
+from frappe_whatsapp_core.realtime import publish_invalidation
 
 
 @frappe.whitelist()
@@ -549,11 +550,7 @@ def _publish_team(team: str, operation: str) -> None:
 		frappe.utils.now_datetime(),
 		update_modified=False,
 	)
-	frappe.publish_realtime(
-		"whatsapp_core_team",
-		{"team": team, "operation": operation},
-		after_commit=True,
-	)
+	publish_invalidation("whatsapp_core_team")
 
 
 @frappe.whitelist()
@@ -777,11 +774,7 @@ def upsert_team(
 				"enabled": 1 if contact.get("enabled", True) else 0,
 			})
 	doc.save(ignore_permissions=True)
-	frappe.publish_realtime(
-		"whatsapp_core_team",
-		{"team": doc.name, "operation": "updated"},
-		after_commit=True,
-	)
+	publish_invalidation("whatsapp_core_team")
 	return doc.as_dict()
 
 

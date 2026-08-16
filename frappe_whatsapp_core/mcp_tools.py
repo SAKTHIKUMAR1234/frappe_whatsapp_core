@@ -149,7 +149,11 @@ from frappe_whatsapp_core.meta_flows import (
 )
 from frappe_whatsapp_core.party_bindings import upsert_party_binding
 from frappe_whatsapp_core.permissions import CORE_MANAGEMENT_ROLES, FLOW_BUILDER_ROLES
+from frappe_whatsapp_core.template_catalog import (
+	get_template as get_template_projection,
+)
 from frappe_whatsapp_core.template_catalog import request_template_upsert
+from frappe_whatsapp_core.template_catalog import submit_template as submit_template_projection
 from frappe_whatsapp_core.topics import (
 	list_topics,
 	unclassified_messages,
@@ -514,46 +518,77 @@ TOOL_DEFINITIONS = [
 	},
 	{
 		"name": "whatsapp.list_templates",
-		"description": "List the site template catalog and approval state.",
-		"inputSchema": {"type": "object", "properties": {}},
+		"description": "List the site-scoped template catalog, exact approval state and account mapping.",
+		"inputSchema": {
+			"type": "object",
+			"properties": {
+				"start": {"type": "integer", "minimum": 0},
+				"limit": {"type": "integer", "minimum": 1, "maximum": 500},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.get_template",
+		"description": "Read one template projection including canonical Meta components and status diagnostics.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["template_key"],
+			"properties": {"template_key": {"type": "string", "minLength": 1}},
+		},
 	},
 	{
 		"name": "whatsapp.create_template",
-		"description": "Create, assign and submit a WhatsApp template through Integration and Meta.",
+		"description": "Create and assign a lossless WhatsApp template draft, optionally submitting it to Meta.",
 		"inputSchema": {
 			"type": "object",
-			"required": ["template_name", "body_text"],
+			"required": ["account_name", "template_name", "language_code", "category", "components"],
+			"additionalProperties": False,
 			"properties": {
-				"template_name": {"type": "string"},
-				"language_code": {"type": "string", "default": "en"},
+				"account_name": {"type": "string", "minLength": 1},
+				"template_name": {"type": "string", "pattern": "^[a-z0-9_]+$", "maxLength": 512},
+				"language_code": {"type": "string", "default": "en", "maxLength": 32},
 				"category": {"type": "string", "enum": ["MARKETING", "UTILITY", "AUTHENTICATION"]},
-				"header_type": {"type": "string", "enum": ["", "TEXT", "IMAGE", "VIDEO", "DOCUMENT", "LOCATION"]},
-				"header_content": {"type": "string"},
-				"body_text": {"type": "string"},
-				"footer_text": {"type": "string"},
+				"parameter_format": {"type": "string", "enum": ["POSITIONAL", "NAMED"], "default": "POSITIONAL"},
 				"message_send_ttl_seconds": {"type": "integer", "minimum": 1},
-				"buttons": {"type": "array", "items": {"type": "object"}},
-				"sample_values": {"type": "array", "items": {"type": "object"}},
+				"components": {
+					"type": "array",
+					"minItems": 1,
+					"maxItems": 100,
+					"items": {"type": "object", "required": ["type"]},
+				},
+				"submit": {"type": "boolean", "default": False},
 			},
 		},
 	},
 	{
 		"name": "whatsapp.update_template",
-		"description": "Edit an assigned template and submit the revision to Meta for review.",
+		"description": "Save a complete assigned template draft or submit its revision to Meta.",
+		"inputSchema": {
+			"type": "object",
+			"required": ["template_key", "components"],
+			"additionalProperties": False,
+			"properties": {
+				"template_key": {"type": "string", "minLength": 1},
+				"category": {"type": "string", "enum": ["MARKETING", "UTILITY", "AUTHENTICATION"]},
+				"parameter_format": {"type": "string", "enum": ["POSITIONAL", "NAMED"]},
+				"message_send_ttl_seconds": {"type": "integer", "minimum": 1},
+				"components": {
+					"type": "array",
+					"minItems": 1,
+					"maxItems": 100,
+					"items": {"type": "object", "required": ["type"]},
+				},
+				"submit": {"type": "boolean", "default": False},
+			},
+		},
+	},
+	{
+		"name": "whatsapp.submit_template",
+		"description": "Submit an existing complete DRAFT template to Meta without changing its component document.",
 		"inputSchema": {
 			"type": "object",
 			"required": ["template_key"],
-			"properties": {
-				"template_key": {"type": "string"},
-				"category": {"type": "string", "enum": ["MARKETING", "UTILITY", "AUTHENTICATION"]},
-				"header_type": {"type": "string", "enum": ["", "TEXT", "IMAGE", "VIDEO", "DOCUMENT", "LOCATION"]},
-				"header_content": {"type": "string"},
-				"body_text": {"type": "string"},
-				"footer_text": {"type": "string"},
-				"message_send_ttl_seconds": {"type": "integer", "minimum": 1},
-				"buttons": {"type": "array", "items": {"type": "object"}},
-				"sample_values": {"type": "array", "items": {"type": "object"}},
-			},
+			"properties": {"template_key": {"type": "string", "minLength": 1}},
 		},
 	},
 	{
@@ -1323,15 +1358,23 @@ def call_tool(name: str, arguments: dict | str | None = None) -> dict | list:
 		"whatsapp.assign_conversation": lambda: assign_conversation(**arguments),
 		"whatsapp.list_teams": list_teams,
 		"whatsapp.upsert_team": lambda: upsert_team(**arguments),
-		"whatsapp.list_templates": lambda: _frontend_call("template_catalog"),
-		"whatsapp.create_template": lambda: request_template_upsert(template=arguments),
+		"whatsapp.list_templates": lambda: _frontend_call("template_catalog", arguments),
+		"whatsapp.get_template": lambda: get_template_projection(arguments["template_key"]),
+		"whatsapp.create_template": lambda: request_template_upsert(
+			template={key: value for key, value in arguments.items() if key != "submit"},
+			submit=arguments.get("submit", False),
+		),
 		"whatsapp.update_template": lambda: request_template_upsert(
 			template={
 				key: value
 				for key, value in arguments.items()
-				if key != "template_key"
+				if key not in {"template_key", "submit"}
 			},
 			template_key=arguments["template_key"],
+			submit=arguments.get("submit", False),
+		),
+		"whatsapp.submit_template": lambda: submit_template_projection(
+			arguments["template_key"]
 		),
 		"whatsapp.list_campaigns": lambda: _frontend_call("campaign_workspace"),
 		"whatsapp.create_campaign": lambda: _frontend_call(

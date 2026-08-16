@@ -5,6 +5,7 @@
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
 	import AppDialog from '@/components/AppDialog.vue'
+	import FlowTypeSwitch from '@/features/flows/components/FlowTypeSwitch.vue'
 	import InputText from 'primevue/inputtext'
 	import Message from 'primevue/message'
 	import MultiLinkField from '@/components/form/MultiLinkField.vue'
@@ -254,6 +255,7 @@
 </script>
 
 <template>
+	<FlowTypeSwitch />
 	<div class="page-heading">
 		<div>
 			<div class="eyebrow">Meta-hosted experiences</div>

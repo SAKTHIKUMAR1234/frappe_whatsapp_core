@@ -3,10 +3,12 @@ from __future__ import annotations
 import frappe
 from frappe.model.document import Document
 
+from frappe_whatsapp_core.network_security import validate_service_origin
+
 
 class WhatsAppCoreSettings(Document):
 	def validate(self):
-		self.hub_url = (self.hub_url or "").strip().rstrip("/")
+		self.hub_url = validate_service_origin(self.hub_url, label="Hub URL")
 		self.default_country_calling_code = "".join(
 			character
 			for character in str(self.default_country_calling_code or "91")
@@ -20,11 +22,25 @@ class WhatsAppCoreSettings(Document):
 			frappe.throw("Enable WhatsApp Core before enabling outbound messages")
 
 		channels = set()
+		account_names = set()
 		defaults = 0
 		for row in self.accounts:
 			if row.channel in channels:
 				frappe.throw(f"Core channel is mapped more than once: {row.channel}")
 			channels.add(row.channel)
+			if row.account_name in account_names:
+				frappe.throw(f"Hub account is mapped more than once: {row.account_name}")
+			account_names.add(row.account_name)
+			if row.template_service_user:
+				from frappe_whatsapp_core.permissions import is_dedicated_transport_user
+
+				if not is_dedicated_transport_user(
+					row.template_service_user, capability="template"
+				):
+					frappe.throw(
+						"Template Service User must be an enabled, service-only Website User "
+						"with exactly the WhatsApp Core Template Service role"
+					)
 			defaults += int(bool(row.is_default))
 		if defaults > 1:
 			frappe.throw("Only one Hub account can be the default")
@@ -43,9 +59,4 @@ class WhatsAppCoreSettings(Document):
 		for row in self.accounts:
 			if row.channel == channel:
 				return row.account_name
-		for row in self.accounts:
-			if row.is_default:
-				return row.account_name
-		if len(self.accounts) == 1:
-			return self.accounts[0].account_name
 		frappe.throw(f"No Hub account is mapped to Core channel {channel}")

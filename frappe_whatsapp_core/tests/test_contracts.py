@@ -298,6 +298,7 @@ class TestPayloadContract(unittest.TestCase):
 		self.assertEqual(len(result), 2)
 		publish.assert_called_once()
 		self.assertEqual(publish.call_args.args[0], "whatsapp_core_batch_committed")
+		self.assertEqual(publish.call_args.args[1], {"changed": True})
 		self.assertTrue(publish.call_args.kwargs["after_commit"])
 
 	@patch("frappe_whatsapp_core.dispatcher._process_status_event_batch")
@@ -483,7 +484,7 @@ class TestPayloadContract(unittest.TestCase):
 	@patch("frappe_whatsapp_core.dispatcher.frappe.publish_realtime")
 	@patch("frappe_whatsapp_core.dispatcher.frappe.get_all")
 	@patch("frappe_whatsapp_core.dispatcher.process_event")
-	def test_event_batch_includes_compact_message_deltas(
+	def test_event_batch_emits_permission_neutral_invalidation(
 		self, process, get_all, publish, enqueue_summary
 	):
 		process.return_value = {
@@ -501,15 +502,10 @@ class TestPayloadContract(unittest.TestCase):
 
 		process_event_batch(["event-1"])
 
-		payload = publish.call_args.args[1]
-		self.assertEqual(payload["kinds"], ["message"])
-		self.assertEqual(payload["conversations"], ["CONV-1"])
-		self.assertEqual(payload["message_changes"][0]["message"]["name"], "MSG-1")
-		self.assertIn(
-			"message_media.download_message_media",
-			payload["message_changes"][0]["message"]["media_url"],
+		self.assertEqual(publish.call_args.args[1], {"changed": True})
+		self.assertFalse(
+			any(call.args and call.args[0] == "WhatsApp Core Message" for call in get_all.call_args_list)
 		)
-		self.assertEqual(payload["message_changes"][0]["status"], "created")
 		enqueue_summary.assert_called_once_with(
 			["MSG-1"],
 			enqueue_after_commit=True,
@@ -687,10 +683,7 @@ class TestPayloadContract(unittest.TestCase):
 		self.assertEqual(result["results"][0]["status"], "noop")
 		refresh.assert_called_once_with(["MSG-QUEUED"])
 		publish.assert_called_once()
-		payload = publish.call_args.args[1]
-		self.assertEqual(payload["kinds"], ["status"])
-		self.assertEqual(len(payload["message_changes"]), 1)
-		self.assertEqual(payload["message_changes"][0]["message"].delivery_status, "Sent")
+		self.assertEqual(publish.call_args.args[1], {"changed": True})
 
 	@patch("frappe_whatsapp_core.api.enqueue_campaign_refresh_for_messages")
 	@patch("frappe_whatsapp_core.api.frappe.publish_realtime")

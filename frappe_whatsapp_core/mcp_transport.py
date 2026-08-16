@@ -12,6 +12,7 @@ from werkzeug.wrappers import Response
 
 from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS, call_tool
 from frappe_whatsapp_core.permissions import require_core_access
+from frappe_whatsapp_core.realtime import publish_invalidation
 
 SUPPORTED_PROTOCOL_VERSIONS = (
 	"2025-11-25",
@@ -100,21 +101,32 @@ def _invoke_tool(params: dict) -> dict:
 	try:
 		result = call_tool(tool_name, arguments)
 		duration_ms = round((time.monotonic() - started_at) * 1000)
+		failed_result = isinstance(result, dict) and result.get("success") is False
+		result_error = (
+			str(result.get("error") or "WhatsApp operation failed")[:2000]
+			if failed_result
+			else ""
+		)
 		_log_invocation(
 			invocation_key,
 			tool_name,
 			arguments,
-			"Completed",
+			"Failed" if failed_result else "Completed",
 			duration_ms,
-			result=result,
+			result=result if not failed_result else None,
+			error=result_error or None,
 		)
 		return {
 			"content": [{
 				"type": "text",
-				"text": json.dumps(result, default=str, ensure_ascii=False),
+				"text": (
+					result_error
+					if failed_result
+					else json.dumps(result, default=str, ensure_ascii=False)
+				),
 			}],
 			"structuredContent": result,
-			"isError": False,
+			"isError": failed_result,
 		}
 	except Exception as exception:
 		duration_ms = round((time.monotonic() - started_at) * 1000)
@@ -161,15 +173,7 @@ def _log_invocation(
 		)[:100000] if result is not None else "",
 		"error": (error or "")[:100000],
 	}).insert(ignore_permissions=True)
-	frappe.publish_realtime(
-		"whatsapp_core_mcp_invocation",
-		{
-			"invocation": invocation.name,
-			"tool_name": invocation.tool_name,
-			"status": invocation.status,
-		},
-		after_commit=True,
-	)
+	publish_invalidation("whatsapp_core_mcp_invocation")
 
 
 def _safe_audit_value(value, key: str = ""):

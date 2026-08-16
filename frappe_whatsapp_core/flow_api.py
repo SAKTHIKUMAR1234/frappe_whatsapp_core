@@ -26,7 +26,7 @@ def list_flows(limit: int = 500):
 	return frappe.get_list(
 		"WhatsApp Core Flow",
 		fields=[
-			"name", "flow_key", "title", "description", "status", "enabled",
+			"name", "flow_key", "flow_type", "title", "description", "status", "enabled",
 			"active_version", "approval_status", "approval_requested_by",
 			"approval_requested_at", "approved_by", "approved_at", "owner", "modified",
 		],
@@ -48,6 +48,7 @@ def create_flow(title: str, flow_key: str, graph=None, description: str = ""):
 	doc = frappe.get_doc({
 		"doctype": "WhatsApp Core Flow",
 		"flow_key": flow_key,
+		"flow_type": "Custom Automation",
 		"title": title,
 		"description": str(description or ""),
 		"status": "Draft",

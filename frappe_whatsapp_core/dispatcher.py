@@ -7,7 +7,8 @@ import frappe
 from frappe.utils import add_to_date, now, now_datetime
 
 from frappe_whatsapp_core.materializer import materialize_event
-from frappe_whatsapp_core.message_media import add_media_url, enqueue_message_media_cache
+from frappe_whatsapp_core.message_media import enqueue_message_media_cache
+from frappe_whatsapp_core.realtime import publish_invalidation
 
 MAX_ATTEMPTS = 6
 MAX_REALTIME_BATCH_SIZE = 100
@@ -16,7 +17,6 @@ GENERIC_BATCH_DEADLOCK_RETRIES = 6
 WAITING_STATUS_DEADLOCK_RETRIES = 6
 ORPHAN_STATUS_RETRY_BASE_SECONDS = 0.25
 ORPHAN_STATUS_RETRY_MAX_SECONDS = 2.0
-MESSAGE_PROJECTION_KINDS = {"message", "status", "edit", "revoke"}
 
 
 def enqueue_event(event_id, enqueue_after_commit=False):
@@ -589,97 +589,13 @@ def process_event(event_id):
 
 
 def _publish_batch_refresh(event_ids, results):
-	"""Emit one compact refresh only after the worker transaction commits."""
-	changes_by_message = {}
-	changed_kinds = set()
-	for result in results:
-		for projection in result.get("projections") or []:
-			kind = projection.get("kind")
-			status = projection.get("status")
-			if status not in {"created", "updated"}:
-				continue
-			if kind:
-				changed_kinds.add(kind)
-			if kind in MESSAGE_PROJECTION_KINDS and projection.get("name"):
-				previous = changes_by_message.get(projection["name"]) or {}
-				changes_by_message[projection["name"]] = {
-					"kind": kind,
-					"status": (
-						"created"
-						if previous.get("status") == "created" or status == "created"
-						else status
-					),
-				}
+	"""Tell clients to refetch through permission-filtered APIs after commit.
 
-	message_changes = []
-	if changes_by_message:
-		message_rows = frappe.get_all(
-			"WhatsApp Core Message",
-			filters={"name": ["in", list(changes_by_message)]},
-			fields=[
-				"name",
-				"conversation",
-				"provider_message_id",
-				"direction",
-				"message_type",
-				"body",
-				"content",
-				"provider_timestamp",
-				"delivery_status",
-				"failure",
-				"owner",
-				"creation",
-			],
-			limit_page_length=MAX_REALTIME_BATCH_SIZE,
-		)
-		owners = {
-			row.get("owner")
-			for row in message_rows
-			if row.get("direction") == "Outbound" and row.get("owner")
-		}
-		owner_names = {
-			row.name: row.full_name or row.name
-			for row in frappe.get_all(
-				"User",
-				filters={"name": ["in", list(owners)]},
-				fields=["name", "full_name"],
-				limit_page_length=max(1, len(owners)),
-			)
-		} if owners else {}
-		for row in message_rows:
-			row["sender_name"] = (
-				owner_names.get(row.get("owner"), row.get("owner"))
-				if row.get("direction") == "Outbound"
-				else ""
-			)
-			# Realtime message deltas must have the same media projection as a
-			# normal inbox reload; otherwise an inbound image initially renders as
-			# caption-only until the user refreshes the conversation.
-			add_media_url(row)
-		rows_by_name = {row["name"]: row for row in message_rows}
-		message_changes = [
-			{
-				**change,
-				"message": rows_by_name[name],
-			}
-			for name, change in changes_by_message.items()
-			if name in rows_by_name
-		]
-	conversations = list(dict.fromkeys(
-		change["message"]["conversation"] for change in message_changes
-	))
-	frappe.publish_realtime(
-		"whatsapp_core_batch_committed",
-		{
-			"event_count": len(event_ids),
-			"completed": sum(result.get("status") == "completed" for result in results),
-			"failed": sum(result.get("status") == "failed" for result in results),
-			"kinds": sorted(changed_kinds),
-			"conversations": conversations,
-			"message_changes": message_changes,
-		},
-		after_commit=True,
-	)
+	Site-wide realtime rooms cannot carry row-scoped data safely: any Desk user
+	can receive them. Keep this event payload-free and let each client re-query
+	the conversations it is currently authorised to view.
+	"""
+	publish_invalidation("whatsapp_core_batch_committed")
 
 
 def _start_handler_run(run_key, event_id, handler_path):

@@ -159,17 +159,10 @@ class TestBatchTransport(TestCase):
 			"success": True,
 			"queued": 1,
 			"duplicates": 0,
-			"items": [{
-				"idempotency_key": "key-1",
-				"status": "queued",
-				"result": {"success": True, "status": "queued"},
-			}],
+			"items": [{"idempotency_key": "key-1", "status": "queued"}],
 		}
 		with (
-			patch(
-				"frappe_whatsapp_core.hub_client.get_settings",
-				return_value=settings,
-			),
+			patch("frappe_whatsapp_core.hub_client.get_settings", return_value=settings),
 			patch(
 				"frappe_whatsapp_core.hub_client._session.post",
 				return_value=response,
@@ -186,10 +179,6 @@ class TestBatchTransport(TestCase):
 			post.call_args.args[0],
 			"https://hub.example.test/api/method/"
 			"frappe_whatsapp_hub.frappe_whatsapp_hub.api.gateway.outbound_batch",
-		)
-		self.assertEqual(
-			post.call_args.kwargs["headers"]["Authorization"],
-			"token core-key:core-secret",
 		)
 
 	def test_core_campaign_sender_defaults_to_batch_transport(self):
@@ -342,7 +331,7 @@ class TestBatchTransport(TestCase):
 			result = queue_campaign_batch(campaign, recipients)
 
 		hub_batch.assert_not_called()
-		outbound_ready.assert_called_once_with()
+		outbound_ready.assert_called_once_with(channel.name)
 		enqueue.assert_called_once_with(
 			"frappe_whatsapp_core.outbound.deliver_queued_message_batch",
 			queue="short",
@@ -352,10 +341,7 @@ class TestBatchTransport(TestCase):
 		self.assertTrue(all(row["success"] for row in result.values()))
 		db_sql.assert_called_once()
 		publish.assert_called_once()
-		self.assertEqual(
-			len(publish.call_args.args[1]["message_changes"]),
-			2,
-		)
+		self.assertEqual(publish.call_args.args[1], {"changed": True})
 
 	def test_campaign_batch_never_converts_deadlock_to_recipient_failure(self):
 		campaign = SimpleNamespace(

@@ -89,6 +89,19 @@ class TestCoreRoleBoundary(FrappeTestCase):
 			with self.assertRaises(frappe.PermissionError):
 				dashboard()
 
+	def test_user_cannot_read_global_template_authoring_catalog_or_counts(self):
+		from frappe_whatsapp_core import frontend_api, permissions
+
+		with (
+			patch.object(permissions.frappe, "get_roles", return_value=["WhatsApp User"]),
+			patch.object(frontend_api.frappe, "get_list") as get_list,
+			patch.object(frontend_api.frappe.db, "count") as count,
+			self.assertRaises(frappe.PermissionError),
+		):
+			frontend_api.template_catalog(start=0, limit=1)
+		get_list.assert_not_called()
+		count.assert_not_called()
+
 	def test_manager_onboarding_status_is_secret_free(self):
 		from frappe_whatsapp_core import frontend_api
 

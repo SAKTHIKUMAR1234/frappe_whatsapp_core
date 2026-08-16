@@ -20,6 +20,14 @@ class TestTeamContactAccess(FrappeTestCase):
 		self.uncategorized = self._identity(f"uncategorized-{suffix}")
 		self.conversation = self._conversation(self.identity, suffix)
 		self.open_conversation = self._conversation(self.uncategorized, f"open-{suffix}")
+		self.account = f"team-account-{suffix}"
+		settings = frappe.get_single("WhatsApp Core Settings")
+		settings.set("accounts", [{
+			"channel": self.conversation.channel,
+			"account_name": self.account,
+			"is_default": 1,
+		}])
+		settings.save(ignore_permissions=True)
 		self.team = upsert_team(
 			team_name=f"Access Team {suffix}",
 			icon="headphones",
@@ -83,11 +91,13 @@ class TestTeamContactAccess(FrappeTestCase):
 	def test_template_queries_hide_non_sendable_records_from_operators(self):
 		frappe.set_user("Administrator")
 		approved = sync_template_projection({
+			"account_name": self.account,
 			"name": f"approved_{frappe.generate_hash(length=8).lower()}",
 			"language": "en",
 			"status": "APPROVED",
 		})["name"]
 		draft = sync_template_projection({
+			"account_name": self.account,
 			"name": f"draft_{frappe.generate_hash(length=8).lower()}",
 			"language": "en",
 			"status": "IN_REVIEW",
