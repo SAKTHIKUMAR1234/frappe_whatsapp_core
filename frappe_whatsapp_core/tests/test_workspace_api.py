@@ -302,6 +302,26 @@ class TestWorkspaceAPI(FrappeTestCase):
 		)
 		self.assertEqual(conversation_row.unread_count, 0)
 
+	@patch(
+		"frappe_whatsapp_core.conversation_reads._latest_inbound_provider_message",
+		return_value=None,
+	)
+	def test_read_batch_ignores_client_only_optimistic_message_names(self, _latest):
+		result = mark_messages_read(
+			self.conversation.name,
+			[self.messages[0].name, "optimistic:pending-send"],
+		)
+
+		self.assertEqual(result["processed"], 1)
+		self.assertEqual(result["recorded"], 1)
+		self.assertEqual(result["ignored"], 1)
+		self.assertTrue(
+			frappe.db.exists(
+				"WhatsApp Core Message Read",
+				{"message": self.messages[0].name, "user": frappe.session.user},
+			)
+		)
+
 	def test_inbound_reactions_do_not_inflate_unread_count(self):
 		frappe.get_doc({
 			"doctype": "WhatsApp Core Message",

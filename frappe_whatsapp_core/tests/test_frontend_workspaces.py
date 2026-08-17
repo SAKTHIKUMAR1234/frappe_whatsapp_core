@@ -200,6 +200,8 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		).read_text()
 		self.assertIn("pendingReadMessages.set(conversation, visibleNames)", inbox)
 		self.assertIn("window.setTimeout(flushReadBatch, 400)", inbox)
+		self.assertIn("message.optimistic", inbox)
+		self.assertIn("name.startsWith('optimistic:')", inbox)
 		self.assertIn("document.visibilityState !== 'visible'", inbox)
 		self.assertIn("async function loadLatestMessages()", inbox)
 		self.assertIn("'Scroll to bottom'", inbox)

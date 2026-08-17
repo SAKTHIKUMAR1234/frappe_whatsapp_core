@@ -234,8 +234,20 @@ def mark_messages_read(conversation: str, messages: list[str] | str) -> dict:
 	if not isinstance(messages, list):
 		frappe.throw("messages must be a list", frappe.ValidationError)
 	names = [str(name).strip() for name in dict.fromkeys(messages) if str(name).strip()]
+	# The inbox renders a temporary ``optimistic:<uuid>`` row while an outbound
+	# send is being committed. A visibility scan from an older/slow tab can race
+	# reconciliation and submit that client-only name after the real message has
+	# replaced it. It never identifies a database row, so discard only this
+	# explicit namespace while keeping the normal cross-conversation check strict.
+	optimistic_names = [name for name in names if name.startswith("optimistic:")]
+	names = [name for name in names if not name.startswith("optimistic:")]
 	if not names:
-		return {"conversation": conversation, "processed": 0}
+		return {
+			"conversation": conversation,
+			"processed": 0,
+			"recorded": 0,
+			"ignored": len(optimistic_names),
+		}
 	if len(names) > MAX_READ_BATCH:
 		frappe.throw(
 			f"A read batch cannot exceed {MAX_READ_BATCH} messages",
@@ -268,6 +280,7 @@ def mark_messages_read(conversation: str, messages: list[str] | str) -> dict:
 	read_state = _advance_conversation_cursor(conversation, target, recorded)
 	read_state["processed"] = len(rows)
 	read_state["recorded"] = len(recorded)
+	read_state["ignored"] = len(optimistic_names)
 	return read_state
 
 

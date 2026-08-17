@@ -569,7 +569,14 @@
 			for (const element of stream.value.querySelectorAll('[data-message-name]')) {
 				const name = element.dataset.messageName
 				const message = messagesByName.get(name)
-				if (!message || locallyReadMessages.has(name) || isAlreadyRead(message)) continue
+				if (
+					!message ||
+					message.optimistic ||
+					name.startsWith('optimistic:') ||
+					locallyReadMessages.has(name) ||
+					isAlreadyRead(message)
+				)
+					continue
 				if (!isMessageVisible(element, viewport)) continue
 				visibleNames.add(name)
 			}
