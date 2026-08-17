@@ -116,7 +116,11 @@ def mark_message_read(
 ) -> dict:
 	"""Queue provider read/typing state on the Go data plane when configured."""
 	message_id = str(message_id or "").strip()
-	if not message_id or message_id.startswith("local:"):
+	if (
+		not message_id.startswith("wamid.")
+		or len(message_id) > 512
+		or any(character.isspace() for character in message_id)
+	):
 		frappe.throw("A provider inbound message id is required", frappe.ValidationError)
 	result = send_raw(
 			channel,

@@ -111,6 +111,12 @@ class TestRichMessages(FrappeTestCase):
 
 class TestProviderPresence(FrappeTestCase):
 	@patch("frappe_whatsapp_core.hub_client.send_raw")
+	def test_non_meta_read_id_is_rejected_before_relay_queue(self, send_raw):
+		with self.assertRaises(frappe.ValidationError):
+			mark_message_read("Channel", "legacy-local-id")
+		send_raw.assert_not_called()
+
+	@patch("frappe_whatsapp_core.hub_client.send_raw")
 	@patch("frappe_whatsapp_core.hub_client.get_settings")
 	def test_read_and_typing_use_direct_relay_data_plane(self, get_settings, send_raw):
 		settings = MagicMock()

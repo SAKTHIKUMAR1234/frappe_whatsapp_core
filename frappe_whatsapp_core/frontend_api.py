@@ -16,8 +16,8 @@ from frappe_whatsapp_core.ai_summaries import (
 )
 from frappe_whatsapp_core.campaigns import (
 	authorize_campaign,
-	campaign_summary,
 	campaign_summaries,
+	campaign_summary,
 	cancel_campaign,
 	create_campaign,
 	launch_campaign,
@@ -36,10 +36,10 @@ from frappe_whatsapp_core.permissions import (
 	CORE_APP_ROLES,
 	FLOW_BUILDER_ROLES,
 	require_core_access,
-	require_transport_access,
 	require_document_permission,
 	require_flow_builder_access,
 	require_system_manager,
+	require_transport_access,
 )
 from frappe_whatsapp_core.realtime import publish_invalidation
 from frappe_whatsapp_core.topics import unclassified_messages, upsert_topic
@@ -104,18 +104,23 @@ def onboarding_status():
 @frappe.whitelist()
 @require_transport_access(capability=None)
 def transport_identity():
-	"""Verify the least-privilege Integration identity without Desk access."""
+	"""Verify a unified manager or least-privilege service identity."""
 	from frappe_whatsapp_core.permissions import current_transport_capability
 
 	capability = current_transport_capability()
 	payload = {**_transport_status_payload(), "capability": capability}
 	if capability in {"template", "all"}:
 		settings = frappe.get_single("WhatsApp Core Settings")
-		payload["allowed_accounts"] = [
-			row.account_name
+		is_manager = (
+			frappe.session.user == "Administrator"
+			or "WhatsApp Manager" in set(frappe.get_roles(frappe.session.user))
+		)
+		payload["allowed_accounts"] = sorted({
+			str(row.account_name or "").strip()
 			for row in settings.accounts
-			if row.template_service_user == frappe.session.user
-		]
+			if str(row.account_name or "").strip()
+			and (is_manager or row.template_service_user == frappe.session.user)
+		})
 	return payload
 
 
@@ -135,6 +140,7 @@ def provision_transport_credentials(
 	"""
 	from frappe.core.doctype.user.user import generate_keys
 	from frappe.utils import validate_email_address
+
 	from frappe_whatsapp_core.permissions import (
 		TRANSPORT_CAPABILITY_ROLES,
 		is_dedicated_transport_user,

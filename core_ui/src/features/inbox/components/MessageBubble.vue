@@ -96,6 +96,9 @@
 		)
 		return /^(https?:\/\/|\/)/i.test(value) ? value : ''
 	})
+	const hasVisualMedia = computed(
+		() => ['image', 'sticker'].includes(props.message.message_type) && Boolean(mediaUrl.value),
+	)
 	const quotedMessageId = computed(
 		() =>
 			content.value.context?.id ||
@@ -180,11 +183,21 @@
 				.join('') || '?'
 		)
 	}
+
+	function readerTooltip(reader) {
+		const label = String(reader.display_name || reader.full_name || 'Team member').trim()
+		const readAt = reader.last_read_at || reader.read_at
+		return `${label || 'Team member'} read up to this message${readAt ? ` at ${readAt}` : ''}`
+	}
 </script>
 
 <template>
 	<article
-		:class="['message-bubble', message.direction?.toLowerCase()]"
+		:class="[
+			'message-bubble',
+			message.direction?.toLowerCase(),
+			{ 'has-visual-media': hasVisualMedia },
+		]"
 		:data-message-name="message.name"
 		@contextmenu="openMenu"
 		@pointerdown="startLongPress"
@@ -349,7 +362,10 @@
 			<span
 				v-for="reader in readers"
 				:key="reader.user"
-				:title="`${reader.display_name || reader.full_name || 'Team member'} read up to this message${reader.last_read_at || reader.read_at ? ` at ${reader.last_read_at || reader.read_at}` : ''}`"
+				class="reader-avatar"
+				:data-tooltip="readerTooltip(reader)"
+				:aria-label="readerTooltip(reader)"
+				tabindex="0"
 			>
 				<img v-if="reader.user_image" :src="reader.user_image" alt="" />
 				<em v-else>{{ readerInitials(reader) }}</em>
@@ -407,6 +423,13 @@
 		justify-self: end;
 		border-radius: 8px 8px 2px 8px;
 		background: var(--wa-message-out);
+	}
+	.message-bubble.has-visual-media {
+		padding-right: 9px;
+	}
+	.message-bubble.has-visual-media .message-sender,
+	.message-bubble.has-visual-media .message-kind {
+		padding-right: 27px;
 	}
 	.message-insight {
 		margin-top: 7px;
@@ -520,7 +543,10 @@
 		background: var(--wa-media-bg);
 	}
 	.message-media.image {
-		object-fit: cover;
+		width: auto;
+		max-width: min(360px, 100%);
+		height: auto;
+		object-fit: contain;
 	}
 	.message-audio {
 		display: block;
@@ -617,22 +643,59 @@
 		padding-left: 5px;
 	}
 	.message-readers > span {
+		position: relative;
 		display: grid;
 		place-items: center;
 		width: 22px;
 		height: 22px;
 		margin-left: -5px;
-		overflow: hidden;
 		border: 2px solid var(--wa-surface);
 		border-radius: 50%;
 		background: var(--wa-primary);
 		color: white;
 		box-shadow: 0 1px 4px rgba(16, 35, 29, 0.14);
+		cursor: help;
+		z-index: 1;
+	}
+	.message-readers > span:hover,
+	.message-readers > span:focus-visible {
+		z-index: 4;
+		outline: 2px solid color-mix(in srgb, var(--wa-primary) 42%, transparent);
+		outline-offset: 2px;
+	}
+	.message-readers > span::after {
+		position: absolute;
+		right: -6px;
+		bottom: calc(100% + 8px);
+		width: max-content;
+		max-width: min(280px, 72vw);
+		padding: 6px 8px;
+		border-radius: 6px;
+		background: var(--wa-text);
+		color: var(--wa-surface);
+		box-shadow: 0 3px 12px rgba(11, 20, 26, 0.22);
+		content: attr(data-tooltip);
+		font-size: 11px;
+		font-style: normal;
+		font-weight: 600;
+		line-height: 1.35;
+		opacity: 0;
+		pointer-events: none;
+		transform: translateY(3px);
+		transition:
+			opacity 120ms ease,
+			transform 120ms ease;
+	}
+	.message-readers > span:hover::after,
+	.message-readers > span:focus-visible::after {
+		opacity: 1;
+		transform: translateY(0);
 	}
 	.message-readers img {
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
+		border-radius: 50%;
 	}
 	.message-readers em {
 		font-size: 8px;
@@ -677,6 +740,10 @@
 			width: 100%;
 			max-width: min(72vw, 360px);
 			max-height: 42vh;
+		}
+		.message-media.image {
+			width: auto;
+			max-width: min(82vw, 360px);
 		}
 		.message-audio {
 			width: min(68vw, 310px);

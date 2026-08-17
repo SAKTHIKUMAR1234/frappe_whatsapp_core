@@ -370,7 +370,13 @@
 			if (target) {
 				target.closest('details')?.setAttribute('open', '')
 				await nextTick()
-				stream.value.scrollTop = Math.max(0, target.offsetTop - 48)
+				await waitForMessageLayout()
+				const viewportBounds = stream.value.getBoundingClientRect()
+				const targetBounds = target.getBoundingClientRect()
+				stream.value.scrollTop = Math.max(
+					0,
+					stream.value.scrollTop + targetBounds.top - viewportBounds.top - 8,
+				)
 				updateMessageBottomState()
 				return
 			}
@@ -400,6 +406,29 @@
 		} finally {
 			restoringMessageScroll = false
 		}
+	}
+
+	async function waitForMessageLayout() {
+		const pendingMedia = [...stream.value.querySelectorAll('img, video')].filter(
+			(element) =>
+				(element.tagName === 'IMG' && !element.complete) ||
+				(element.tagName === 'VIDEO' && element.readyState < 1),
+		)
+		if (!pendingMedia.length) return
+		await Promise.race([
+			Promise.all(
+				pendingMedia.map(
+					(element) =>
+						new Promise((resolve) => {
+							element.addEventListener('load', resolve, { once: true })
+							element.addEventListener('error', resolve, { once: true })
+							element.addEventListener('loadedmetadata', resolve, { once: true })
+						}),
+				),
+			),
+			new Promise((resolve) => window.setTimeout(resolve, 1200)),
+		])
+		await nextTick()
 	}
 
 	async function loadOlderMessages() {
@@ -1626,6 +1655,11 @@
 			}
 			await scrollToBottom(true)
 			await new Promise((resolve) => window.setTimeout(resolve, 400))
+			// Smooth scrolling can be interrupted while the latest page replaces the
+			// current DOM. Finish with an exact position so "New messages" always
+			// lands on the actual final message, even with a long conversation.
+			if (conversation !== selectedName.value || detail.value !== currentDetail) return
+			await scrollToBottom()
 			updateMessageBottomState()
 			queueVisibleMessages()
 		} catch (error) {

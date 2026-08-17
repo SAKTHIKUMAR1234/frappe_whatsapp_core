@@ -5,8 +5,7 @@ from unittest.mock import patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from frappe_whatsapp_core import api, frontend_api, template_catalog
-from frappe_whatsapp_core import mcp_tools
+from frappe_whatsapp_core import api, frontend_api, mcp_tools, template_catalog
 from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS
 
 
@@ -86,6 +85,36 @@ class TestIntegrationCallbackContract(FrappeTestCase):
 			frappe.local.session.user = original_user
 			frappe.local.request = original_request
 			frappe.local.session_obj = original_session_obj
+
+	def test_whatsapp_manager_is_a_unified_transport_identity(self):
+		manager = f"transport-manager-{frappe.generate_hash(length=8).lower()}@example.com"
+		frappe.get_doc({
+			"doctype": "User",
+			"email": manager,
+			"first_name": "Transport Manager",
+			"enabled": 1,
+			"user_type": "System User",
+			"send_welcome_email": 0,
+			"roles": [{"role": "WhatsApp Manager"}],
+		}).insert(ignore_permissions=True)
+		original_user = frappe.session.user
+		frappe.local.session.user = manager
+		try:
+			with patch.object(api, "_apply_outbound_result", return_value={"status": "applied"}):
+				self.assertEqual(
+					api.receive_outbound_result("manager-transport-proof", "sent"),
+					{"status": "applied"},
+				)
+			with patch.object(
+				frontend_api,
+				"_transport_status_payload",
+				return_value={"site": frappe.local.site},
+			):
+				identity = frontend_api.transport_identity()
+		finally:
+			frappe.local.session.user = original_user
+		self.assertEqual(identity["capability"], "all")
+		self.assertEqual(identity["allowed_accounts"], [self.account])
 
 	def test_transport_role_on_desk_user_is_rejected(self):
 		user_name = f"transport-desk-{frappe.generate_hash(length=8).lower()}@example.com"

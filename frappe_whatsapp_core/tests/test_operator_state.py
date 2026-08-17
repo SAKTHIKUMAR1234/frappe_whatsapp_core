@@ -6,6 +6,17 @@ from frappe_whatsapp_core import conversation_reads, message_reactions
 
 
 class TestConversationReads(TestCase):
+	def test_provider_read_lookup_ignores_legacy_non_meta_ids(self):
+		with patch.object(
+			conversation_reads.frappe.db,
+			"sql",
+			return_value=[],
+		) as query:
+			self.assertIsNone(
+				conversation_reads._latest_inbound_provider_message("CONV-1")
+			)
+		self.assertIn("provider_message_id LIKE 'wamid.%%'", query.call_args.args[0])
+
 	def test_reader_display_name_never_falls_back_to_email(self):
 		self.assertEqual(
 			conversation_reads._reader_display_name(

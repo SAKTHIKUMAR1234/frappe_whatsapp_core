@@ -11,9 +11,9 @@ import hashlib
 
 import frappe
 from frappe.utils import now_datetime
+
 from frappe_whatsapp_core.permissions import assert_conversation_access, require_core_access
 from frappe_whatsapp_core.realtime import publish_invalidation
-
 
 MAX_READ_BATCH = 100
 
@@ -416,7 +416,7 @@ def _latest_inbound_provider_message(conversation: str, at_or_before=None):
 		WHERE conversation = %(conversation)s
 			AND direction = 'Inbound'
 			AND message_type != 'reaction'
-			AND provider_message_id NOT LIKE 'local:%%'
+			AND provider_message_id LIKE 'wamid.%%'
 			{position_filter}
 		ORDER BY provider_timestamp DESC, creation DESC, name DESC
 		LIMIT 1

@@ -26,9 +26,10 @@ CORE_MANAGEMENT_ROLES = {
 	"WhatsApp Manager",
 }
 
-# Machine-to-machine ingress is deliberately separate from every Desk role.
-# Integration/relay credentials must never inherit operator or configuration
-# permissions merely to deliver signed, durable events into Core.
+# Dedicated machine roles remain the least-privilege deployment option. A
+# WhatsApp Manager API credential is also a valid unified transport identity so
+# an operator can configure one stable credential across ingress, templates,
+# flows, and result callbacks without creating parallel identities.
 TRANSPORT_SERVICE_ROLE = "WhatsApp Core Transport Service"
 TEMPLATE_SERVICE_ROLE = "WhatsApp Core Template Service"
 FLOW_SERVICE_ROLE = "WhatsApp Core Flow Service"
@@ -308,11 +309,11 @@ def require_system_manager():
 
 
 def require_transport_access(capability: str | None = "ingress"):
-	"""Authorize only the dedicated transport identity at machine endpoints.
+	"""Authorize a WhatsApp Manager or a capability-scoped service identity.
 
-	Administrator remains available for local recovery and test fixtures.  A user
-	with System Manager or WhatsApp Manager alone is intentionally rejected. Each
-	machine identity is bound to one action family.
+	Administrator remains available for local recovery and test fixtures. A plain
+	System Manager is intentionally rejected; the user must explicitly hold the
+	WhatsApp Manager role or an exact dedicated transport role.
 	"""
 	if capability is not None and capability not in TRANSPORT_CAPABILITY_ROLES:
 		raise ValueError(f"Unsupported transport capability: {capability}")
@@ -323,8 +324,11 @@ def require_transport_access(capability: str | None = "ingress"):
 			user = frappe.session.user
 			if user == "Guest":
 				frappe.throw("Authentication required", frappe.AuthenticationError)
-			if user != "Administrator" and not is_dedicated_transport_user(
-				user, capability=capability
+			roles = set(frappe.get_roles(user))
+			if (
+				user != "Administrator"
+				and "WhatsApp Manager" not in roles
+				and not is_dedicated_transport_user(user, capability=capability)
 			):
 				frappe.throw(
 					"WhatsApp Core machine service access is required for this capability",
@@ -384,10 +388,10 @@ def is_dedicated_transport_user(user: str, *, capability: str | None = "ingress"
 
 
 def current_transport_capability(user: str | None = None) -> str:
-	"""Return the action family assigned to one validated machine user."""
+	"""Return the action family assigned to one validated transport user."""
 	user = user or frappe.session.user
-	if user == "Administrator":
-		return "administrator"
+	if user == "Administrator" or "WhatsApp Manager" in set(frappe.get_roles(user)):
+		return "all"
 	if not is_dedicated_transport_user(user, capability=None):
 		return ""
 	direct_roles = {row.role for row in frappe.get_doc("User", user).roles or []}
