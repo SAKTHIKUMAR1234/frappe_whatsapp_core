@@ -189,6 +189,23 @@
 		const readAt = reader.last_read_at || reader.read_at
 		return `${label || 'Team member'} read up to this message${readAt ? ` at ${readAt}` : ''}`
 	}
+
+	function fitImage(event) {
+		const image = event.currentTarget
+		const naturalWidth = Number(image?.naturalWidth || 0)
+		const naturalHeight = Number(image?.naturalHeight || 0)
+		if (!naturalWidth || !naturalHeight) return
+		const mobile = window.matchMedia('(max-width: 760px)').matches
+		const maxWidth = Math.min(360, mobile ? window.innerWidth * 0.82 : 360)
+		const maxHeight = mobile
+			? window.innerHeight * 0.42
+			: Math.min(520, window.innerHeight * 0.6)
+		const scale = Math.min(1, maxWidth / naturalWidth, maxHeight / naturalHeight)
+		image.style.setProperty(
+			'--wa-image-width',
+			`${Math.max(1, Math.round(naturalWidth * scale))}px`,
+		)
+	}
 </script>
 
 <template>
@@ -246,6 +263,7 @@
 			:src="mediaUrl"
 			:alt="message.body || message.message_type"
 			class="message-media image"
+			@load="fitImage"
 		/>
 		<video
 			v-else-if="message.message_type === 'video' && mediaUrl"
@@ -365,6 +383,7 @@
 				class="reader-avatar"
 				:data-tooltip="readerTooltip(reader)"
 				:aria-label="readerTooltip(reader)"
+				:title="readerTooltip(reader)"
 				tabindex="0"
 			>
 				<img v-if="reader.user_image" :src="reader.user_image" alt="" />
@@ -536,14 +555,14 @@
 	.message-media {
 		display: block;
 		width: min(360px, 100%);
-		max-height: 320px;
+		max-height: min(520px, 60vh);
 		margin-bottom: 7px;
 		border-radius: 9px;
 		object-fit: contain;
 		background: var(--wa-media-bg);
 	}
 	.message-media.image {
-		width: auto;
+		width: min(var(--wa-image-width, 360px), 100%);
 		max-width: min(360px, 100%);
 		height: auto;
 		object-fit: contain;

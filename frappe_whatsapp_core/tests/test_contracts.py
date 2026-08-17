@@ -307,6 +307,25 @@ class TestPayloadContract(unittest.TestCase):
 			enqueue_after_commit=True,
 		)
 
+	@patch("frappe_whatsapp_core.dispatcher.enqueue_event_rows_by_lane")
+	@patch("frappe_whatsapp_core.dispatcher.enqueue_event_batch")
+	@patch("frappe_whatsapp_core.dispatcher.frappe.get_all", return_value=[])
+	@patch(
+		"frappe_whatsapp_core.dispatcher.frappe.db.sql",
+		side_effect=[["STALE-STATUS-1"], None],
+	)
+	def test_periodic_failure_retry_recovers_exhausted_timestamp_mismatch(
+		self, db_sql, get_all, enqueue_batch, enqueue_rows
+	):
+		self.assertEqual(retry_failed_events(), 1)
+		self.assertIn("TimestampMismatchError", db_sql.call_args_list[0].args[0])
+		self.assertIn("Document has been modified", db_sql.call_args_list[0].args[0])
+		self.assertIn("attempts = 0", db_sql.call_args_list[1].args[0])
+		enqueue_batch.assert_called_once_with(
+			["STALE-STATUS-1"], enqueue_after_commit=True,
+		)
+		enqueue_rows.assert_not_called()
+
 	@patch("frappe_whatsapp_core.dispatcher.enqueue_event_batch")
 	def test_repair_queue_preserves_conversation_lanes(self, enqueue_batch):
 		enqueue_event_rows_by_lane([
@@ -422,6 +441,28 @@ class TestPayloadContract(unittest.TestCase):
 	):
 		status_batch.side_effect = [
 			frappe.QueryDeadlockError("synthetic deadlock"),
+			[{"event_id": "event-1", "status": "completed"}],
+		]
+
+		result = process_event_batch(["event-1"])
+
+		self.assertEqual(result[0]["status"], "completed")
+		self.assertEqual(status_batch.call_count, 2)
+		rollback.assert_called_once_with()
+		sleep.assert_called_once()
+
+	@patch("frappe_whatsapp_core.dispatcher.time.sleep")
+	@patch("frappe_whatsapp_core.dispatcher.frappe.db.rollback")
+	@patch("frappe_whatsapp_core.dispatcher._process_status_event_batch")
+	@patch(
+		"frappe_whatsapp_core.dispatcher.frappe.get_all",
+		return_value=["event-1"],
+	)
+	def test_status_batch_retries_the_whole_transaction_after_stale_identity(
+		self, _get_all, status_batch, rollback, sleep
+	):
+		status_batch.side_effect = [
+			frappe.TimestampMismatchError("synthetic stale identity"),
 			[{"event_id": "event-1", "status": "completed"}],
 		]
 

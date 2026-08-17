@@ -38,7 +38,13 @@
 		selected_account: '',
 	})
 	const settingsStatus = ref('DISABLED')
-	const settingsJson = ref('{}')
+	const settingsVisibility = ref('')
+	const retainedCallingSettings = ref({})
+	const visibilityOptions = [
+		{ label: 'Use Meta default', value: 'DEFAULT' },
+		{ label: 'Hide for all customers', value: 'DISABLE_ALL' },
+		{ label: 'Leave unchanged', value: '' },
+	]
 	const form = ref({
 		action: 'connect',
 		call_id: '',
@@ -117,7 +123,12 @@
 			}
 			settingsStatus.value = String(calling.status || 'DISABLED').toUpperCase()
 			delete calling.status
-			settingsJson.value = JSON.stringify(calling, null, 2)
+			const visibility = String(calling.call_icon_visibility || '').toUpperCase()
+			settingsVisibility.value = ['DEFAULT', 'DISABLE_ALL'].includes(visibility)
+				? visibility
+				: ''
+			delete calling.call_icon_visibility
+			retainedCallingSettings.value = calling
 		} catch (e) {
 			if (request === loadSequence) error.value = errorMessage(e)
 		} finally {
@@ -129,21 +140,13 @@
 		refreshTimer = window.setTimeout(() => load(account.value, { silent: true }), 180)
 	}
 	async function saveSettings() {
-		let calling
-		try {
-			calling = JSON.parse(settingsJson.value)
-		} catch {
-			error.value = 'Advanced calling settings must be valid JSON.'
-			return
+		const calling = {
+			...retainedCallingSettings.value,
+			status: settingsStatus.value,
+			...(settingsVisibility.value
+				? { call_icon_visibility: settingsVisibility.value }
+				: {}),
 		}
-		if (!calling || Array.isArray(calling) || typeof calling !== 'object') {
-			error.value = 'Advanced calling settings must be a JSON object.'
-			return
-		}
-		if (String(calling.call_icon_visibility || '').toUpperCase() === 'NOT_SET') {
-			delete calling.call_icon_visibility
-		}
-		calling = { ...calling, status: settingsStatus.value }
 		const result = await run(
 			'settings',
 			() =>
@@ -500,19 +503,18 @@
 				Audio transport and SIP credentials remain on the Integration hub. Core only
 				manages the Meta control plane.
 			</p>
-			<details class="advanced">
-				<summary>Advanced Meta settings</summary>
-				<p class="help">
-					Use this only for provider options not represented above. Enter the fields
-					inside Meta's <code>calling</code> object; status is managed separately.
-				</p>
-				<Textarea
-					v-model="settingsJson"
-					rows="14"
-					aria-label="Advanced Meta calling settings"
-					class="json-editor"
-				/>
-			</details>
+			<label
+				>Call icon visibility<Select
+					v-model="settingsVisibility"
+					aria-label="Call icon visibility"
+					:options="visibilityOptions"
+					option-label="label"
+					option-value="value"
+			/></label>
+			<p class="help">
+				Choose whether Meta should use its default call icon or hide it for all customers.
+				Leave unchanged preserves the provider's current setting.
+			</p>
 		</div>
 		<template #footer
 			><Button
@@ -828,10 +830,6 @@
 	}
 	.voicemail-input {
 		display: none;
-	}
-	.json-editor {
-		width: 100%;
-		font-family: ui-monospace, SFMono-Regular, monospace;
 	}
 	.banner {
 		padding: 10px 14px;

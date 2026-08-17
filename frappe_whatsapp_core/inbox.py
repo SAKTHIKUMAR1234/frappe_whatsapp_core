@@ -382,8 +382,30 @@ def _conversation_message_rows(conversation: str, limit: int, current_read) -> t
 		name, provider_message_id, direction, message_type, body, content,
 		provider_timestamp, delivery_status, failure, owner, creation
 	"""
+	first_unread = frappe.db.sql(
+		"""
+		SELECT message.name, message.provider_timestamp, message.creation
+		FROM `tabWhatsApp Core Message` message
+		LEFT JOIN `tabWhatsApp Core Message Read` message_read
+			ON message_read.message = message.name
+			AND message_read.user = %(user)s
+		WHERE message.conversation = %(conversation)s
+			AND message.direction = 'Inbound'
+			AND message.message_type != 'reaction'
+			AND message_read.name IS NULL
+		ORDER BY message.provider_timestamp ASC, message.creation ASC, message.name ASC
+		LIMIT 1
+		""",
+		{"conversation": conversation, "user": frappe.session.user},
+		as_dict=True,
+	)
 	anchor = []
-	if current_read and current_read.get("last_read_message"):
+	# A saved cursor is meaningful only while unread messages remain. Once the
+	# exact ledger says the conversation is fully read, open the normal latest
+	# page and place its final message at the bottom like a regular chat client.
+	# If older unread holes remain, keep the monotonic cursor so an intentional
+	# jump forward does not drag the operator back through already-seen context.
+	if first_unread and current_read and current_read.get("last_read_message"):
 		anchor = frappe.db.sql(
 			"""
 			SELECT name, provider_timestamp, creation
@@ -399,24 +421,8 @@ def _conversation_message_rows(conversation: str, limit: int, current_read) -> t
 			},
 			as_dict=True,
 		)
-	if not anchor:
-		anchor = frappe.db.sql(
-			"""
-			SELECT message.name, message.provider_timestamp, message.creation
-			FROM `tabWhatsApp Core Message` message
-			LEFT JOIN `tabWhatsApp Core Message Read` message_read
-				ON message_read.message = message.name
-				AND message_read.user = %(user)s
-			WHERE message.conversation = %(conversation)s
-				AND message.direction = 'Inbound'
-				AND message.message_type != 'reaction'
-				AND message_read.name IS NULL
-			ORDER BY message.provider_timestamp ASC, message.creation ASC, message.name ASC
-			LIMIT 1
-			""",
-			{"conversation": conversation, "user": frappe.session.user},
-			as_dict=True,
-		)
+	if not anchor and first_unread:
+		anchor = first_unread
 	anchor = anchor[0] if anchor else None
 	if anchor:
 		values = {
@@ -506,7 +512,7 @@ def _conversation_message_rows(conversation: str, limit: int, current_read) -> t
 		"next_after": None,
 		"next_after_creation": None,
 		"next_after_name": None,
-	}, current_read.last_read_message if current_read else None
+	}, None
 
 
 def _team_presentations(team_names) -> dict[str, dict]:

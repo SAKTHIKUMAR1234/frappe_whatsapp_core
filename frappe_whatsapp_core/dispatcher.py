@@ -349,16 +349,17 @@ def _process_generic_event_batch(event_ids):
 
 
 def _process_status_event_batch_with_retry(event_ids):
-	"""Retry the whole status transaction after a database deadlock.
+	"""Retry the whole status transaction after a transient DB conflict.
 
 	MariaDB rolls back the complete transaction on a deadlock, including every
-	savepoint. Retrying an individual row would therefore mark earlier rows as
-	completed even though their projections were rolled back.
+	savepoint. A concurrent identity enrichment can likewise invalidate Frappe's
+	optimistic Document timestamp. Retrying an individual row would therefore
+	mark earlier rows as completed even though their projections were rolled back.
 	"""
 	for attempt in range(STATUS_BATCH_DEADLOCK_RETRIES):
 		try:
 			return _process_status_event_batch(event_ids)
-		except frappe.QueryDeadlockError:
+		except (frappe.QueryDeadlockError, frappe.TimestampMismatchError):
 			frappe.db.rollback()
 			if attempt == STATUS_BATCH_DEADLOCK_RETRIES - 1:
 				raise
@@ -425,9 +426,10 @@ def _process_status_event_batch(event_ids):
 					"status": "completed",
 					"projections": projections,
 				})
-			except frappe.QueryDeadlockError:
-				# A deadlock invalidates every savepoint in the transaction. Let the
-				# outer retry restart the entire batch from committed state.
+			except (frappe.QueryDeadlockError, frappe.TimestampMismatchError):
+				# A deadlock invalidates every savepoint in the transaction. A stale
+				# identity Document also needs a fresh committed snapshot. Let the
+				# outer retry restart the complete batch in both cases.
 				raise
 			except Exception:
 				frappe.db.rollback(save_point=savepoint)
@@ -687,8 +689,9 @@ def _start_handler_run(run_key, event_id, handler_path):
 
 def retry_failed_events():
 	# Exhausted orphan receipts are recoverable once the outbound provider id is
-	# present.  This periodic repair also covers worker crashes between binding
-	# the id and enqueueing the immediate wake-up job.
+	# present. Status projections that exhausted their attempts on a transient
+	# optimistic-lock collision are recoverable as well. This periodic repair
+	# covers deployments made after either failure was already persisted.
 	recoverable = frappe.db.sql(
 		"""
 		SELECT event.name
@@ -697,7 +700,11 @@ def retry_failed_events():
 			ON message.provider_message_id = event.external_id
 		WHERE event.status = 'Failed'
 		  AND event.event_type LIKE 'status:%'
-		  AND event.error = 'Awaiting matching outbound provider result'
+		  AND (
+			event.error = 'Awaiting matching outbound provider result'
+			OR event.error LIKE '%TimestampMismatchError%'
+			OR event.error LIKE '%Document has been modified after you have opened it%'
+		  )
 		ORDER BY event.modified ASC
 		LIMIT 1000
 		""",

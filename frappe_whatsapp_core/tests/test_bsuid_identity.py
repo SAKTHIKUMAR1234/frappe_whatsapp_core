@@ -5,7 +5,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import now_datetime
 
-from frappe_whatsapp_core.identity import get_or_create_identity
+from frappe_whatsapp_core.identity import get_or_create_identity, _update_whatsapp_identity
 from frappe_whatsapp_core.materializer import (
 	get_or_create_channel,
 	get_or_create_conversation,
@@ -96,6 +96,31 @@ class TestBusinessScopedUserIdentity(FrappeTestCase):
 		self.assertNotEqual(other.name, canonical.name)
 		with self.assertRaises(frappe.ValidationError):
 			resolve_recipient_phone(canonical, {"channel": self.second_channel.name})
+
+	def test_identity_enrichment_reloads_a_stale_document_under_row_lock(self):
+		identity = get_or_create_identity(
+			self.bsuid,
+			resolve=False,
+			scope=self.channel.name,
+			aliases={"user_id": self.bsuid, "username": "first_name"},
+		)
+		stale = frappe.get_doc("WhatsApp Core Identity", identity.name)
+		concurrent = frappe.get_doc("WhatsApp Core Identity", identity.name)
+		concurrent.display_value = "Concurrent update"
+		concurrent.save(ignore_permissions=True)
+
+		_update_whatsapp_identity(
+			stale,
+			scope=self.channel.name,
+			bsuid=self.bsuid,
+			parent_bsuid="",
+			phone=self.phone,
+			aliases={"user_id": self.bsuid, "phone": self.phone},
+		)
+
+		stale.reload()
+		self.assertEqual(stale.display_value, self.phone)
+		self.assertIn(self.phone, frappe.parse_json(stale.attributes)["phone_aliases"])
 
 	def test_late_signed_phone_alias_merges_existing_same_account_threads(self):
 		legacy = get_or_create_identity(self.phone, resolve=False)

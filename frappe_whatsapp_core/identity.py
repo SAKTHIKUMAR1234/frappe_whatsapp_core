@@ -212,6 +212,22 @@ def _identity_display_value(aliases, phone, bsuid):
 
 
 def _update_whatsapp_identity(identity, *, scope, bsuid, parent_bsuid, phone, aliases):
+	# Status callbacks for the same recipient can be projected by independent
+	# workers at the same time.  Frappe's optimistic ``modified`` check correctly
+	# rejects a stale Document, but a provider receipt must not become a permanent
+	# failed event merely because another receipt enriched the same identity first.
+	# Serialize the merge and reload only after owning the row so every callback
+	# starts from the latest committed attributes.
+	frappe.db.sql(
+		"""
+		SELECT name
+		FROM `tabWhatsApp Core Identity`
+		WHERE name = %s
+		FOR UPDATE
+		""",
+		(identity.name,),
+	)
+	identity.reload()
 	attributes = identity.attributes or {}
 	if isinstance(attributes, str):
 		attributes = frappe.parse_json(attributes)

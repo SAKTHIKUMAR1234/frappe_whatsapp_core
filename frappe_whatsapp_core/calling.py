@@ -82,6 +82,28 @@ def _consent_option(value, label):
 	return result
 
 
+def _calling_settings(value):
+	"""Normalize the stable Meta calling controls exposed by Core's UI."""
+	value = dict(_json_object(value, "calling") or {})
+	status = str(value.get("status") or "").strip().upper()
+	if status not in {"ENABLED", "DISABLED"}:
+		frappe.throw("calling.status must be ENABLED or DISABLED", frappe.ValidationError)
+	value["status"] = status
+
+	visibility = value.get("call_icon_visibility")
+	if visibility is None or str(visibility).strip().upper() in {"", "NOT_SET"}:
+		value.pop("call_icon_visibility", None)
+	else:
+		visibility = str(visibility).strip().upper()
+		if visibility not in {"DEFAULT", "DISABLE_ALL"}:
+			frappe.throw(
+				"calling.call_icon_visibility must be DEFAULT or DISABLE_ALL",
+				frappe.ValidationError,
+			)
+		value["call_icon_visibility"] = visibility
+	return value
+
+
 @frappe.whitelist()
 @require_core_access(manage=True)
 def calling_workspace(account_name=None, include_sip_credentials=0):
@@ -143,7 +165,8 @@ def calling_workspace(account_name=None, include_sip_credentials=0):
 @require_core_access(manage=True)
 def update_call_settings(account_name, calling):
 	return _call("calling", "update_call_settings", {
-		"account_name": _resolve_account_name(account_name), "calling": calling,
+		"account_name": _resolve_account_name(account_name),
+		"calling": _calling_settings(calling),
 	})
 
 

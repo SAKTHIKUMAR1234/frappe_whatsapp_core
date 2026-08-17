@@ -258,6 +258,24 @@ class TestWorkspaceAPI(FrappeTestCase):
 		"frappe_whatsapp_core.conversation_reads._latest_inbound_provider_message",
 		return_value=None,
 	)
+	def test_fully_read_conversation_opens_the_latest_page_at_bottom(self, _latest):
+		mark_messages_read(
+			self.conversation.name,
+			[message.name for message in self.messages],
+		)
+
+		from frappe_whatsapp_core.inbox import conversation
+
+		inbox_page = conversation(self.conversation.name, message_limit=1)
+		self.assertIsNone(inbox_page["resume_message"])
+		self.assertEqual(inbox_page["messages"][0].name, self.messages[-1].name)
+		self.assertTrue(inbox_page["message_page"]["has_more"])
+		self.assertFalse(inbox_page["message_page"]["has_more_newer"])
+
+	@patch(
+		"frappe_whatsapp_core.conversation_reads._latest_inbound_provider_message",
+		return_value=None,
+	)
 	def test_exact_message_reads_are_idempotent_and_drive_unread_count(self, _latest):
 		first = mark_messages_read(
 			self.conversation.name,

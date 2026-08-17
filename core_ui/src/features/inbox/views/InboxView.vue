@@ -680,6 +680,10 @@
 				detail: errorMessage(error),
 				life: 3500,
 			})
+			// Keep the failed batch available for the next visibility/scroll event,
+			// but do not retry it in a 250 ms loop. A temporary permission or network
+			// failure otherwise creates an unbounded stream of identical popups.
+			return
 		}
 		if ([...pendingReadMessages.values()].some((items) => items.size))
 			readBatchTimer = window.setTimeout(flushReadBatch, 250)

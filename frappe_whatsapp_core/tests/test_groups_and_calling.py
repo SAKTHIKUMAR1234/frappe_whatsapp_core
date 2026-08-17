@@ -4,7 +4,12 @@ from unittest.mock import patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from frappe_whatsapp_core.calling import calling_workspace, get_call_permission, send_call_button
+from frappe_whatsapp_core.calling import (
+	calling_workspace,
+	get_call_permission,
+	send_call_button,
+	update_call_settings,
+)
 from frappe_whatsapp_core.groups import (
 	_sync_group_summaries,
 	group_activity,
@@ -82,6 +87,38 @@ class TestGroupsAndCalling(FrappeTestCase):
 		self.assertFalse(result["available"])
 		self.assertEqual(result["calls"][0]["call_id"], "CALL-LOCAL")
 		self.assertEqual(result["contacts"][0]["identity"], "CONTACT-1")
+
+	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
+	@patch("frappe_whatsapp_core.calling._call", return_value={"success": True})
+	def test_calling_settings_normalize_meta_visibility(self, hub_call, resolve):
+		result = update_call_settings(
+			"Hub Account",
+			{"status": "enabled", "call_icon_visibility": "disable_all"},
+		)
+		self.assertTrue(result["success"])
+		hub_call.assert_called_once_with("calling", "update_call_settings", {
+			"account_name": "Hub Account",
+			"calling": {"status": "ENABLED", "call_icon_visibility": "DISABLE_ALL"},
+		})
+
+	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
+	@patch("frappe_whatsapp_core.calling._call", return_value={"success": True})
+	def test_calling_settings_omit_meta_not_set_sentinel(self, hub_call, resolve):
+		update_call_settings(
+			"Hub Account",
+			'{"status":"DISABLED","call_icon_visibility":"NOT_SET"}',
+		)
+		self.assertNotIn(
+			"call_icon_visibility", hub_call.call_args.args[2]["calling"]
+		)
+
+	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
+	def test_calling_settings_reject_unknown_meta_visibility(self, resolve):
+		with self.assertRaises(frappe.ValidationError):
+			update_call_settings(
+				"Hub Account",
+				{"status": "ENABLED", "call_icon_visibility": "SHOW_SOMETIMES"},
+			)
 
 	@patch("frappe_whatsapp_core.groups._accounts")
 	@patch("frappe_whatsapp_core.groups._account", return_value="Hub Account")
