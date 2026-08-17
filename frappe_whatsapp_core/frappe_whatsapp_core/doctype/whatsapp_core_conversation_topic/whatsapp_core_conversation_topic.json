@@ -2,8 +2,10 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Conversation Topic",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:topic_key",
-	"naming_rule": "By fieldname",
+	"title_field": "title",
+	"show_title_field_in_link": 1,
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
 		"topic_key",

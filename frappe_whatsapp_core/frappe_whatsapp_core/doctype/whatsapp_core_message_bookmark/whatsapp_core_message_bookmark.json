@@ -2,8 +2,8 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Message Bookmark",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:bookmark_key",
-	"naming_rule": "By fieldname",
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
 		"bookmark_key",

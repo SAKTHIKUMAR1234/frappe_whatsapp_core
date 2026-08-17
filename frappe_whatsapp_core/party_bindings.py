@@ -7,6 +7,8 @@ import json
 
 import frappe
 
+from frappe_whatsapp_core.naming import name_by_key
+
 
 def make_binding_key(
 	identity: str,
@@ -50,9 +52,19 @@ def upsert_party_binding(
 		party_name,
 		workspace_key,
 	)
+	record_name = frappe.db.get_value(
+		"WhatsApp Core Party Binding",
+		{
+			"identity": identity,
+			"workspace_key": workspace_key or "",
+			"party_doctype": party_doctype,
+			"party_name": party_name,
+		},
+		"name",
+	) or name_by_key("WhatsApp Core Party Binding", key)
 	doc = (
-		frappe.get_doc("WhatsApp Core Party Binding", key)
-		if frappe.db.exists("WhatsApp Core Party Binding", key)
+		frappe.get_doc("WhatsApp Core Party Binding", record_name)
+		if record_name
 		else frappe.new_doc("WhatsApp Core Party Binding")
 	)
 	doc.identity = identity

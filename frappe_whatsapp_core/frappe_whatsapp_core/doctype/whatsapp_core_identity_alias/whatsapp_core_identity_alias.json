@@ -2,19 +2,64 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Identity Alias",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:alias_key",
-	"naming_rule": "By fieldname",
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
-	"field_order": ["alias_key", "identity", "alias_type", "identity_scope", "alias_value"],
+	"field_order": [
+		"alias_key",
+		"identity",
+		"alias_type",
+		"identity_scope",
+		"alias_value"
+	],
 	"fields": [
-		{"fieldname": "alias_key", "fieldtype": "Data", "label": "Alias Key", "reqd": 1, "unique": 1},
-		{"fieldname": "identity", "fieldtype": "Link", "label": "Identity", "options": "WhatsApp Core Identity", "reqd": 1, "search_index": 1},
-		{"fieldname": "alias_type", "fieldtype": "Select", "label": "Alias Type", "options": "Phone\nBSUID\nParent BSUID", "reqd": 1, "in_list_view": 1},
-		{"fieldname": "identity_scope", "fieldtype": "Link", "label": "WhatsApp Account Scope", "options": "WhatsApp Core Channel", "search_index": 1},
-		{"fieldname": "alias_value", "fieldtype": "Data", "label": "Alias Value", "reqd": 1, "in_list_view": 1}
+		{
+			"fieldname": "alias_key",
+			"fieldtype": "Data",
+			"label": "Alias Key",
+			"reqd": 1,
+			"unique": 1
+		},
+		{
+			"fieldname": "identity",
+			"fieldtype": "Link",
+			"label": "Identity",
+			"options": "WhatsApp Core Identity",
+			"reqd": 1,
+			"search_index": 1
+		},
+		{
+			"fieldname": "alias_type",
+			"fieldtype": "Select",
+			"label": "Alias Type",
+			"options": "Phone\nBSUID\nParent BSUID",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "identity_scope",
+			"fieldtype": "Link",
+			"label": "WhatsApp Account Scope",
+			"options": "WhatsApp Core Channel",
+			"search_index": 1
+		},
+		{
+			"fieldname": "alias_value",
+			"fieldtype": "Data",
+			"label": "Alias Value",
+			"reqd": 1,
+			"in_list_view": 1
+		}
 	],
 	"permissions": [
-		{"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "export": 1}
+		{
+			"role": "System Manager",
+			"read": 1,
+			"write": 1,
+			"create": 1,
+			"delete": 1,
+			"export": 1
+		}
 	],
 	"sort_field": "modified",
 	"sort_order": "DESC"

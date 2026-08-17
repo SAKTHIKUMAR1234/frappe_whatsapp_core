@@ -10,6 +10,7 @@ import frappe
 from frappe.utils import now_datetime
 
 from frappe_whatsapp_core.hub_client import call_management
+from frappe_whatsapp_core.naming import name_by_key, resolve_name
 from frappe_whatsapp_core.permissions import require_core_access, require_transport_access
 from frappe_whatsapp_core.realtime import publish_invalidation
 
@@ -81,8 +82,9 @@ def sync_template_projection(template, *, enabled: bool = True) -> dict:
 	}
 	_extract_component_copy(values)
 
-	if frappe.db.exists("WhatsApp Core Template", template_key):
-		doc = frappe.get_doc("WhatsApp Core Template", template_key)
+	record_name = name_by_key("WhatsApp Core Template", template_key)
+	if record_name:
+		doc = frappe.get_doc("WhatsApp Core Template", record_name)
 		doc.update(values)
 		doc.save(ignore_permissions=True)
 		status = "updated"
@@ -118,7 +120,10 @@ def request_template_upsert(template=None, template_key=None, submit=True) -> di
 	submit = bool(frappe.utils.sbool(submit))
 	existing = None
 	if template_key:
-		existing = frappe.get_doc("WhatsApp Core Template", str(template_key).strip())
+		record_name = resolve_name("WhatsApp Core Template", template_key)
+		if not record_name:
+			frappe.throw("Template was not found", frappe.DoesNotExistError)
+		existing = frappe.get_doc("WhatsApp Core Template", record_name)
 		frappe.has_permission(
 			"WhatsApp Core Template",
 			"read",
@@ -172,7 +177,10 @@ def request_template_upsert(template=None, template_key=None, submit=True) -> di
 @require_core_access(manage=True)
 def get_template(template_key: str) -> dict:
 	"""Return one exact site-scoped template projection for API/UI/MCP readback."""
-	doc = frappe.get_doc("WhatsApp Core Template", str(template_key or "").strip())
+	record_name = resolve_name("WhatsApp Core Template", template_key)
+	if not record_name:
+		frappe.throw("Template was not found", frappe.DoesNotExistError)
+	doc = frappe.get_doc("WhatsApp Core Template", record_name)
 	frappe.has_permission("WhatsApp Core Template", "read", doc=doc, throw=True)
 	return _template_readback(doc)
 
@@ -188,22 +196,23 @@ def submit_template(template_key: str) -> dict:
 @require_transport_access(capability="template")
 def set_template_enabled(template_key: str, enabled) -> dict:
 	"""Apply an Integration-owned site assignment enable/disable event."""
-	if not frappe.db.exists("WhatsApp Core Template", template_key):
+	record_name = resolve_name("WhatsApp Core Template", template_key)
+	if not record_name:
 		frappe.throw("Assigned template was not found", frappe.DoesNotExistError)
 	_assert_template_account_access(
-		frappe.db.get_value("WhatsApp Core Template", template_key, "account_name")
+		frappe.db.get_value("WhatsApp Core Template", record_name, "account_name")
 	)
 	frappe.db.set_value(
 		"WhatsApp Core Template",
-		template_key,
+		record_name,
 		{
 			"enabled": int(frappe.utils.sbool(enabled)),
 			"last_synced_at": now_datetime(),
 		},
 	)
-	_publish_template(template_key)
+	_publish_template(record_name)
 	return {
-		"name": template_key,
+		"name": record_name,
 		"enabled": bool(frappe.utils.sbool(enabled)),
 	}
 

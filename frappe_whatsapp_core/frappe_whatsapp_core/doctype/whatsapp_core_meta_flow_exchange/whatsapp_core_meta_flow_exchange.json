@@ -2,8 +2,8 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Meta Flow Exchange",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:request_id",
-	"naming_rule": "By fieldname",
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
 		"request_id",
@@ -19,21 +19,92 @@
 		"error"
 	],
 	"fields": [
-		{"fieldname": "request_id", "fieldtype": "Data", "label": "Request ID", "reqd": 1, "unique": 1, "in_list_view": 1},
-		{"fieldname": "account_name", "fieldtype": "Data", "label": "Hub Account", "reqd": 1, "in_list_view": 1},
-		{"fieldname": "channel", "fieldtype": "Link", "label": "Channel", "options": "WhatsApp Core Channel", "in_list_view": 1},
-		{"fieldname": "action", "fieldtype": "Data", "label": "Action", "in_list_view": 1},
-		{"fieldname": "screen", "fieldtype": "Data", "label": "Screen", "in_list_view": 1},
-		{"fieldname": "flow_token", "fieldtype": "Data", "label": "Flow Token"},
-		{"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Processing\nCompleted\nRejected\nFailed", "default": "Processing", "reqd": 1, "in_list_view": 1},
-		{"fieldname": "duration_ms", "fieldtype": "Int", "label": "Duration (ms)", "read_only": 1},
-		{"fieldname": "request_payload", "fieldtype": "Code", "label": "Decrypted Request", "options": "JSON", "read_only": 1},
-		{"fieldname": "response_payload", "fieldtype": "Code", "label": "Clear Response", "options": "JSON", "read_only": 1},
-		{"fieldname": "error", "fieldtype": "Long Text", "label": "Error", "read_only": 1}
+		{
+			"fieldname": "request_id",
+			"fieldtype": "Data",
+			"label": "Request ID",
+			"reqd": 1,
+			"unique": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "account_name",
+			"fieldtype": "Data",
+			"label": "Hub Account",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "channel",
+			"fieldtype": "Link",
+			"label": "Channel",
+			"options": "WhatsApp Core Channel",
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "action",
+			"fieldtype": "Data",
+			"label": "Action",
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "screen",
+			"fieldtype": "Data",
+			"label": "Screen",
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "flow_token",
+			"fieldtype": "Data",
+			"label": "Flow Token"
+		},
+		{
+			"fieldname": "status",
+			"fieldtype": "Select",
+			"label": "Status",
+			"options": "Processing\nCompleted\nRejected\nFailed",
+			"default": "Processing",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "duration_ms",
+			"fieldtype": "Int",
+			"label": "Duration (ms)",
+			"read_only": 1
+		},
+		{
+			"fieldname": "request_payload",
+			"fieldtype": "Code",
+			"label": "Decrypted Request",
+			"options": "JSON",
+			"read_only": 1
+		},
+		{
+			"fieldname": "response_payload",
+			"fieldtype": "Code",
+			"label": "Clear Response",
+			"options": "JSON",
+			"read_only": 1
+		},
+		{
+			"fieldname": "error",
+			"fieldtype": "Long Text",
+			"label": "Error",
+			"read_only": 1
+		}
 	],
 	"permissions": [
-		{"role": "System Manager", "read": 1, "export": 1},
-		{"role": "WhatsApp Manager", "read": 1, "export": 1}
+		{
+			"role": "System Manager",
+			"read": 1,
+			"export": 1
+		},
+		{
+			"role": "WhatsApp Manager",
+			"read": 1,
+			"export": 1
+		}
 	],
 	"sort_field": "creation",
 	"sort_order": "DESC",

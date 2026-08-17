@@ -2,8 +2,8 @@
  "doctype": "DocType",
  "name": "WhatsApp Core Contact Summary",
  "module": "Frappe WhatsApp Core",
- "autoname": "field:summary_key",
- "naming_rule": "By fieldname",
+ "autoname": "hash",
+ "naming_rule": "Random",
  "engine": "InnoDB",
  "track_changes": 1,
  "field_order": [
@@ -32,34 +32,157 @@
   "error"
  ],
  "fields": [
-  {"fieldname":"summary_key","fieldtype":"Data","label":"Summary Key","reqd":1,"unique":1},
-  {"fieldname":"scope_type","fieldtype":"Select","label":"Scope Type","options":"Identity\nGroup","reqd":1,"in_list_view":1},
-  {"fieldname":"scope_key","fieldtype":"Data","label":"Scope Key","reqd":1,"in_list_view":1},
-  {"fieldname":"identity","fieldtype":"Link","label":"Contact","options":"WhatsApp Core Identity"},
-  {"fieldname":"source_identities","fieldtype":"JSON","label":"Source Contacts"},
-  {"fieldname":"identity_count","fieldtype":"Int","label":"Contact Count","read_only":1},
-  {"fieldname":"status","fieldtype":"Select","label":"Status","options":"Ready\nNeeds Review\nFailed","default":"Needs Review","reqd":1,"in_list_view":1},
-  {"fieldname":"summary","fieldtype":"Long Text","label":"Summary"},
-  {"fieldname":"primary_intent","fieldtype":"Data","label":"Primary Intent"},
-  {"fieldname":"categories","fieldtype":"JSON","label":"Categories"},
-  {"fieldname":"action_items","fieldtype":"JSON","label":"Action Items"},
-  {"fieldname":"risks","fieldtype":"JSON","label":"Risks"},
-  {"fieldname":"confidence","fieldtype":"Percent","label":"Confidence"},
-  {"fieldname":"language","fieldtype":"Data","label":"Language"},
-  {"fieldname":"message_count","fieldtype":"Int","label":"Messages Processed","read_only":1},
-  {"fieldname":"processed_message_count","fieldtype":"Int","label":"Processed Messages","read_only":1},
-  {"fieldname":"last_message","fieldtype":"Link","label":"Last Processed Message","options":"WhatsApp Core Message"},
-  {"fieldname":"last_message_at","fieldtype":"Datetime","label":"Last Message At"},
-  {"fieldname":"last_message_creation","fieldtype":"Datetime","label":"Last Message Creation"},
-  {"fieldname":"last_generated_at","fieldtype":"Datetime","label":"Generated At","in_list_view":1},
-  {"fieldname":"ai_action","fieldtype":"Data","label":"I2A Action"},
-  {"fieldname":"ai_model","fieldtype":"Data","label":"AI Model"},
-  {"fieldname":"error","fieldtype":"Small Text","label":"Error"}
+  {
+   "fieldname": "summary_key",
+   "fieldtype": "Data",
+   "label": "Summary Key",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "scope_type",
+   "fieldtype": "Select",
+   "label": "Scope Type",
+   "options": "Identity\nGroup",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "scope_key",
+   "fieldtype": "Data",
+   "label": "Scope Key",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "identity",
+   "fieldtype": "Link",
+   "label": "Contact",
+   "options": "WhatsApp Core Identity"
+  },
+  {
+   "fieldname": "source_identities",
+   "fieldtype": "JSON",
+   "label": "Source Contacts"
+  },
+  {
+   "fieldname": "identity_count",
+   "fieldtype": "Int",
+   "label": "Contact Count",
+   "read_only": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Ready\nNeeds Review\nFailed",
+   "default": "Needs Review",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "summary",
+   "fieldtype": "Long Text",
+   "label": "Summary"
+  },
+  {
+   "fieldname": "primary_intent",
+   "fieldtype": "Data",
+   "label": "Primary Intent"
+  },
+  {
+   "fieldname": "categories",
+   "fieldtype": "JSON",
+   "label": "Categories"
+  },
+  {
+   "fieldname": "action_items",
+   "fieldtype": "JSON",
+   "label": "Action Items"
+  },
+  {
+   "fieldname": "risks",
+   "fieldtype": "JSON",
+   "label": "Risks"
+  },
+  {
+   "fieldname": "confidence",
+   "fieldtype": "Percent",
+   "label": "Confidence"
+  },
+  {
+   "fieldname": "language",
+   "fieldtype": "Data",
+   "label": "Language"
+  },
+  {
+   "fieldname": "message_count",
+   "fieldtype": "Int",
+   "label": "Messages Processed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "processed_message_count",
+   "fieldtype": "Int",
+   "label": "Processed Messages",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_message",
+   "fieldtype": "Link",
+   "label": "Last Processed Message",
+   "options": "WhatsApp Core Message"
+  },
+  {
+   "fieldname": "last_message_at",
+   "fieldtype": "Datetime",
+   "label": "Last Message At"
+  },
+  {
+   "fieldname": "last_message_creation",
+   "fieldtype": "Datetime",
+   "label": "Last Message Creation"
+  },
+  {
+   "fieldname": "last_generated_at",
+   "fieldtype": "Datetime",
+   "label": "Generated At",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "ai_action",
+   "fieldtype": "Data",
+   "label": "I2A Action"
+  },
+  {
+   "fieldname": "ai_model",
+   "fieldtype": "Data",
+   "label": "AI Model"
+  },
+  {
+   "fieldname": "error",
+   "fieldtype": "Small Text",
+   "label": "Error"
+  }
  ],
  "permissions": [
-  {"role":"System Manager","read":1,"write":1,"create":1,"delete":1,"export":1},
-  {"role":"WhatsApp Manager","read":1,"export":1},
-  {"role":"WhatsApp User","read":1}
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "export": 1
+  },
+  {
+   "role": "WhatsApp Manager",
+   "read": 1,
+   "export": 1
+  },
+  {
+   "role": "WhatsApp User",
+   "read": 1
+  }
  ],
  "sort_field": "last_generated_at",
  "sort_order": "DESC"

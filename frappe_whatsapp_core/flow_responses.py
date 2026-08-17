@@ -9,6 +9,7 @@ import frappe
 from frappe.utils import now
 
 from frappe_whatsapp_core.permissions import assert_conversation_access, require_core_access
+from frappe_whatsapp_core.naming import name_by_key
 
 
 def upsert_instance_response(instance, status: str | None = None):
@@ -141,8 +142,20 @@ def list_flow_responses(
 
 
 def _upsert(response_key: str, values: dict):
-	if frappe.db.exists("WhatsApp Core Flow Response", response_key):
-		doc = frappe.get_doc("WhatsApp Core Flow Response", response_key)
+	semantic_filters = {
+		fieldname: values.get(fieldname)
+		for fieldname in ("flow_instance", "message")
+		if values.get(fieldname)
+	}
+	if semantic_filters:
+		semantic_filters["response_type"] = values.get("response_type")
+	record_name = (
+		frappe.db.get_value("WhatsApp Core Flow Response", semantic_filters, "name")
+		if semantic_filters
+		else None
+	) or name_by_key("WhatsApp Core Flow Response", response_key)
+	if record_name:
+		doc = frappe.get_doc("WhatsApp Core Flow Response", record_name)
 		doc.update(values)
 		doc.save(ignore_permissions=True)
 		return doc

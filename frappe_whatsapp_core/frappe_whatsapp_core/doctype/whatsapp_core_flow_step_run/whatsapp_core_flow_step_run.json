@@ -2,8 +2,8 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Flow Step Run",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:run_key",
-	"naming_rule": "By fieldname",
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
 		"run_key",

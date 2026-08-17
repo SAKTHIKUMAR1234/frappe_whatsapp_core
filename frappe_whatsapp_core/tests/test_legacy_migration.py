@@ -8,6 +8,7 @@ from frappe_whatsapp_core.legacy_migration import (
 	_campaign_status,
 	_delivery_status,
 	_direction,
+	_legacy_contact_display_value,
 	_migrate_channels,
 	_legacy_key,
 	_legacy_message_content,
@@ -24,6 +25,33 @@ from frappe_whatsapp_core.legacy_migration import (
 
 
 class TestLegacyMigrationContract(FrappeTestCase):
+	@patch("frappe_whatsapp_core.legacy_migration.frappe.db.get_value")
+	@patch("frappe_whatsapp_core.legacy_migration.frappe.db.exists", return_value=True)
+	def test_contact_display_prefers_business_party_name(self, _exists, get_value):
+		get_value.side_effect = lambda _doctype, _name, fieldname: {
+			"company_name": "Member Company",
+			"full_name": "Member Person",
+		}.get(fieldname)
+		source = {
+			"display_fields": ["company_name", "member_name", "profile_name"],
+			"party": {
+				"doctype": "Members",
+				"name_field": "member",
+				"display_name_fields": ["company_name", "full_name"],
+			},
+		}
+		row = frappe._dict(
+			member="MEM-0001",
+			company_name="Stale Company",
+			member_name="Internal Member",
+			profile_name="Meta Profile",
+		)
+
+		self.assertEqual(
+			_legacy_contact_display_value(source, row, "919876543210"),
+			"Member Company",
+		)
+
 	@patch("frappe_whatsapp_core.legacy_migration.frappe.get_doc")
 	@patch("frappe_whatsapp_core.legacy_migration.frappe.get_all")
 	def test_template_children_can_be_read_after_legacy_controller_removal(

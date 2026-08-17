@@ -21,6 +21,7 @@ from frappe_whatsapp_core.materializer import (
 	get_or_create_conversation,
 	get_or_create_identity,
 )
+from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.party_bindings import upsert_party_binding
 from frappe_whatsapp_core.template_catalog import scoped_template_key
 
@@ -396,6 +397,7 @@ def _migrate_contacts(config: dict, channels: dict[str, object]) -> dict:
 			"name",
 			source["phone_field"],
 			source.get("display_field"),
+			*(source.get("display_fields") or []),
 			source.get("account_field"),
 			source.get("last_message_field"),
 			*(source.get("attribute_fields") or {}).values(),
@@ -418,8 +420,7 @@ def _migrate_contacts(config: dict, channels: dict[str, object]) -> dict:
 			continue
 		contact_count += 1
 		identity = get_or_create_identity(phone)
-		display_value = row.get(source.get("display_field")) if source.get("display_field") else None
-		identity.display_value = str(display_value or phone).strip()[:140]
+		identity.display_value = _legacy_contact_display_value(source, row, phone)
 		attributes = _json_dict(identity.attributes)
 		legacy_sources = attributes.setdefault("legacy_sources", {})
 		legacy_sources[config["source_key"]] = {
@@ -457,6 +458,32 @@ def _migrate_contacts(config: dict, channels: dict[str, object]) -> dict:
 		"party_bindings": bindings,
 		"conversation_map": conversation_map,
 	}
+
+
+def _legacy_contact_display_value(source, row, phone) -> str:
+	"""Prefer an exact business-party label over profile text or internal IDs."""
+	party = source.get("party") or {}
+	party_doctype = str(party.get("doctype") or "").strip()
+	party_name = row.get(party.get("name_field")) if party.get("name_field") else None
+	party_fields = party.get("display_name_fields") or [
+		party.get("display_name_field")
+	]
+	if party_doctype and party_name and frappe.db.exists(party_doctype, party_name):
+		for fieldname in party_fields:
+			if not fieldname:
+				continue
+			value = frappe.db.get_value(party_doctype, party_name, fieldname)
+			if str(value or "").strip():
+				return str(value).strip()[:140]
+
+	display_fields = source.get("display_fields") or [source.get("display_field")]
+	for fieldname in display_fields:
+		if not fieldname:
+			continue
+		value = row.get(fieldname)
+		if str(value or "").strip():
+			return str(value).strip()[:140]
+	return str(phone or "").strip()[:140]
 
 
 def _migrate_party_binding(config, source, row, identity: str) -> int:
@@ -810,8 +837,8 @@ def _existing_message_candidates(provider_ids, message_keys) -> tuple[dict, dict
 	key_rows = (
 		frappe.get_all(
 			"WhatsApp Core Message",
-			filters={"name": ["in", list(dict.fromkeys(message_keys))]},
-			fields=["name", "content"],
+			filters={"message_key": ["in", list(dict.fromkeys(message_keys))]},
+			fields=["name", "message_key", "content"],
 			limit_page_length=max(len(message_keys), 1),
 		)
 		if message_keys
@@ -819,7 +846,7 @@ def _existing_message_candidates(provider_ids, message_keys) -> tuple[dict, dict
 	)
 	return (
 		{row.provider_message_id: row.name for row in provider_rows},
-		{row.name: row.name for row in key_rows},
+		{row.message_key: row.name for row in key_rows},
 		{row.name: row.content for row in [*provider_rows, *key_rows]},
 	)
 
@@ -917,7 +944,7 @@ def _migrate_templates(config, channels) -> dict:
 			skipped += 1
 			continue
 		template_key = scoped_template_key(account, template_name, language)
-		existing_name = frappe.db.exists("WhatsApp Core Template", template_key)
+		existing_name = name_by_key("WhatsApp Core Template", template_key)
 		if existing_name:
 			existing += 1
 			core_name = existing_name
@@ -1136,7 +1163,7 @@ def _migrate_campaigns(
 				account_name,
 				template_name,
 			)
-			existing_name = frappe.db.exists("WhatsApp Core Campaign", campaign_key)
+			existing_name = name_by_key("WhatsApp Core Campaign", campaign_key)
 			if existing_name:
 				campaign_name = existing_name
 				result["campaigns_existing"] += 1
@@ -1268,7 +1295,7 @@ def _migrate_campaign_recipients(
 			continue
 		identity = get_or_create_identity(phone)
 		recipient_key = _legacy_key(config["source_key"], recipient_source["doctype"], row.name)
-		if frappe.db.exists("WhatsApp Core Campaign Recipient", recipient_key):
+		if name_by_key("WhatsApp Core Campaign Recipient", recipient_key):
 			result["campaign_recipients_existing"] += 1
 			continue
 		variables = _json_any(
@@ -1338,10 +1365,11 @@ def _migrate_categories(config, legacy_message_map) -> dict:
 	inserted = existing = 0
 	for row in rows:
 		category_name = _text(row.get(source.get("name_field")) or row.name)[:140]
-		if frappe.db.exists("WhatsApp Core Message Category", category_name):
+		category_record = name_by_key("WhatsApp Core Message Category", category_name)
+		if category_record:
 			existing += 1
 		else:
-			frappe.get_doc(
+			category_record = frappe.get_doc(
 				{
 					"doctype": "WhatsApp Core Message Category",
 					"category_name": category_name,
@@ -1349,9 +1377,9 @@ def _migrate_categories(config, legacy_message_map) -> dict:
 					"source": source.get("source") or "AI",
 					"enabled": 1,
 				}
-			).insert(ignore_permissions=True)
+			).insert(ignore_permissions=True).name
 			inserted += 1
-		category_map[row.name] = category_name
+		category_map[row.name] = category_record
 	assignment_source = source.get("assignment") or {}
 	assignment_inserted = assignment_existing = assignment_skipped = 0
 	context_cache = {}
@@ -1380,7 +1408,7 @@ def _migrate_categories(config, legacy_message_map) -> dict:
 				assignment_skipped += 1
 				continue
 			assignment_key = _legacy_key(config["source_key"], assignment_source["doctype"], row.name)
-			if frappe.db.exists("WhatsApp Core Message Category Assignment", assignment_key):
+			if name_by_key("WhatsApp Core Message Category Assignment", assignment_key):
 				assignment_existing += 1
 				continue
 			if core_message not in context_cache:

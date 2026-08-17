@@ -2,8 +2,10 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Flow Version",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:version_key",
-	"naming_rule": "By fieldname",
+	"title_field": "version_key",
+	"show_title_field_in_link": 1,
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
 		"version_key",

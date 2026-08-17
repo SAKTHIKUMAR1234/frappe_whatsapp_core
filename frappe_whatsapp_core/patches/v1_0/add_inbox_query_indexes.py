@@ -10,11 +10,6 @@ def execute():
 		"wa_core_message_conversation_time",
 	)
 	frappe.db.add_index(
-		"WhatsApp Core Conversation Read",
-		["conversation", "user"],
-		"wa_core_conversation_read_user",
-	)
-	frappe.db.add_index(
 		"WhatsApp Core Conversation",
 		["last_message_at", "name"],
 		"wa_core_conversation_last_message",

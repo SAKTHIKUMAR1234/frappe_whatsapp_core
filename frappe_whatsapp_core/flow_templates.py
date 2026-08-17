@@ -11,6 +11,8 @@ import json
 
 import frappe
 
+from frappe_whatsapp_core.naming import name_by_key
+
 BUILTIN_FLOWS = {
 	"guided_request": {
 		"schema_version": 1,
@@ -85,8 +87,8 @@ def create_from_template(
 ):
 	if template_key not in BUILTIN_FLOWS:
 		frappe.throw(f"Unknown flow template: {template_key}")
-	if frappe.db.exists("WhatsApp Core Flow", flow_key):
-		return flow_key
+	if record_name := name_by_key("WhatsApp Core Flow", flow_key):
+		return record_name
 	graph = copy.deepcopy(BUILTIN_FLOWS[template_key])
 	return frappe.get_doc({
 		"doctype": "WhatsApp Core Flow",

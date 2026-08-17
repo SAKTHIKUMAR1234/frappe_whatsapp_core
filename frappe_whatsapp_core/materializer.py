@@ -15,13 +15,19 @@ from frappe_whatsapp_core.identity import (
 	get_or_create_identity as get_or_create_core_identity,
 	link_business_scoped_user_id_change,
 )
+from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.party_bindings import ensure_party_bindings
 
 
-def materialize_event(event, payload, channel_cache=None):
+def materialize_event(event, payload, channel_cache=None, projection_cache=None):
 	"""Project a raw provider event into the reusable messaging kernel."""
 	results = []
-	channel_cache = channel_cache if channel_cache is not None else {}
+	projection_cache = projection_cache if projection_cache is not None else {}
+	channel_cache = (
+		channel_cache
+		if channel_cache is not None
+		else projection_cache.setdefault("channels", {})
+	)
 	for entry in payload.get("entry", []):
 		for change in entry.get("changes", []):
 			value = change.get("value") or {}
@@ -38,6 +44,7 @@ def materialize_event(event, payload, channel_cache=None):
 						channel,
 						message,
 						contact=_matching_contact(message, contacts, "Inbound"),
+						projection_cache=projection_cache,
 					))
 				for message in value.get("message_echoes") or []:
 					results.append(materialize_provider_message(
@@ -46,6 +53,7 @@ def materialize_event(event, payload, channel_cache=None):
 						message,
 						"Outbound",
 						contact=_matching_contact(message, contacts, "Outbound"),
+						projection_cache=projection_cache,
 					))
 				for status in value.get("statuses") or []:
 					results.append(materialize_status(
@@ -70,7 +78,12 @@ def materialize_event(event, payload, channel_cache=None):
 							change.get("field") or "groups",
 						)
 					)
-			results.extend(materialize_history(event, entry, value))
+			results.extend(materialize_history(
+				event,
+				entry,
+				value,
+				projection_cache=projection_cache,
+			))
 			results.extend(materialize_state_sync(
 				value,
 				channel if phone_number_id else None,
@@ -95,8 +108,8 @@ def get_or_create_channel(phone_number_id, waba_id=None):
 	if existing_name:
 		return frappe.get_doc("WhatsApp Core Channel", existing_name)
 	channel_key = f"meta:{phone_number_id}"
-	if frappe.db.exists("WhatsApp Core Channel", channel_key):
-		return frappe.get_doc("WhatsApp Core Channel", channel_key)
+	if existing_name := name_by_key("WhatsApp Core Channel", channel_key):
+		return frappe.get_doc("WhatsApp Core Channel", existing_name)
 	doc = frappe.get_doc({
 		"doctype": "WhatsApp Core Channel",
 		"channel_key": channel_key,
@@ -108,7 +121,7 @@ def get_or_create_channel(phone_number_id, waba_id=None):
 	})
 	try:
 		doc.insert(ignore_permissions=True)
-	except frappe.DuplicateEntryError:
+	except (frappe.DuplicateEntryError, frappe.UniqueValidationError):
 		existing_name = frappe.db.get_value(
 			"WhatsApp Core Channel",
 			{"phone_number_id": phone_number_id},
@@ -116,7 +129,10 @@ def get_or_create_channel(phone_number_id, waba_id=None):
 		)
 		if existing_name:
 			return frappe.get_doc("WhatsApp Core Channel", existing_name)
-		return frappe.get_doc("WhatsApp Core Channel", channel_key)
+		return frappe.get_doc(
+			"WhatsApp Core Channel",
+			name_by_key("WhatsApp Core Channel", channel_key),
+		)
 	return doc
 
 
@@ -130,9 +146,17 @@ def get_or_create_identity(value, *, scope=None, aliases=None, resolve=True):
 
 
 def get_or_create_conversation(channel, identity):
+	existing_name = frappe.db.get_value(
+		"WhatsApp Core Conversation",
+		{"channel": channel.name, "remote_identity": identity.name},
+		"name",
+		order_by="creation asc",
+	)
+	if existing_name:
+		return frappe.get_doc("WhatsApp Core Conversation", existing_name)
 	conversation_key = hashlib.sha256(f"{channel.name}:{identity.name}:active".encode()).hexdigest()
-	if frappe.db.exists("WhatsApp Core Conversation", conversation_key):
-		return frappe.get_doc("WhatsApp Core Conversation", conversation_key)
+	if existing_name := name_by_key("WhatsApp Core Conversation", conversation_key):
+		return frappe.get_doc("WhatsApp Core Conversation", existing_name)
 	doc = frappe.get_doc({
 		"doctype": "WhatsApp Core Conversation",
 		"conversation_key": conversation_key,
@@ -143,14 +167,28 @@ def get_or_create_conversation(channel, identity):
 	})
 	try:
 		doc.insert(ignore_permissions=True)
-	except frappe.DuplicateEntryError:
-		return frappe.get_doc("WhatsApp Core Conversation", conversation_key)
+	except (frappe.DuplicateEntryError, frappe.UniqueValidationError):
+		return frappe.get_doc(
+			"WhatsApp Core Conversation",
+			name_by_key("WhatsApp Core Conversation", conversation_key),
+		)
 	return doc
 
 
-def materialize_inbound_message(event, channel, provider_message, contact=None):
+def materialize_inbound_message(
+	event,
+	channel,
+	provider_message,
+	contact=None,
+	projection_cache=None,
+):
 	return materialize_provider_message(
-		event, channel, provider_message, "Inbound", contact=contact
+		event,
+		channel,
+		provider_message,
+		"Inbound",
+		contact=contact,
+		projection_cache=projection_cache,
 	)
 
 
@@ -161,6 +199,7 @@ def materialize_provider_message(
 	direction="Inbound",
 	*,
 	contact=None,
+	projection_cache=None,
 ):
 	"""Project inbound, history, or Business App echo messages into one model."""
 	message_type = str(provider_message.get("type") or "unknown").lower()
@@ -169,9 +208,16 @@ def materialize_provider_message(
 	provider_id = provider_message.get("id")
 	if not provider_id:
 		return {"kind": "message", "status": "ignored", "reason": "missing_provider_id"}
+	existing_name = frappe.db.get_value(
+		"WhatsApp Core Message",
+		{"provider_message_id": provider_id},
+		"name",
+	)
+	if existing_name:
+		return {"kind": "message", "status": "duplicate", "name": existing_name}
 	message_key = hashlib.sha256(f"{channel.name}:{provider_id}".encode()).hexdigest()
-	if frappe.db.exists("WhatsApp Core Message", message_key):
-		return {"kind": "message", "status": "duplicate", "name": message_key}
+	if existing_name := name_by_key("WhatsApp Core Message", message_key):
+		return {"kind": "message", "status": "duplicate", "name": existing_name}
 
 	group_id = provider_message.get("group_id")
 	remote_number = (
@@ -204,24 +250,31 @@ def materialize_provider_message(
 	if group_id:
 		identity = get_or_create_group_identity(group_id)
 		if remote_user_id or remote_number:
-			participant = get_or_create_identity(
+			participant = _cached_identity(
+				projection_cache,
 				remote_user_id or remote_parent_user_id or remote_number,
 				scope=channel.name if remote_user_id or remote_parent_user_id else None,
 				aliases=aliases,
 			)
-			ensure_party_bindings(
+			_cached_party_bindings(
+				projection_cache,
 				participant.name,
 				{"channel": channel.name, "provider_message": provider_message},
 			)
 	elif not identity:
-		identity = get_or_create_identity(
+		identity = _cached_identity(
+			projection_cache,
 			remote_user_id or remote_parent_user_id or remote_number,
 			scope=channel.name if remote_user_id or remote_parent_user_id else None,
 			aliases=aliases,
 		)
 	if not group_id:
-		ensure_party_bindings(identity.name, {"channel": channel.name, "provider_message": provider_message})
-	conversation = get_or_create_conversation(channel, identity)
+		_cached_party_bindings(
+			projection_cache,
+			identity.name,
+			{"channel": channel.name, "provider_message": provider_message},
+		)
+	conversation = _cached_conversation(projection_cache, channel, identity)
 	content = provider_message.get(message_type) or {}
 	body = inbound_message_body(message_type, content)
 	timestamp = provider_message.get("timestamp")
@@ -242,8 +295,12 @@ def materialize_provider_message(
 	})
 	try:
 		doc.insert(ignore_permissions=True)
-	except frappe.DuplicateEntryError:
-		return {"kind": "message", "status": "duplicate", "name": message_key}
+	except (frappe.DuplicateEntryError, frappe.UniqueValidationError):
+		return {
+			"kind": "message",
+			"status": "duplicate",
+			"name": name_by_key("WhatsApp Core Message", message_key),
+		}
 	if direction == "Inbound":
 		# A customer reply starts (or resumes) an actionable conversation.  Keeping
 		# a previously resolved row resolved makes the new message disappear from
@@ -253,6 +310,40 @@ def materialize_provider_message(
 	conversation.last_message_at = provider_timestamp
 	conversation.save(ignore_permissions=True)
 	return {"kind": "message", "status": "created", "name": doc.name}
+
+
+def _cached_identity(projection_cache, value, *, scope=None, aliases=None):
+	if projection_cache is None:
+		return get_or_create_identity(value, scope=scope, aliases=aliases)
+	key = (
+		str(scope or ""),
+		str(value or "").strip(),
+		json.dumps(aliases or {}, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
+	)
+	identities = projection_cache.setdefault("identities", {})
+	if key not in identities:
+		identities[key] = get_or_create_identity(value, scope=scope, aliases=aliases)
+	return identities[key]
+
+
+def _cached_party_bindings(projection_cache, identity, context):
+	if projection_cache is None:
+		return ensure_party_bindings(identity, context)
+	bindings = projection_cache.setdefault("party_bindings", {})
+	key = (str(identity), str((context or {}).get("channel") or ""))
+	if key not in bindings:
+		bindings[key] = ensure_party_bindings(identity, context)
+	return bindings[key]
+
+
+def _cached_conversation(projection_cache, channel, identity):
+	if projection_cache is None:
+		return get_or_create_conversation(channel, identity)
+	conversations = projection_cache.setdefault("conversations", {})
+	key = (channel.name, identity.name)
+	if key not in conversations:
+		conversations[key] = get_or_create_conversation(channel, identity)
+	return conversations[key]
 
 
 def _matching_contact(provider_row, contacts, direction="Inbound"):
@@ -411,7 +502,7 @@ def materialize_message_mutation(event, channel, provider_message, mutation_type
 	return {"kind": mutation_type, "status": "updated", "name": doc.name}
 
 
-def materialize_history(event, entry, value):
+def materialize_history(event, entry, value, projection_cache=None):
 	"""Import coexistence history batches while preserving message directions."""
 	results = []
 	history_batches = value.get("history") or []
@@ -440,7 +531,13 @@ def materialize_history(event, entry, value):
 					message["from"] = thread_id
 				if direction == "Outbound" and not message.get("to"):
 					message["to"] = thread_id
-				results.append(materialize_provider_message(event, channel, message, direction))
+				results.append(materialize_provider_message(
+					event,
+					channel,
+					message,
+					direction,
+					projection_cache=projection_cache,
+				))
 	return results
 
 
@@ -618,8 +715,8 @@ def get_or_create_group_identity(group_id):
 	if not group_id:
 		frappe.throw("A group ID is required")
 	identity_key = hashlib.sha256(f"whatsapp-group:{group_id}".encode()).hexdigest()
-	if frappe.db.exists("WhatsApp Core Identity", identity_key):
-		return frappe.get_doc("WhatsApp Core Identity", identity_key)
+	if existing_name := name_by_key("WhatsApp Core Identity", identity_key):
+		return frappe.get_doc("WhatsApp Core Identity", existing_name)
 	doc = frappe.get_doc({
 		"doctype": "WhatsApp Core Identity", "identity_key": identity_key,
 		"identity_type": "External", "normalized_value": f"group:{group_id}",
@@ -628,8 +725,11 @@ def get_or_create_group_identity(group_id):
 	})
 	try:
 		doc.insert(ignore_permissions=True)
-	except frappe.DuplicateEntryError:
-		return frappe.get_doc("WhatsApp Core Identity", identity_key)
+	except (frappe.DuplicateEntryError, frappe.UniqueValidationError):
+		return frappe.get_doc(
+			"WhatsApp Core Identity",
+			name_by_key("WhatsApp Core Identity", identity_key),
+		)
 	return doc
 
 
@@ -659,7 +759,7 @@ def materialize_call(event, channel, provider_call, contact=None):
 	call_id = str(provider_call.get("id") or provider_call.get("call_id") or "").strip()
 	if not call_id:
 		return {"kind": "call", "status": "ignored", "reason": "missing_call_id"}
-	existing = frappe.db.exists("WhatsApp Core Call", call_id)
+	existing = name_by_key("WhatsApp Core Call", call_id)
 	status = str(provider_call.get("event") or provider_call.get("status") or "received")
 	values = {
 		"doctype": "WhatsApp Core Call", "call_id": call_id, "relay_event": event.name,
@@ -721,7 +821,7 @@ def materialize_call(event, channel, provider_call, contact=None):
 	if status in {"terminate", "terminated", "rejected", "failed"}:
 		values["ended_at"] = parse_provider_timestamp(provider_call.get("timestamp"))
 	if existing:
-		doc = frappe.get_doc("WhatsApp Core Call", call_id)
+		doc = frappe.get_doc("WhatsApp Core Call", existing)
 		doc.update(values)
 		doc.save(ignore_permissions=True)
 		return {"kind": "call", "status": "updated", "name": doc.name}
@@ -744,7 +844,8 @@ def materialize_group_event(event, channel, provider_group, webhook_field="group
 		"last_event": provider_group,
 		"last_synced": now_datetime(),
 	}
-	if not frappe.db.exists("WhatsApp Core Group", group_id):
+	existing_group = name_by_key("WhatsApp Core Group", group_id)
+	if not existing_group:
 		values["status"] = "Active"
 	if event_type == "group_create":
 		values.update({
@@ -769,8 +870,8 @@ def materialize_group_event(event, channel, provider_group, webhook_field="group
 		if description.get("update_successful") is not False and description.get("text") is not None:
 			values["description"] = description["text"]
 
-	if frappe.db.exists("WhatsApp Core Group", group_id):
-		group = frappe.get_doc("WhatsApp Core Group", group_id)
+	if existing_group:
+		group = frappe.get_doc("WhatsApp Core Group", existing_group)
 		group.update(values)
 		group.save(ignore_permissions=True)
 		projection_status = "updated"
@@ -856,8 +957,13 @@ def _upsert_group_member(event, group, participant, status, provider_group, part
 		"last_event": provider_group,
 		"last_synced": now_datetime(),
 	}
-	if frappe.db.exists("WhatsApp Core Group Member", member_key):
-		doc = frappe.get_doc("WhatsApp Core Group Member", member_key)
+	existing_name = frappe.db.get_value(
+		"WhatsApp Core Group Member",
+		{"group": group.name, "participant_id": participant},
+		"name",
+	) or name_by_key("WhatsApp Core Group Member", member_key)
+	if existing_name:
+		doc = frappe.get_doc("WhatsApp Core Group Member", existing_name)
 		doc.update(values)
 		doc.save(ignore_permissions=True)
 		return {"status": "updated", "name": doc.name}
@@ -1054,7 +1160,8 @@ def materialize_group_receipt(event, channel, provider_status, message_name=None
 	).strip()
 	if not group_id or not participant:
 		return {"kind": "group_receipt", "status": "ignored", "reason": "missing_group_or_participant"}
-	if not frappe.db.exists("WhatsApp Core Group", group_id):
+	existing_group = name_by_key("WhatsApp Core Group", group_id)
+	if not existing_group:
 		group = frappe.get_doc({
 			"doctype": "WhatsApp Core Group",
 			"group_id": group_id,
@@ -1066,7 +1173,7 @@ def materialize_group_receipt(event, channel, provider_status, message_name=None
 			"last_synced": now_datetime(),
 		}).insert(ignore_permissions=True)
 	else:
-		group = frappe.get_doc("WhatsApp Core Group", group_id)
+		group = frappe.get_doc("WhatsApp Core Group", existing_group)
 	receipt_key = hashlib.sha256(
 		f"{provider_status.get('id')}:{group_id}:{participant}".encode()
 	).hexdigest()
@@ -1082,8 +1189,8 @@ def materialize_group_receipt(event, channel, provider_status, message_name=None
 		"error": json.dumps(provider_status.get("errors") or [], separators=(",", ":")),
 		"last_event": provider_status,
 	}
-	if frappe.db.exists("WhatsApp Core Group Receipt", receipt_key):
-		doc = frappe.get_doc("WhatsApp Core Group Receipt", receipt_key)
+	if existing_name := name_by_key("WhatsApp Core Group Receipt", receipt_key):
+		doc = frappe.get_doc("WhatsApp Core Group Receipt", existing_name)
 		doc.update(values)
 		doc.save(ignore_permissions=True)
 		status = "updated"

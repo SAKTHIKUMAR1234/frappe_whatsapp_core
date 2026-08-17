@@ -11,12 +11,24 @@ class WhatsAppCorePartyBinding(Document):
 
 	def before_validate(self):
 		expected_key = self._expected_key()
-		if not self.binding_key:
-			self.binding_key = expected_key
-		elif not self.is_new() and self.binding_key != expected_key:
-			frappe.throw(
-				"Identity, workspace and party are immutable; create a new binding"
+		if not self.is_new():
+			persisted = frappe.db.get_value(
+				self.doctype,
+				self.name,
+				["identity", "workspace_key", "party_doctype", "party_name"],
+				as_dict=True,
 			)
+			immutable_fields = ("identity", "workspace_key", "party_doctype", "party_name")
+			if persisted and any(
+				str(persisted.get(fieldname) or "") != str(self.get(fieldname) or "")
+				for fieldname in immutable_fields
+			):
+				frappe.throw(
+					"Identity, workspace and party are immutable; create a new binding"
+				)
+		# Link-preserving renames can change the identity primary key. Recompute
+		# the derived business key while keeping the binding itself immutable.
+		self.binding_key = expected_key
 
 	def _expected_key(self):
 		return make_binding_key(

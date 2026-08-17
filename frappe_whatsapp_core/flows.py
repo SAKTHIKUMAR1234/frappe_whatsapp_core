@@ -21,6 +21,7 @@ from frappe_whatsapp_core.flow_schema import (
 	evaluate_condition,
 	validate_graph,
 )
+from frappe_whatsapp_core.naming import name_by_key
 
 MAX_AUTOMATIC_STEPS = 50
 
@@ -346,7 +347,11 @@ def advance_instance(
 		run_key = hashlib.sha256(
 			f"{instance.name}:{node['id']}:{event_key}:{instance.lock_version}".encode()
 		).hexdigest()
-		if frappe.db.exists("WhatsApp Core Flow Step Run", run_key):
+		if frappe.db.get_value(
+			"WhatsApp Core Flow Step Run",
+			{"flow_instance": instance.name, "node_id": node["id"], "event_key": event_key},
+			"name",
+		) or name_by_key("WhatsApp Core Flow Step Run", run_key):
 			return {"status": "duplicate", "instance": instance.name, "commands": commands}
 		run = _start_step_run(run_key, instance, node, event_key, context)
 		try:

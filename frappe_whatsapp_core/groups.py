@@ -17,6 +17,7 @@ from frappe_whatsapp_core.outbound import (
 	start_conversation,
 	upload_media,
 )
+from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.permissions import require_core_access
 
 
@@ -58,8 +59,9 @@ def _sync_group_summaries(account_name, rows, accounts):
 		participant_count = row.get("total_participant_count", row.get("participant_count"))
 		if participant_count is not None:
 			values["participant_count"] = int(participant_count or 0)
-		if frappe.db.exists("WhatsApp Core Group", group_id):
-			group = frappe.get_doc("WhatsApp Core Group", group_id)
+		record_name = name_by_key("WhatsApp Core Group", group_id)
+		if record_name:
+			group = frappe.get_doc("WhatsApp Core Group", record_name)
 			group.update(values)
 			group.save(ignore_permissions=True)
 		else:
@@ -193,9 +195,10 @@ def remove_participants(account_name, group_id, participants):
 def group_activity(group_id):
 	"""Return durable management state and per-participant message receipts."""
 	group_id = str(group_id or "").strip()
+	group_name = name_by_key("WhatsApp Core Group", group_id)
 	group = (
-		frappe.get_doc("WhatsApp Core Group", group_id).as_dict()
-		if frappe.db.exists("WhatsApp Core Group", group_id)
+		frappe.get_doc("WhatsApp Core Group", group_name).as_dict()
+		if group_name
 		else None
 	)
 	conversation = None
@@ -228,14 +231,14 @@ def group_activity(group_id):
 		"messages": messages,
 		"members": frappe.get_all(
 			"WhatsApp Core Group Member",
-			filters={"group": group_id},
+			filters={"group": group.name},
 			fields=["participant_id", "status", "join_request_id", "reason", "last_synced"],
 			order_by="modified desc",
 			limit_page_length=100,
 		) if group else [],
 		"receipts": frappe.get_all(
 			"WhatsApp Core Group Receipt",
-			filters={"group": group_id},
+			filters={"group": group.name},
 			fields=["message", "participant_id", "status", "provider_timestamp"],
 			order_by="provider_timestamp desc",
 			limit_page_length=250,

@@ -6,6 +6,19 @@ from frappe_whatsapp_core import conversation_reads, message_reactions
 
 
 class TestConversationReads(TestCase):
+	def test_reader_display_name_never_falls_back_to_email(self):
+		self.assertEqual(
+			conversation_reads._reader_display_name(
+				{"first_name": "Sakthi", "last_name": "Kumar", "full_name": "Wrong"},
+				"sakthi@example.test",
+			),
+			"Sakthi Kumar",
+		)
+		self.assertEqual(
+			conversation_reads._reader_display_name({}, "missing@example.test"),
+			"Team member",
+		)
+
 	@patch("frappe_whatsapp_core.conversation_reads.message_readers")
 	def test_exact_read_ledger_is_projected_onto_each_loaded_message(self, readers):
 		messages = [
@@ -82,6 +95,7 @@ class TestConversationReads(TestCase):
 			last_read_at="2026-08-10 02:00:00",
 			last_read_creation="2026-08-10 02:00:01",
 		)
+		existing_cursor = SimpleNamespace(name="READ-1", read_key="legacy-read-key")
 		with (
 			patch.object(
 				conversation_reads.frappe.db,
@@ -91,7 +105,7 @@ class TestConversationReads(TestCase):
 			patch.object(
 				conversation_reads.frappe.db,
 				"get_value",
-				return_value=read_row,
+				side_effect=[existing_cursor, read_row],
 			),
 			patch.object(conversation_reads.frappe, "publish_realtime") as publish_realtime,
 		):
@@ -133,9 +147,14 @@ class TestConversationReads(TestCase):
 			last_read_at="2026-08-10 02:00:00",
 			last_read_creation="2026-08-10 02:00:01",
 		)
+		existing_cursor = SimpleNamespace(name="READ-1", read_key="legacy-read-key")
 		with (
 			patch.object(conversation_reads.frappe.db, "sql", side_effect=[None, [0]]),
-			patch.object(conversation_reads.frappe.db, "get_value", return_value=read_row),
+			patch.object(
+				conversation_reads.frappe.db,
+				"get_value",
+				side_effect=[existing_cursor, read_row],
+			),
 			patch.object(conversation_reads.frappe, "publish_realtime") as publish_realtime,
 		):
 			result = conversation_reads._advance_conversation_cursor("CONV-1", target, [])

@@ -77,6 +77,14 @@
 		{ label: 'Approved template', value: 'Template' },
 		{ label: 'Plain text · open 24-hour windows only', value: 'Text' },
 	]
+	const channelOptions = computed(() =>
+		workspace.value.channels.map((channel) => ({
+			...channel,
+			label: channel.phone_number_id
+				? `${channel.display_name} · ${channel.phone_number_id}`
+				: channel.display_name,
+		})),
+	)
 
 	const approvedTemplates = computed(() =>
 		workspace.value.templates
@@ -581,8 +589,8 @@
 			<Select
 				v-model="form.channel"
 				aria-labelledby="campaign-channel-label"
-				:options="workspace.channels"
-				option-label="display_name"
+				:options="channelOptions"
+				option-label="label"
 				option-value="name"
 				placeholder="Select assigned number"
 				fluid

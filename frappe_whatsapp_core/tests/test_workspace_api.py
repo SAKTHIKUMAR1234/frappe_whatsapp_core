@@ -19,6 +19,7 @@ from frappe_whatsapp_core.workspace_api import (
 	get_conversation,
 	list_conversations,
 	list_messages,
+	refresh_messages,
 	remove_team_member,
 	send_text,
 	team_member_page,
@@ -202,6 +203,8 @@ class TestWorkspaceAPI(FrappeTestCase):
 			update_modified=False,
 		)
 		self.messages[1].creation = shared_creation
+		chronological = sorted(self.messages, key=lambda message: message.name)
+		oldest_message, newest_message = chronological
 		result = list_conversations(search=self.identity.display_value, limit=10)
 		self.assertTrue(
 			any(row.name == self.conversation.name for row in result["rows"])
@@ -212,7 +215,7 @@ class TestWorkspaceAPI(FrappeTestCase):
 		page = list_messages(self.conversation.name, limit=1)
 		self.assertEqual(len(page["rows"]), 1)
 		self.assertTrue(page["has_more"])
-		self.assertEqual(page["rows"][0].body, "Message 1")
+		self.assertEqual(page["rows"][0].name, newest_message.name)
 		older = list_messages(
 			self.conversation.name,
 			before=page["next_before"],
@@ -220,15 +223,36 @@ class TestWorkspaceAPI(FrappeTestCase):
 			before_name=page["next_before_name"],
 			limit=1,
 		)
-		self.assertEqual(older["rows"][0].body, "Message 0")
+		self.assertEqual(older["rows"][0].name, oldest_message.name)
 
 		from frappe_whatsapp_core.inbox import conversation
 
 		inbox_page = conversation(self.conversation.name, message_limit=1)
-		self.assertEqual(inbox_page["messages"][0].body, "Message 0")
-		self.assertEqual(inbox_page["resume_message"], self.messages[0].name)
+		self.assertEqual(inbox_page["messages"][0].name, oldest_message.name)
+		self.assertEqual(inbox_page["resume_message"], oldest_message.name)
 		self.assertFalse(inbox_page["message_page"]["has_more"])
 		self.assertTrue(inbox_page["message_page"]["has_more_newer"])
+
+	@patch(
+		"frappe_whatsapp_core.conversation_reads._latest_inbound_provider_message",
+		return_value=None,
+	)
+	def test_conversation_resumes_at_cursor_without_hiding_older_unread_holes(self, _latest):
+		mark_messages_read(self.conversation.name, [self.messages[1].name])
+
+		from frappe_whatsapp_core.inbox import conversation
+
+		inbox_page = conversation(self.conversation.name, message_limit=1)
+		self.assertEqual(inbox_page["resume_message"], self.messages[1].name)
+		self.assertEqual(inbox_page["messages"][0].name, self.messages[1].name)
+		self.assertTrue(inbox_page["message_page"]["has_more"])
+		self.assertFalse(inbox_page["message_page"]["has_more_newer"])
+		conversation_row = next(
+			row
+			for row in list_conversations(search=self.identity.display_value, limit=10)["rows"]
+			if row.name == self.conversation.name
+		)
+		self.assertEqual(conversation_row.unread_count, 1)
 
 	@patch(
 		"frappe_whatsapp_core.conversation_reads._latest_inbound_provider_message",
@@ -286,6 +310,12 @@ class TestWorkspaceAPI(FrappeTestCase):
 			if row.name == self.conversation.name
 		)
 		self.assertEqual(conversation_row.unread_count, 2)
+		refreshed = refresh_messages(
+			self.conversation.name,
+			[self.messages[0].name],
+		)
+		self.assertEqual(refreshed["rows"][0].name, self.messages[0].name)
+		self.assertEqual(refreshed["rows"][0].reactions[0]["emoji"], "👍")
 
 	def test_reply_includes_original_message_preview_outside_page(self):
 		reply = frappe.get_doc({

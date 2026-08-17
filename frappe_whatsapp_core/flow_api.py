@@ -13,6 +13,7 @@ from frappe_whatsapp_core.flow_actions import (
 from frappe_whatsapp_core.flow_schema import validate_graph
 from frappe_whatsapp_core.flows import canonical_json, publish_flow, start_flow
 from frappe_whatsapp_core.meta_flows import flow_workspace
+from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.permissions import (
 	assert_conversation_access,
 	require_document_permission,
@@ -42,7 +43,7 @@ def create_flow(title: str, flow_key: str, graph=None, description: str = ""):
 	title = str(title or "").strip()
 	if not flow_key or not title:
 		frappe.throw("Flow title and key are required", frappe.ValidationError)
-	if frappe.db.exists("WhatsApp Core Flow", flow_key):
+	if name_by_key("WhatsApp Core Flow", flow_key):
 		frappe.throw("A flow with this key already exists", frappe.DuplicateEntryError)
 	graph = frappe.parse_json(graph) if graph else _empty_graph()
 	doc = frappe.get_doc({

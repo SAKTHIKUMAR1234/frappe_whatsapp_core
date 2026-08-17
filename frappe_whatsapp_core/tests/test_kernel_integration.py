@@ -2,6 +2,7 @@ import copy
 import json
 import unittest
 from datetime import UTC, datetime
+from unittest.mock import patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
@@ -19,6 +20,7 @@ from frappe_whatsapp_core.materializer import (
 	materialize_event,
 	materialize_status,
 )
+from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.packs import install_pack
 
 MESSAGE_PAYLOAD = {
@@ -105,11 +107,11 @@ class TestKernelIntegration(FrappeTestCase):
 		second = install_pack(copy.deepcopy(self.manifest))
 		self.assertEqual(first, second)
 		self.assertEqual(
-			frappe.db.count("WhatsApp Core Workspace", {"solution": "core.test_operations"}),
+			frappe.db.count("WhatsApp Core Workspace", {"solution": first["solution"]}),
 			3,
 		)
 		self.assertEqual(
-			frappe.db.count("WhatsApp Core Case Type", {"solution": "core.test_operations"}),
+			frappe.db.count("WhatsApp Core Case Type", {"solution": first["solution"]}),
 			3,
 		)
 
@@ -181,6 +183,43 @@ class TestKernelIntegration(FrappeTestCase):
 			frappe.db.get_value("WhatsApp Core Message", message.name, "delivery_status"),
 			"Delivered",
 		)
+
+	def test_batch_projection_reuses_identity_and_conversation_resolution(self):
+		from frappe_whatsapp_core import materializer
+
+		suffix = frappe.generate_hash(length=10)
+		phone = f"9197{frappe.utils.now_datetime().strftime('%H%M%S%f')[-8:]}"
+		payloads = []
+		for index in range(2):
+			payload = copy.deepcopy(MESSAGE_PAYLOAD)
+			value = payload["entry"][0]["changes"][0]["value"]
+			value["metadata"]["phone_number_id"] = f"batch-phone-{suffix}"
+			value["messages"][0]["id"] = f"wamid.batch-cache-{suffix}-{index}"
+			value["messages"][0]["from"] = phone
+			payloads.append(payload)
+
+		projection_cache = {}
+		with (
+			patch.object(
+				materializer,
+				"get_or_create_identity",
+				wraps=materializer.get_or_create_identity,
+			) as resolve_identity,
+			patch.object(
+				materializer,
+				"get_or_create_conversation",
+				wraps=materializer.get_or_create_conversation,
+			) as resolve_conversation,
+		):
+			for index, payload in enumerate(payloads):
+				materialize_event(
+					self._event(f"event-batch-cache-{suffix}-{index}", payload),
+					payload,
+					projection_cache=projection_cache,
+				)
+
+		self.assertEqual(resolve_identity.call_count, 1)
+		self.assertEqual(resolve_conversation.call_count, 1)
 
 	def test_channel_lookup_reuses_configured_document_name(self):
 		suffix = frappe.generate_hash(length=10)
@@ -437,7 +476,8 @@ class TestKernelIntegration(FrappeTestCase):
 		instance = frappe.get_doc("WhatsApp Core Flow Instance", started["instance"])
 		self.assertEqual(json.loads(instance.context)["variables"]["rating"], 5)
 		response = frappe.get_doc(
-			"WhatsApp Core Flow Response", f"instance:{started['instance']}"
+			"WhatsApp Core Flow Response",
+			name_by_key("WhatsApp Core Flow Response", f"instance:{started['instance']}"),
 		)
 		self.assertEqual(response.status, "Completed")
 

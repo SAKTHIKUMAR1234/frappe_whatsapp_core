@@ -5,6 +5,8 @@ import re
 import frappe
 from frappe.utils import now
 
+from frappe_whatsapp_core.naming import name_by_key
+
 PACK_KEY = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 
 
@@ -14,9 +16,9 @@ def install_pack(manifest):
 	canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
 	digest = hashlib.sha256(canonical.encode()).hexdigest()
 	pack_key = manifest["key"]
-	existing = frappe.db.exists("WhatsApp Core Solution", pack_key)
+	existing = name_by_key("WhatsApp Core Solution", pack_key)
 	if existing:
-		solution = frappe.get_doc("WhatsApp Core Solution", pack_key)
+		solution = frappe.get_doc("WhatsApp Core Solution", existing)
 		if solution.status == "Active" and solution.manifest_sha256 != digest:
 			frappe.throw("An active solution version is immutable; publish a new version")
 		if solution.status == "Active" and solution.manifest_sha256 == digest:
@@ -33,9 +35,9 @@ def install_pack(manifest):
 	solution.save(ignore_permissions=True)
 
 	for workspace in manifest.get("workspaces", []):
-		_upsert_workspace(pack_key, workspace)
+		_upsert_workspace(solution.name, workspace)
 	for case_type in manifest.get("case_types", []):
-		_upsert_case_type(pack_key, manifest["version"], case_type)
+		_upsert_case_type(solution.name, manifest["version"], case_type)
 
 	solution.status = "Active"
 	solution.installed_at = now()
@@ -65,31 +67,33 @@ def validate_manifest(manifest):
 			frappe.throw(f"Case type {key} has an invalid initial stage")
 
 
-def _upsert_workspace(pack_key, definition):
+def _upsert_workspace(solution_name, definition):
+	record_name = name_by_key("WhatsApp Core Workspace", definition["key"])
 	doc = (
-		frappe.get_doc("WhatsApp Core Workspace", definition["key"])
-		if frappe.db.exists("WhatsApp Core Workspace", definition["key"])
+		frappe.get_doc("WhatsApp Core Workspace", record_name)
+		if record_name
 		else frappe.new_doc("WhatsApp Core Workspace")
 	)
 	doc.workspace_key = definition["key"]
 	doc.display_name = definition["name"]
-	doc.solution = pack_key
-	doc.parent_workspace = definition.get("parent")
+	doc.solution = solution_name
+	doc.parent_workspace = name_by_key("WhatsApp Core Workspace", definition.get("parent"))
 	doc.enabled = 1
 	doc.save(ignore_permissions=True)
 
 
-def _upsert_case_type(pack_key, pack_version, definition):
+def _upsert_case_type(solution_name, pack_version, definition):
+	record_name = name_by_key("WhatsApp Core Case Type", definition["key"])
 	doc = (
-		frappe.get_doc("WhatsApp Core Case Type", definition["key"])
-		if frappe.db.exists("WhatsApp Core Case Type", definition["key"])
+		frappe.get_doc("WhatsApp Core Case Type", record_name)
+		if record_name
 		else frappe.new_doc("WhatsApp Core Case Type")
 	)
 	doc.type_key = definition["key"]
 	doc.display_name = definition["name"]
-	doc.solution = pack_key
+	doc.solution = solution_name
 	doc.solution_version = pack_version
-	doc.default_workspace = definition["workspace"]
+	doc.default_workspace = name_by_key("WhatsApp Core Workspace", definition["workspace"])
 	doc.initial_stage_key = definition["initial_stage"]
 	doc.default_priority = definition.get("default_priority", "Normal")
 	doc.field_schema = json.dumps(definition.get("fields", {}), separators=(",", ":"))

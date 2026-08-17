@@ -2,8 +2,10 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Template",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:template_key",
-	"naming_rule": "By fieldname",
+	"title_field": "template_name",
+	"show_title_field_in_link": 1,
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
 		"template_key",

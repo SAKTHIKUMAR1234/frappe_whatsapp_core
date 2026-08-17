@@ -2,8 +2,10 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Campaign",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:campaign_key",
-	"naming_rule": "By fieldname",
+	"title_field": "title",
+	"show_title_field_in_link": 1,
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
 		"campaign_key",

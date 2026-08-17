@@ -17,6 +17,7 @@ from frappe_whatsapp_core.ai_summaries import (
 from frappe_whatsapp_core.campaigns import (
 	authorize_campaign,
 	campaign_summary,
+	campaign_summaries,
 	cancel_campaign,
 	create_campaign,
 	launch_campaign,
@@ -29,6 +30,7 @@ from frappe_whatsapp_core.flow_actions import registered_actions
 from frappe_whatsapp_core.hub_client import call_management, connection_status
 from frappe_whatsapp_core.identity import contact_options, normalize_phone
 from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS
+from frappe_whatsapp_core.naming import name_by_key, resolve_name
 from frappe_whatsapp_core.permissions import (
 	CORE_ACCESS_ROLES,
 	CORE_APP_ROLES,
@@ -327,13 +329,7 @@ def create_starter_flow(title, flow_key):
 @frappe.whitelist()
 @require_core_access(manage=True)
 def campaign_workspace():
-	campaigns = frappe.get_all(
-		"WhatsApp Core Campaign",
-		fields=["name"],
-		order_by="modified desc",
-		limit_page_length=500,
-	)
-	summaries = [campaign_summary(row.name) for row in campaigns]
+	summaries = campaign_summaries(limit=500)
 	return {
 		"campaigns": summaries,
 		"templates": frappe.get_all(
@@ -1063,10 +1059,12 @@ def save_contact_source(source):
 	source_key = frappe.scrub(payload.get("source_key") or payload.get("source_doctype") or "")
 	if not source_key:
 		frappe.throw("Source key is required", frappe.ValidationError)
-	name = str(payload.get("name") or source_key).strip()
+	name = str(payload.get("name") or "").strip()
+	record_name = resolve_name("WhatsApp Core Identity Source", name) if name else None
+	record_name = record_name or name_by_key("WhatsApp Core Identity Source", source_key)
 	doc = (
-		frappe.get_doc("WhatsApp Core Identity Source", name)
-		if frappe.db.exists("WhatsApp Core Identity Source", name)
+		frappe.get_doc("WhatsApp Core Identity Source", record_name)
+		if record_name
 		else frappe.new_doc("WhatsApp Core Identity Source")
 	)
 	if not doc.is_new() and doc.source_key != source_key:
@@ -1223,14 +1221,14 @@ def preview_campaign_audience_csv(csv_text: str) -> dict:
 	if not reader.fieldnames:
 		frappe.throw("Audience CSV requires a header row", frappe.ValidationError)
 	identifier_fields = ("identity", "contact", "phone", "phone_number", "mobile")
-	rows = []
+	parsed_rows = []
 	errors = []
 	default_country_code = (
 		frappe.db.get_single_value("WhatsApp Core Settings", "default_country_calling_code")
 		or "91"
 	)
 	for row_number, raw in enumerate(reader, start=2):
-		if len(rows) + len(errors) >= 10_000:
+		if len(parsed_rows) + len(errors) >= 10_000:
 			frappe.throw("Audience CSV cannot exceed 10,000 data rows", frappe.ValidationError)
 		row = {str(key or "").strip().lower(): str(value or "").strip() for key, value in raw.items()}
 		if not any(row.values()):
@@ -1239,41 +1237,47 @@ def preview_campaign_audience_csv(csv_text: str) -> dict:
 		if not identifier:
 			errors.append({"row": row_number, "error": "Missing identity or phone column value"})
 			continue
-		identity = frappe.db.get_value(
-			"WhatsApp Core Identity",
-			{"name": identifier, "identity_type": "WhatsApp", "status": "Active"},
-			"name",
-		)
-		if not identity:
+		try:
 			normalized = normalize_phone(
 				identifier,
 				assume_local=True,
 				country_code=default_country_code,
 			)
-			identity = frappe.db.get_value(
-				"WhatsApp Core Identity",
-				{
-					"normalized_value": normalized,
-					"identity_type": "WhatsApp",
-					"status": "Active",
-				},
-				"name",
-			)
-		if not identity:
-			errors.append({"row": row_number, "error": "Active Core contact not found"})
-			continue
+		except (TypeError, ValueError, frappe.ValidationError):
+			normalized = ""
 		try:
 			components = _csv_template_components(row)
 		except (TypeError, ValueError, frappe.ValidationError) as exception:
 			errors.append({"row": row_number, "error": str(exception)})
 			continue
-		rows.append({
-			"identity": identity,
+		parsed_rows.append({
+			"identifier": identifier,
+			"normalized": normalized,
 			"personalization": {
 				"components": components,
 				"text": row.get("message") or row.get("text") or "",
 			},
 			"source_row": row_number,
+		})
+
+	identity_by_name = _active_whatsapp_identity_map(
+		"name", {row["identifier"] for row in parsed_rows}
+	)
+	identity_by_phone = _active_whatsapp_identity_map(
+		"normalized_value", {row["normalized"] for row in parsed_rows if row["normalized"]}
+	)
+	rows = []
+	for row in parsed_rows:
+		identity = identity_by_name.get(row["identifier"]) or identity_by_phone.get(
+			row["normalized"]
+		)
+		if not identity:
+			errors.append({"row": row["source_row"], "error": "Active Core contact not found"})
+			continue
+		rows.append({
+			"identity": identity,
+			"personalization": row["personalization"],
+			"source_row": row["source_row"],
 		})
 
 	deduplicated = {row["identity"]: row for row in rows}
@@ -1297,6 +1301,30 @@ def preview_campaign_audience_csv(csv_text: str) -> dict:
 		"error_count": len(errors),
 		"resolved_count": len(deduplicated),
 	}
+
+
+def _active_whatsapp_identity_map(fieldname: str, values: set[str]) -> dict[str, str]:
+	"""Resolve a bounded audience in chunks instead of issuing queries per CSV row."""
+	if fieldname not in {"name", "normalized_value"}:
+		raise ValueError("Unsupported identity lookup field")
+	ordered_values = sorted(value for value in values if value)
+	resolved = {}
+	for offset in range(0, len(ordered_values), 500):
+		chunk = ordered_values[offset : offset + 500]
+		for identity in frappe.get_all(
+			"WhatsApp Core Identity",
+			filters={
+				"identity_type": "WhatsApp",
+				"status": "Active",
+				fieldname: ["in", chunk],
+			},
+			fields=["name", "normalized_value"],
+			limit_page_length=len(chunk),
+		):
+			key = identity.get(fieldname)
+			if key:
+				resolved[key] = identity.name
+	return resolved
 
 
 def _csv_template_components(row: dict) -> list[dict]:

@@ -24,6 +24,7 @@ from frappe_whatsapp_core.message_categories import (
 	set_message_categories,
 )
 from frappe_whatsapp_core.message_media import cache_message_media, media_descriptor
+from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.permissions import assert_identity_team_access
 
 MEDIA_TYPES = {"audio", "document", "image", "sticker", "video"}
@@ -36,9 +37,12 @@ def get_identity_summary(identity: str) -> dict:
 	identity = _valid_identity(identity)
 	assert_identity_team_access(identity)
 	name = _summary_name("Identity", identity)
-	return _summary_dict(frappe.get_doc("WhatsApp Core Contact Summary", name)) if frappe.db.exists(
-		"WhatsApp Core Contact Summary", name
-	) else {}
+	record_name = frappe.db.get_value(
+		"WhatsApp Core Contact Summary",
+		{"scope_type": "Identity", "identity": identity},
+		"name",
+	) or name_by_key("WhatsApp Core Contact Summary", name)
+	return _summary_dict(frappe.get_doc("WhatsApp Core Contact Summary", record_name)) if record_name else {}
 
 
 def get_group_summary(scope_key: str, identities: list[str]) -> dict:
@@ -52,9 +56,14 @@ def get_group_summary(scope_key: str, identities: list[str]) -> dict:
 	for identity in identities:
 		assert_identity_team_access(identity)
 	name = _summary_name("Group", scope_key)
-	if not frappe.db.exists("WhatsApp Core Contact Summary", name):
+	record_name = frappe.db.get_value(
+		"WhatsApp Core Contact Summary",
+		{"scope_type": "Group", "scope_key": scope_key},
+		"name",
+	) or name_by_key("WhatsApp Core Contact Summary", name)
+	if not record_name:
 		return {}
-	summary = frappe.get_doc("WhatsApp Core Contact Summary", name)
+	summary = frappe.get_doc("WhatsApp Core Contact Summary", record_name)
 	stored_identities = set(_json_list(summary.source_identities))
 	if stored_identities and stored_identities != set(identities):
 		return {}
@@ -518,9 +527,10 @@ def _upsert_message_insights(identity, messages, data, settings, model_result) -
 	for index, message in enumerate(messages, 1):
 		result = by_ref.get(f"M{index}") or {}
 		name = hashlib.sha256(f"message-insight:{message.name}".encode()).hexdigest()
-		doc = frappe.get_doc("WhatsApp Core Message Insight", name) if frappe.db.exists(
-			"WhatsApp Core Message Insight", name
-		) else frappe.get_doc({
+		record_name = frappe.db.get_value(
+			"WhatsApp Core Message Insight", {"message": message.name}, "name"
+		) or name_by_key("WhatsApp Core Message Insight", name)
+		doc = frappe.get_doc("WhatsApp Core Message Insight", record_name) if record_name else frappe.get_doc({
 			"doctype": "WhatsApp Core Message Insight",
 			"insight_key": name,
 			"message": message.name,
@@ -639,8 +649,15 @@ def _apply_summary_result(summary, data, settings, model_result) -> None:
 
 def _get_or_create_summary(scope_type: str, scope_key: str, identities: list[str]):
 	name = _summary_name(scope_type, scope_key)
-	if frappe.db.exists("WhatsApp Core Contact Summary", name):
-		return frappe.get_doc("WhatsApp Core Contact Summary", name)
+	record_name = (
+		frappe.db.get_value(
+			"WhatsApp Core Contact Summary",
+			{"scope_type": scope_type, "identity": identities[0]},
+			"name",
+		) if scope_type == "Identity" and identities else None
+	) or name_by_key("WhatsApp Core Contact Summary", name)
+	if record_name:
+		return frappe.get_doc("WhatsApp Core Contact Summary", record_name)
 	doc = frappe.get_doc({
 		"doctype": "WhatsApp Core Contact Summary",
 		"summary_key": name,
@@ -657,8 +674,13 @@ def _get_or_create_summary(scope_type: str, scope_key: str, identities: list[str
 
 def _identity_summary_in_progress(identity: str) -> dict:
 	name = _summary_name("Identity", identity)
-	if frappe.db.exists("WhatsApp Core Contact Summary", name):
-		result = _summary_dict(frappe.get_doc("WhatsApp Core Contact Summary", name))
+	record_name = frappe.db.get_value(
+		"WhatsApp Core Contact Summary",
+		{"scope_type": "Identity", "identity": identity},
+		"name",
+	) or name_by_key("WhatsApp Core Contact Summary", name)
+	if record_name:
+		result = _summary_dict(frappe.get_doc("WhatsApp Core Contact Summary", record_name))
 	else:
 		result = {
 			"scope_type": "Identity",
@@ -676,8 +698,13 @@ def _identity_summary_in_progress(identity: str) -> dict:
 
 def _group_summary_in_progress(scope_key: str, identities: list[str]) -> dict:
 	name = _summary_name("Group", scope_key)
-	if frappe.db.exists("WhatsApp Core Contact Summary", name):
-		result = _summary_dict(frappe.get_doc("WhatsApp Core Contact Summary", name))
+	record_name = frappe.db.get_value(
+		"WhatsApp Core Contact Summary",
+		{"scope_type": "Group", "scope_key": scope_key},
+		"name",
+	) or name_by_key("WhatsApp Core Contact Summary", name)
+	if record_name:
+		result = _summary_dict(frappe.get_doc("WhatsApp Core Contact Summary", record_name))
 	else:
 		result = {
 			"scope_type": "Group",

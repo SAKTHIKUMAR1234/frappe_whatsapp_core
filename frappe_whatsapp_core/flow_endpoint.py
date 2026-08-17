@@ -123,7 +123,7 @@ def handle(account_name: str, channel: str | None = None, payload=None):
 	)
 	try:
 		log.insert(ignore_permissions=True)
-	except frappe.DuplicateEntryError:
+	except (frappe.DuplicateEntryError, frappe.UniqueValidationError):
 		if cached := _cached_response(request_id):
 			return cached
 		frappe.throw(

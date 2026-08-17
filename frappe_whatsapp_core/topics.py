@@ -8,6 +8,7 @@ import uuid
 
 import frappe
 
+from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.realtime import publish_invalidation
 
 VALID_STATUSES = {"Open", "Waiting", "Resolved", "Archived"}
@@ -175,7 +176,7 @@ def _assign_message(topic, message_name: str, source: str, confidence: float) ->
 	assignment_key = hashlib.sha256(
 		f"{topic.name}:{message.name}".encode()
 	).hexdigest()
-	if frappe.db.exists("WhatsApp Core Topic Message", assignment_key):
+	if name_by_key("WhatsApp Core Topic Message", assignment_key):
 		return
 	frappe.get_doc({
 		"doctype": "WhatsApp Core Topic Message",

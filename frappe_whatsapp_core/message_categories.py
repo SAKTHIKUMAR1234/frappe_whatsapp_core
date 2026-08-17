@@ -8,6 +8,8 @@ import hashlib
 import frappe
 from frappe.utils import now_datetime
 
+from frappe_whatsapp_core.naming import name_by_key
+
 
 DEFAULT_CATEGORIES = {
 	"Uncategorized": "No reliable business category has been assigned yet.",
@@ -48,23 +50,24 @@ def ensure_message_category(
 ) -> str:
 	"""Return a valid category Link, creating a missing AI category safely."""
 	name = " ".join(str(category or "").strip().split())[:140] or "Uncategorized"
-	if frappe.db.exists("WhatsApp Core Message Category", name):
-		return name
+	record_name = name_by_key("WhatsApp Core Message Category", name)
+	if record_name:
+		return record_name
 	if source not in {"System", "AI", "Manager"}:
 		source = "AI"
 	try:
-		frappe.get_doc({
+		doc = frappe.get_doc({
 			"doctype": "WhatsApp Core Message Category",
 			"category_name": name,
 			"description": str(description or "")[:500],
 			"source": source,
 			"enabled": 1,
 		}).insert(ignore_permissions=True)
+		return doc.name
 	except frappe.UniqueValidationError:
 		# Two summary workers can discover the same new category concurrently.
 		# The unique category name is authoritative; the losing worker reuses it.
-		pass
-	return name
+		return name_by_key("WhatsApp Core Message Category", name)
 
 
 def normalize_message_categories(*values) -> list[str]:
@@ -116,12 +119,17 @@ def categories_for_messages(message_names: list[str]) -> dict[str, list[str]]:
 	names = list(dict.fromkeys(str(name) for name in message_names or [] if name))
 	if not names or not frappe.db.exists("DocType", "WhatsApp Core Message Category Assignment"):
 		return {}
-	rows = frappe.get_all(
-		"WhatsApp Core Message Category Assignment",
-		filters={"message": ["in", names]},
-		fields=["message", "category"],
-		order_by="assigned_at asc, category asc",
-		limit_page_length=max(100, len(names) * 10),
+	rows = frappe.db.sql(
+		"""
+		SELECT assignment.message, category.category_name AS category
+		FROM `tabWhatsApp Core Message Category Assignment` AS assignment
+		INNER JOIN `tabWhatsApp Core Message Category` AS category
+			ON category.name = assignment.category
+		WHERE assignment.message IN %(messages)s
+		ORDER BY assignment.assigned_at ASC, category.category_name ASC
+		""",
+		{"messages": tuple(names)},
+		as_dict=True,
 	)
 	result = {}
 	for row in rows:
@@ -143,15 +151,19 @@ def category_counts_for_teams(team_names: list[str]) -> dict[str, list[dict]]:
 	identity_field = "assignment.identity"
 	rows = frappe.db.sql(
 		f"""
-		SELECT team_contact.parent AS team, {category_field} AS category, COUNT(*) AS message_count
+		SELECT team_contact.parent AS team,
+			COALESCE(category.category_name, {category_field}) AS category,
+			COUNT(*) AS message_count
 		FROM `tabWhatsApp Core Team Contact` AS team_contact
 		JOIN {assignment_table} AS assignment
 			ON {identity_field} = team_contact.identity
+		LEFT JOIN `tabWhatsApp Core Message Category` AS category
+			ON category.name = {category_field}
 		WHERE team_contact.parenttype = 'WhatsApp Core Team'
 			AND team_contact.parentfield = 'contacts'
 			AND team_contact.enabled = 1
 			AND team_contact.parent IN %(teams)s
-		GROUP BY team_contact.parent, {category_field}
+		GROUP BY team_contact.parent, COALESCE(category.category_name, {category_field})
 		""",
 		{"teams": tuple(names)},
 		as_dict=True,

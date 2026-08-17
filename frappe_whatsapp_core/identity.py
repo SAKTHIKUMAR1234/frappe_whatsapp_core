@@ -11,6 +11,7 @@ from frappe_whatsapp_core.contact_presentation import present_contacts
 from frappe_whatsapp_core.frappe_whatsapp_core.doctype.whatsapp_core_identity_link.whatsapp_core_identity_link import (
 	make_identity_link_key,
 )
+from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.permissions import identity_team_condition
 
 
@@ -84,8 +85,9 @@ def get_or_create_identity(value, resolve=True, *, scope=None, aliases=None):
 	}
 	legacy_key = hashlib.sha256(f"whatsapp:{phone}".encode()).hexdigest() if phone else None
 	shared_legacy = None
-	if legacy_key and frappe.db.exists("WhatsApp Core Identity", legacy_key):
-		legacy = frappe.get_doc("WhatsApp Core Identity", legacy_key)
+	legacy_name = name_by_key("WhatsApp Core Identity", legacy_key)
+	if legacy_name:
+		legacy = frappe.get_doc("WhatsApp Core Identity", legacy_name)
 		legacy_scope = getattr(legacy, "identity_scope", None)
 		if not legacy_scope and has_scoped_id:
 			# Legacy phone identities were global.  A single identity may therefore
@@ -109,8 +111,9 @@ def get_or_create_identity(value, resolve=True, *, scope=None, aliases=None):
 			else f"whatsapp:{phone}"
 		)
 		identity_key = hashlib.sha256(key_material.encode()).hexdigest()
-		if frappe.db.exists("WhatsApp Core Identity", identity_key):
-			identity = frappe.get_doc("WhatsApp Core Identity", identity_key)
+		identity_name = name_by_key("WhatsApp Core Identity", identity_key)
+		if identity_name:
+			identity = frappe.get_doc("WhatsApp Core Identity", identity_name)
 		else:
 			identity = frappe.get_doc({
 				"doctype": "WhatsApp Core Identity",
@@ -126,8 +129,11 @@ def get_or_create_identity(value, resolve=True, *, scope=None, aliases=None):
 			})
 			try:
 				identity.insert(ignore_permissions=True)
-			except frappe.DuplicateEntryError:
-				identity = frappe.get_doc("WhatsApp Core Identity", identity_key)
+			except (frappe.DuplicateEntryError, frappe.UniqueValidationError):
+				identity = frappe.get_doc(
+					"WhatsApp Core Identity",
+					name_by_key("WhatsApp Core Identity", identity_key),
+				)
 
 	_update_whatsapp_identity(
 		identity,
@@ -184,20 +190,13 @@ def _rename_conversation_for_identity(conversation_name, identity_name, scope):
 	conversation_key = hashlib.sha256(
 		f"{scope}:{identity_name}:active".encode()
 	).hexdigest()
-	if conversation_name != conversation_key:
-		rename_doc(
-			"WhatsApp Core Conversation",
-			conversation_name,
-			conversation_key,
-			ignore_permissions=True,
-		)
 	frappe.db.set_value(
 		"WhatsApp Core Conversation",
-		conversation_key,
+		conversation_name,
 		{"conversation_key": conversation_key, "remote_identity": identity_name},
 		update_modified=False,
 	)
-	return conversation_key
+	return conversation_name
 
 
 def _identity_display_value(aliases, phone, bsuid):
@@ -262,7 +261,7 @@ def _alias_identity(alias_type, alias_value, scope=None):
 		return None
 	return frappe.db.get_value(
 		"WhatsApp Core Identity Alias",
-		_alias_key(alias_type, alias_value, scope),
+		{"alias_key": _alias_key(alias_type, alias_value, scope)},
 		"identity",
 	)
 
@@ -270,7 +269,7 @@ def _alias_identity(alias_type, alias_value, scope=None):
 def _ensure_alias(identity, alias_type, alias_value, scope=None):
 	alias_key = _alias_key(alias_type, alias_value, scope)
 	existing = frappe.db.get_value(
-		"WhatsApp Core Identity Alias", alias_key, "identity"
+		"WhatsApp Core Identity Alias", {"alias_key": alias_key}, "identity"
 	)
 	if existing and existing != identity:
 		frappe.throw(
@@ -288,7 +287,7 @@ def _ensure_alias(identity, alias_type, alias_value, scope=None):
 			"identity_scope": scope,
 			"alias_value": alias_value,
 		}).insert(ignore_permissions=True)
-	except frappe.DuplicateEntryError:
+	except (frappe.DuplicateEntryError, frappe.UniqueValidationError):
 		if _alias_identity(alias_type, alias_value, scope) != identity:
 			raise
 	return alias_key
@@ -310,12 +309,12 @@ def link_business_scoped_user_id_change(
 		old_key = hashlib.sha256(
 			f"whatsapp:bsuid:{scope}:{old_user_id}".encode()
 		).hexdigest()
-		old_identity = old_key if frappe.db.exists("WhatsApp Core Identity", old_key) else None
+		old_identity = name_by_key("WhatsApp Core Identity", old_key)
 	if not new_identity:
 		new_key = hashlib.sha256(
 			f"whatsapp:bsuid:{scope}:{new_user_id}".encode()
 		).hexdigest()
-		new_identity = new_key if frappe.db.exists("WhatsApp Core Identity", new_key) else None
+		new_identity = name_by_key("WhatsApp Core Identity", new_key)
 
 	canonical_name = old_identity or new_identity
 	if not canonical_name:
@@ -333,9 +332,10 @@ def link_business_scoped_user_id_change(
 	# inbound coalescing remains fail-closed on the same collision.
 	for identifier in (old_user_id, new_user_id):
 		key = _alias_key("BSUID", identifier, scope)
-		if frappe.db.exists("WhatsApp Core Identity Alias", key):
+		alias_name = name_by_key("WhatsApp Core Identity Alias", key)
+		if alias_name:
 			frappe.db.set_value(
-				"WhatsApp Core Identity Alias", key, "identity", canonical_name,
+				"WhatsApp Core Identity Alias", alias_name, "identity", canonical_name,
 				update_modified=False,
 			)
 		else:
@@ -528,7 +528,13 @@ def resolve_identity(identity):
 			"identity": identity.name,
 			"status": "Active",
 		},
-		fields=["name", "identity_source", "reference_doctype", "reference_name"],
+		fields=[
+			"name",
+			"identity_source",
+			"reference_doctype",
+			"reference_name",
+			"display_name",
+		],
 		order_by="creation asc",
 	)
 	_set_primary_link(identity, active_links, sources)
@@ -853,12 +859,12 @@ def _upsert_matches(identity, source, matches):
 			"identity_source": source.name,
 			"status": "Active",
 		},
-		pluck="name",
+		fields=["name", "link_key"],
 	)
 	stale_links = [
-		link_name
-		for link_name in existing_links
-		if link_name not in link_keys
+		link.name
+		for link in existing_links
+		if link.link_key not in link_keys
 	]
 	if stale_links:
 		frappe.db.set_value(
@@ -903,13 +909,20 @@ def _upsert_matches(identity, source, matches):
 			),
 			"status": "Active",
 		}
-		if frappe.db.exists(
+		link_name = frappe.db.get_value(
 			"WhatsApp Core Identity Link",
-			link_key,
-		):
+			{
+				"identity": identity.name,
+				"identity_source": source.name,
+				"reference_doctype": match["reference_doctype"],
+				"reference_name": match["reference_name"],
+			},
+			"name",
+		) or name_by_key("WhatsApp Core Identity Link", link_key)
+		if link_name:
 			link = frappe.get_doc(
 				"WhatsApp Core Identity Link",
-				link_key,
+				link_name,
 			)
 			link.update(values)
 			link.save(ignore_permissions=True)
@@ -970,6 +983,11 @@ def _set_primary_link(identity, links, sources):
 			1,
 			update_modified=False,
 		)
+		display_name = str(primary.display_name or "").strip()
+		if display_name:
+			# A verified business source is more authoritative than a provider
+			# profile or the raw phone used to create an outbound conversation.
+			identity.display_value = display_name[:140]
 	identity.primary_link = primary.name if primary else None
 
 

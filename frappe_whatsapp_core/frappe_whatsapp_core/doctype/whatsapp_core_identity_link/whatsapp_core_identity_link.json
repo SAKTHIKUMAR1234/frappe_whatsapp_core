@@ -2,8 +2,10 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Identity Link",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:link_key",
-	"naming_rule": "By fieldname",
+	"title_field": "display_name",
+	"show_title_field_in_link": 1,
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
 		"link_key",

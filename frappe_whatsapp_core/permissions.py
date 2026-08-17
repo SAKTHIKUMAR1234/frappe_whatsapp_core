@@ -330,11 +330,26 @@ def require_transport_access(capability: str | None = "ingress"):
 					"WhatsApp Core machine service access is required for this capability",
 					frappe.PermissionError,
 				)
+			_suppress_machine_session_persistence()
 			return method(*args, **kwargs)
 
 		return guarded
 
 	return decorator
+
+
+def _suppress_machine_session_persistence() -> None:
+	"""Keep concurrent service requests away from the shared User activity row.
+
+	Frappe commits the endpoint transaction before updating ``tabSessions`` and
+	``User.last_active``. API-token requests do not need that interactive-session
+	bookkeeping, and concurrent relay batches otherwise contend on the same service
+	user after their business work has already committed. Restrict the optimization
+	to real HTTP requests so direct calls from patches, tests, and the console retain
+	their surrounding session object.
+	"""
+	if getattr(frappe.local, "request", None) is not None:
+		frappe.local.session_obj = None
 
 
 def is_dedicated_transport_user(user: str, *, capability: str | None = "ingress") -> bool:

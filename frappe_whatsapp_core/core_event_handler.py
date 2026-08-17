@@ -16,7 +16,7 @@ from frappe_whatsapp_core.message_media import media_descriptor
 from frappe_whatsapp_core.outbound import (
 	outbound_ready,
 	queue_choice,
-	queue_rich,
+	queue_rich_internal,
 	queue_template_internal,
 	queue_text_internal,
 )
@@ -172,7 +172,15 @@ def _dispatch_commands(
 	commands: list[dict],
 ) -> list[dict]:
 	results = []
-	channel = frappe.db.get_value("WhatsApp Core Conversation", conversation, "channel")
+	conversation_doc = frappe.get_doc("WhatsApp Core Conversation", conversation)
+	channel = conversation_doc.channel
+	# The signed transport endpoint already authenticated a dedicated machine
+	# principal before the event reached this handler.  Flow-generated replies
+	# must not be forced through an operator's row permission check: the transport
+	# user intentionally owns no Desk roles.  A private batch context bypasses
+	# only that duplicate check while retaining channel/account validation and
+	# the durable outbound queue.
+	trusted_context = {"conversation": conversation_doc}
 	for command in commands:
 		command_type = command.get("type")
 		if command_type not in {
@@ -202,6 +210,7 @@ def _dispatch_commands(
 				if command.get("input_type") == "multi_select"
 				else command.get("message") or "",
 				source="Core Flow",
+				_batch_context=trusted_context,
 			)
 		elif command_type == "ask_choice" or command_type == "ask_input":
 			message = queue_choice(
@@ -209,6 +218,7 @@ def _dispatch_commands(
 				command.get("message") or "",
 				command.get("options") or [],
 				command.get("button_label") or "Choose",
+				_batch_context=trusted_context,
 			)
 		elif command_type == "send_template":
 			message = queue_template_internal(
@@ -217,6 +227,7 @@ def _dispatch_commands(
 				command.get("language", "en"),
 				command.get("components"),
 				source="Core Flow",
+				_batch_context=trusted_context,
 			)
 		else:
 			flow_action = command.get("flow_action") or "navigate"
@@ -235,7 +246,7 @@ def _dispatch_commands(
 				if command.get("data"):
 					flow_action_payload["data"] = command["data"]
 				parameters["flow_action_payload"] = flow_action_payload
-			message = queue_rich(
+			message = queue_rich_internal(
 				conversation,
 				"interactive",
 				{
@@ -245,6 +256,7 @@ def _dispatch_commands(
 				},
 				command.get("body") or "Please complete this form.",
 				source="Core Flow",
+				_batch_context=trusted_context,
 			)
 		results.append({
 			"type": command_type,

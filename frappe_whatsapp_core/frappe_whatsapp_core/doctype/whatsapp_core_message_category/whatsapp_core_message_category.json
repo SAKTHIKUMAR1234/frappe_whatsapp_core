@@ -2,8 +2,10 @@
  "doctype": "DocType",
  "name": "WhatsApp Core Message Category",
  "module": "Frappe WhatsApp Core",
- "autoname": "field:category_name",
- "naming_rule": "By fieldname",
+ "title_field": "category_name",
+ "show_title_field_in_link": 1,
+ "autoname": "hash",
+ "naming_rule": "Random",
  "engine": "InnoDB",
  "track_changes": 1,
  "field_order": [

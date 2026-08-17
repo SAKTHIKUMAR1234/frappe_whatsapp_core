@@ -171,7 +171,7 @@
 	})
 
 	function readerInitials(reader) {
-		const label = String(reader.full_name || reader.user || '').trim()
+		const label = String(reader.display_name || reader.full_name || 'Team member').trim()
 		return (
 			label
 				.split(/\s+/)
@@ -349,7 +349,7 @@
 			<span
 				v-for="reader in readers"
 				:key="reader.user"
-				:title="`${reader.full_name || reader.user} read up to this message`"
+				:title="`${reader.display_name || reader.full_name || 'Team member'} read up to this message${reader.last_read_at || reader.read_at ? ` at ${reader.last_read_at || reader.read_at}` : ''}`"
 			>
 				<img v-if="reader.user_image" :src="reader.user_image" alt="" />
 				<em v-else>{{ readerInitials(reader) }}</em>

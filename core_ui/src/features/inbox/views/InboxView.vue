@@ -1478,20 +1478,73 @@
 				selectedName.value &&
 				(!conversations.size || conversations.has(selectedName.value))
 			) {
-				const knownMessages = new Set(
-					(detail.value?.messages || []).map((message) => message.name),
-				)
-				await loadDetail(selectedName.value, { silent: true })
-				if (
-					!shouldStickToBottom &&
-					(detail.value?.messages || []).some(
-						(message) =>
-							message.direction === 'Inbound' && !knownMessages.has(message.name),
-					)
-				)
-					hasUnseenMessages.value = true
+				const addedInbound = await refreshVisibleMessages()
+				if (!shouldStickToBottom && addedInbound) hasUnseenMessages.value = true
+				if (shouldStickToBottom) await scrollToBottom()
 			}
 		}, 120)
+	}
+
+	async function refreshVisibleMessages() {
+		if (!detail.value || !selectedName.value) return false
+		const conversation = selectedName.value
+		const currentDetail = detail.value
+		const visible = currentDetail.messages || []
+		const committed = visible.filter((message) => !message.optimistic)
+		const newest = committed.reduce(
+			(current, message) =>
+				!current || compareCursorPosition(message, current) > 0 ? message : current,
+			null,
+		)
+		try {
+			const [refreshed, newer] = await Promise.all([
+				call('frappe_whatsapp_core.workspace_api.refresh_messages', {
+					conversation,
+					message_names: committed.map((message) => message.name),
+				}),
+				newest
+					? call('frappe_whatsapp_core.workspace_api.list_messages', {
+							conversation,
+							after: newest.provider_timestamp,
+							after_creation: newest.creation,
+							after_name: newest.name,
+							limit: 100,
+						})
+					: Promise.resolve({ rows: [], has_more: false }),
+			])
+			if (conversation !== selectedName.value || detail.value !== currentDetail) return false
+			const refreshedByName = new Map(
+				(refreshed.rows || []).map((message) => [message.name, message]),
+			)
+			const merged = visible.map((message) =>
+				refreshedByName.has(message.name)
+					? { ...message, ...refreshedByName.get(message.name) }
+					: message,
+			)
+			const known = new Set(merged.map((message) => message.name))
+			const added = []
+			for (const message of newer.rows || []) {
+				if (known.has(message.name)) continue
+				known.add(message.name)
+				merged.push(message)
+				added.push(message)
+			}
+			merged.sort((left, right) => compareCursorPosition(left, right))
+			currentDetail.messages = merged
+			messagePage.value = {
+				...messagePage.value,
+				has_more_newer: Boolean(newer.has_more),
+				next_after: newer.next_after || null,
+				next_after_creation: newer.next_after_creation || null,
+				next_after_name: newer.next_after_name || null,
+			}
+			await nextTick()
+			queueVisibleMessages()
+			return added.some((message) => message.direction === 'Inbound')
+		} catch {
+			// Reconnect and later durable invalidations will retry this projection.
+			return false
+		}
 	}
 
 	async function updateStatus(status) {
@@ -1628,7 +1681,7 @@
 				// Socket.IO does not replay events missed while a browser was offline.
 				// Reconcile from durable Core projections after every reconnect.
 				await loadRows({ silent: true })
-				if (selectedName.value) await loadDetail(selectedName.value, { silent: true })
+				if (selectedName.value) await refreshVisibleMessages()
 			}),
 		)
 	})

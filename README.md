@@ -4,6 +4,13 @@ Reusable, configurable WhatsApp business workflow foundation
 
 Supports Frappe **15 and 16** and Python 3.10 or newer.
 
+For the complete Hub → relay/JetStream → Core deployment order, trust
+boundaries, machine credentials, legacy migration, readiness recovery, and
+release acceptance gates, read
+[Deployment and operations](docs/deployment-and-operations.md). It is the
+canonical Core-side setup guide; do not copy settings into Supervisor or Nginx
+by hand.
+
 Open `/whatsapp` for the Core application. The legacy `/whatsapp_core` entry
 remains supported, and each entry keeps its own browser-history base so inbox
 deep links and back navigation do not jump between aliases.

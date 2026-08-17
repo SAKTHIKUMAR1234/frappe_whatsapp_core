@@ -2,8 +2,10 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Flow Instance",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:instance_key",
-	"naming_rule": "By fieldname",
+	"title_field": "instance_key",
+	"show_title_field_in_link": 1,
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
 		"instance_key",

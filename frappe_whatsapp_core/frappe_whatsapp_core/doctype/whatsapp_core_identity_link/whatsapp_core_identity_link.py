@@ -6,14 +6,13 @@ from frappe.model.document import Document
 
 
 class WhatsAppCoreIdentityLink(Document):
-	def autoname(self):
+	def before_validate(self):
 		self.link_key = make_identity_link_key(
 			self.identity,
 			self.identity_source,
 			self.reference_doctype,
 			self.reference_name,
 		)
-		self.name = self.link_key
 
 	def validate(self):
 		if not frappe.db.exists(self.reference_doctype, self.reference_name):

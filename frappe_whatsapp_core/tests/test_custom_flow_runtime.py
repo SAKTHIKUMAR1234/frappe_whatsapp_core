@@ -5,7 +5,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_to_date, now_datetime
 
-from frappe_whatsapp_core.core_event_handler import _multi_select_prompt
+from frappe_whatsapp_core.core_event_handler import _dispatch_commands, _multi_select_prompt
 from frappe_whatsapp_core.flow_router import route_inbound
 from frappe_whatsapp_core.flows import _validate_answer, publish_flow, resume_flow
 from frappe_whatsapp_core.materializer import (
@@ -157,6 +157,40 @@ class TestCustomFlowRuntime(FrappeTestCase):
 			"draft_graph": json.dumps(appointment_graph(self.command)),
 		}).insert(ignore_permissions=True)
 		publish_flow(self.flow.name)
+
+	@patch("frappe_whatsapp_core.core_event_handler.outbound_ready", return_value=True)
+	def test_transport_service_flow_reply_does_not_require_operator_role(self, _outbound_ready):
+		frappe.db.set_value(
+			"WhatsApp Core Conversation",
+			self.conversation.name,
+			"last_inbound_at",
+			now_datetime(),
+			update_modified=False,
+		)
+		transport_user = f"flow-transport-{frappe.generate_hash(length=8).lower()}@example.invalid"
+		frappe.get_doc({
+			"doctype": "User",
+			"email": transport_user,
+			"first_name": "Flow Transport",
+			"enabled": 1,
+			"user_type": "Website User",
+			"send_welcome_email": 0,
+			"roles": [{"role": "WhatsApp Core Transport Service"}],
+		}).insert(ignore_permissions=True)
+		frappe.set_user(transport_user)
+		try:
+			result = _dispatch_commands(
+				self.conversation.name,
+				[{"type": "send_message", "message": "Trusted flow reply"}],
+			)
+		finally:
+			frappe.set_user("Administrator")
+
+		self.assertEqual(result[0]["status"], "queued")
+		self.assertEqual(
+			frappe.db.get_value("WhatsApp Core Message", result[0]["message"], "body"),
+			"Trusted flow reply",
+		)
 
 	def test_typed_attachment_loop_action_and_final_response(self):
 		started = route_inbound(

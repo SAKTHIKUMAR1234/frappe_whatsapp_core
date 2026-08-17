@@ -17,8 +17,8 @@ class WhatsAppCoreMessage(Document):
 def on_doctype_update():
 	frappe.db.add_index(
 		"WhatsApp Core Message",
-		["conversation", "provider_timestamp"],
-		"conversation_provider_timestamp_index",
+		["conversation", "provider_timestamp", "creation"],
+		"wa_core_message_conversation_time",
 	)
 	frappe.db.add_index(
 		"WhatsApp Core Message",

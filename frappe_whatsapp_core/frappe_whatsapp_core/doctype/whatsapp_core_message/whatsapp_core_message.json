@@ -2,8 +2,10 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Message",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:message_key",
-	"naming_rule": "By fieldname",
+	"title_field": "provider_message_id",
+	"show_title_field_in_link": 1,
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
 		"message_key",

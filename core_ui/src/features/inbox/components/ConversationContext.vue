@@ -41,7 +41,7 @@
 				<Tag
 					v-for="reader in data.readers"
 					:key="reader.user"
-					:value="reader.user"
+					:value="reader.display_name || reader.full_name || 'Team member'"
 					severity="secondary"
 					rounded
 				/>

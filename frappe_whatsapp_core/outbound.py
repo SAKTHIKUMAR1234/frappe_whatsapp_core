@@ -544,6 +544,7 @@ def queue_rich_internal(
 	client_message_id: str | None = None,
 	local_file_url: str | None = None,
 	enqueue_delivery: bool = True,
+	_batch_context: dict | None = None,
 ) -> dict:
 	"""Queue a supported native Cloud API message without exposing its recipient.
 
@@ -568,6 +569,7 @@ def queue_rich_internal(
 		{"payload": normalized, "source": source},
 		client_message_id=client_message_id,
 		enqueue_delivery=enqueue_delivery,
+		_batch_context=_batch_context,
 	)
 	if local_file:
 		local_file.attached_to_doctype = "WhatsApp Core Message"
@@ -988,6 +990,8 @@ def queue_choice(
 	options: list | str,
 	button_label: str = "Choose",
 	source: str = "Core Flow",
+	*,
+	_batch_context: dict | None = None,
 ) -> dict:
 	body = str(body or "").strip()
 	if not body:
@@ -1013,6 +1017,7 @@ def queue_choice(
 			"button_label": button_label,
 			"source": source,
 		},
+		_batch_context=_batch_context,
 	)
 
 

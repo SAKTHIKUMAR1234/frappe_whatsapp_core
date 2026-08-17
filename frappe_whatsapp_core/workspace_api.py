@@ -17,6 +17,7 @@ from frappe_whatsapp_core.identity import contact_options
 from frappe_whatsapp_core.message_media import add_media_url
 from frappe_whatsapp_core.message_quotes import attach_quoted_messages
 from frappe_whatsapp_core.message_reactions import attach_message_reactions
+from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.permissions import (
 	CORE_MANAGEMENT_ROLES,
 	assert_conversation_access,
@@ -272,6 +273,69 @@ def list_messages(
 	)
 	has_more = len(rows) > limit
 	rows = rows[:limit]
+	_enrich_message_rows(rows, conversation)
+	return {
+		"rows": rows,
+		"has_more": has_more,
+		"next_before": rows[-1].provider_timestamp if not ascending and has_more and rows else None,
+		"next_before_creation": rows[-1].creation if not ascending and has_more and rows else None,
+		"next_before_name": rows[-1].name if not ascending and has_more and rows else None,
+		"next_after": rows[-1].provider_timestamp if ascending and has_more and rows else None,
+		"next_after_creation": rows[-1].creation if ascending and has_more and rows else None,
+		"next_after_name": rows[-1].name if ascending and has_more and rows else None,
+	}
+
+
+@frappe.whitelist()
+@require_core_access()
+def refresh_messages(conversation: str, message_names) -> dict:
+	"""Refresh the exact visible message window without resetting its read anchor.
+
+	Realtime invalidations intentionally contain no protected row data.  The
+	client therefore sends back only the message names it already holds and this
+	permission-checked endpoint returns their current projections, including
+	reactions and exact readers.  This keeps an older visible target bubble in
+	place when a reaction arrives after the operator's navigation cursor.
+	"""
+	_assert_conversation_access(conversation)
+	if isinstance(message_names, str):
+		message_names = frappe.parse_json(message_names)
+	if not isinstance(message_names, list):
+		frappe.throw("message_names must be a list", frappe.ValidationError)
+	names = list(dict.fromkeys(str(name).strip() for name in message_names if str(name).strip()))
+	if len(names) > 500:
+		frappe.throw("A visible message refresh cannot exceed 500 messages", frappe.ValidationError)
+	if not names:
+		return {"rows": []}
+	rows = frappe.db.sql(
+		"""
+		SELECT
+			name, message_key, provider_message_id, direction, message_type,
+			body, content, provider_timestamp, delivery_status, failure, owner, creation,
+			EXISTS(
+				SELECT 1 FROM `tabWhatsApp Core Message Bookmark` bookmark
+				WHERE bookmark.message = `tabWhatsApp Core Message`.name
+					AND bookmark.user = %(user)s
+			) AS bookmarked
+		FROM `tabWhatsApp Core Message`
+		WHERE conversation = %(conversation)s
+			AND message_type != 'reaction'
+			AND name IN %(names)s
+		ORDER BY provider_timestamp ASC, creation ASC, name ASC
+		""",
+		{
+			"conversation": conversation,
+			"names": tuple(names),
+			"user": frappe.session.user,
+		},
+		as_dict=True,
+	)
+	_enrich_message_rows(rows, conversation)
+	return {"rows": rows}
+
+
+def _enrich_message_rows(rows: list, conversation: str) -> None:
+	"""Apply the same safe UI projection to paged and exact refresh rows."""
 	owners = {row.owner for row in rows if row.direction == "Outbound" and row.owner}
 	owner_names = {
 		row.name: row.full_name or row.name
@@ -292,16 +356,6 @@ def list_messages(
 	attach_message_insights(rows)
 	attach_message_reactions(rows, conversation)
 	attach_message_readers(rows)
-	return {
-		"rows": rows,
-		"has_more": has_more,
-		"next_before": rows[-1].provider_timestamp if not ascending and has_more and rows else None,
-		"next_before_creation": rows[-1].creation if not ascending and has_more and rows else None,
-		"next_before_name": rows[-1].name if not ascending and has_more and rows else None,
-		"next_after": rows[-1].provider_timestamp if ascending and has_more and rows else None,
-		"next_after_creation": rows[-1].creation if ascending and has_more and rows else None,
-		"next_after_name": rows[-1].name if ascending and has_more and rows else None,
-	}
 
 
 @frappe.whitelist()
@@ -732,9 +786,10 @@ def upsert_team(
 	name = (team_name or "").strip()
 	if not name:
 		frappe.throw("Team name is required", frappe.ValidationError)
+	record_name = name_by_key("WhatsApp Core Team", name)
 	doc = (
-		frappe.get_doc("WhatsApp Core Team", name)
-		if frappe.db.exists("WhatsApp Core Team", name)
+		frappe.get_doc("WhatsApp Core Team", record_name)
+		if record_name
 		else frappe.new_doc("WhatsApp Core Team")
 	)
 	doc.team_name = name

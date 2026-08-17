@@ -2,8 +2,8 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Campaign Recipient",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:recipient_key",
-	"naming_rule": "By fieldname",
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
 		"recipient_key",

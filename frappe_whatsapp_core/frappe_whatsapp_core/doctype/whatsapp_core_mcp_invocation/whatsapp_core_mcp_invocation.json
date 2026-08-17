@@ -2,8 +2,8 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core MCP Invocation",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:invocation_key",
-	"naming_rule": "By fieldname",
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
 		"invocation_key",

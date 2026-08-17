@@ -2,8 +2,10 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Call",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:call_id",
-	"naming_rule": "By fieldname",
+	"title_field": "call_id",
+	"show_title_field_in_link": 1,
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
 		"call_id",
@@ -74,9 +76,21 @@
 			"fieldtype": "Data",
 			"label": "Remote Number"
 		},
-		{"fieldname": "remote_user_id", "fieldtype": "Data", "label": "Remote BSUID"},
-		{"fieldname": "remote_parent_user_id", "fieldtype": "Data", "label": "Remote Parent BSUID"},
-		{"fieldname": "remote_username", "fieldtype": "Data", "label": "Remote Username"},
+		{
+			"fieldname": "remote_user_id",
+			"fieldtype": "Data",
+			"label": "Remote BSUID"
+		},
+		{
+			"fieldname": "remote_parent_user_id",
+			"fieldtype": "Data",
+			"label": "Remote Parent BSUID"
+		},
+		{
+			"fieldname": "remote_username",
+			"fieldtype": "Data",
+			"label": "Remote Username"
+		},
 		{
 			"fieldname": "started_at",
 			"fieldtype": "Datetime",
@@ -92,16 +106,56 @@
 			"fieldtype": "Data",
 			"label": "Callback Data"
 		},
-		{"fieldname": "cta_payload", "fieldtype": "Small Text", "label": "Call Button Payload"},
-		{"fieldname": "deeplink_payload", "fieldtype": "Small Text", "label": "Deep Link Payload"},
-		{"fieldname": "recording_media_id", "fieldtype": "Data", "label": "Recording Media ID"},
-		{"fieldname": "recording_url", "fieldtype": "Small Text", "label": "Recording URL"},
-		{"fieldname": "recording_mime_type", "fieldtype": "Data", "label": "Recording MIME Type"},
-		{"fieldname": "recording_sha256", "fieldtype": "Data", "label": "Recording SHA-256"},
-		{"fieldname": "transcript_media_id", "fieldtype": "Data", "label": "Transcript Media ID"},
-		{"fieldname": "transcript_url", "fieldtype": "Small Text", "label": "Transcript URL"},
-		{"fieldname": "transcript_mime_type", "fieldtype": "Data", "label": "Transcript MIME Type"},
-		{"fieldname": "transcript_sha256", "fieldtype": "Data", "label": "Transcript SHA-256"},
+		{
+			"fieldname": "cta_payload",
+			"fieldtype": "Small Text",
+			"label": "Call Button Payload"
+		},
+		{
+			"fieldname": "deeplink_payload",
+			"fieldtype": "Small Text",
+			"label": "Deep Link Payload"
+		},
+		{
+			"fieldname": "recording_media_id",
+			"fieldtype": "Data",
+			"label": "Recording Media ID"
+		},
+		{
+			"fieldname": "recording_url",
+			"fieldtype": "Small Text",
+			"label": "Recording URL"
+		},
+		{
+			"fieldname": "recording_mime_type",
+			"fieldtype": "Data",
+			"label": "Recording MIME Type"
+		},
+		{
+			"fieldname": "recording_sha256",
+			"fieldtype": "Data",
+			"label": "Recording SHA-256"
+		},
+		{
+			"fieldname": "transcript_media_id",
+			"fieldtype": "Data",
+			"label": "Transcript Media ID"
+		},
+		{
+			"fieldname": "transcript_url",
+			"fieldtype": "Small Text",
+			"label": "Transcript URL"
+		},
+		{
+			"fieldname": "transcript_mime_type",
+			"fieldtype": "Data",
+			"label": "Transcript MIME Type"
+		},
+		{
+			"fieldname": "transcript_sha256",
+			"fieldtype": "Data",
+			"label": "Transcript SHA-256"
+		},
 		{
 			"fieldname": "session",
 			"fieldtype": "JSON",

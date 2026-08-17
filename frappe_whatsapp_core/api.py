@@ -21,6 +21,7 @@ from frappe_whatsapp_core.permissions import require_transport_access
 from frappe_whatsapp_core.realtime import publish_invalidation
 
 MAX_RECEIVE_BATCH_SIZE = 1000
+IMMEDIATE_STATUS_BATCH_SIZE = 10
 CONTROL_RESULT_PREFIXES = ("read:", "typing:")
 
 
@@ -350,7 +351,7 @@ def _apply_outbound_result_batch(results: list[dict]) -> list[dict]:
 def receive_one(payload):
 	event = describe_payload(payload)
 	event_id = payload_fingerprint(payload)
-	if frappe.db.exists("WhatsApp Core Event", event_id):
+	if frappe.db.exists("WhatsApp Core Event", {"event_id": event_id}):
 		return {"status": "duplicate", "event_id": event_id}
 
 	try:
@@ -366,12 +367,13 @@ def receive_one(payload):
 			"payload": canonical_json(payload),
 		})
 		doc.insert(ignore_permissions=True)
-	except frappe.DuplicateEntryError:
+	except (frappe.DuplicateEntryError, frappe.UniqueValidationError):
 		return {"status": "duplicate", "event_id": event_id}
 
-	if _requires_immediate_projection(event):
-		result = process_event_batch([event_id], retry_deadlocks=False)[0]
-		if result.get("status") != "completed":
+	if _is_status_event(event):
+		result = process_event_batch([doc.name], retry_deadlocks=False)[0]
+		accepted_statuses = {"completed", "deferred", "missing"}
+		if result.get("status") not in accepted_statuses:
 			frappe.throw(
 				"Inbound WhatsApp message could not be projected",
 				frappe.ValidationError,
@@ -381,7 +383,11 @@ def receive_one(payload):
 			"event_id": event_id,
 			"immediate": True,
 		}
-	enqueue_event(event_id, enqueue_after_commit=True)
+	enqueue_event(
+		doc.name,
+		enqueue_after_commit=True,
+		serialization_key=event.get("conversation_key") or doc.name,
+	)
 	return {"status": "queued", "event_id": event_id, "immediate": False}
 
 
@@ -402,8 +408,8 @@ def receive_batch(payloads):
 	event_ids = list(dict.fromkeys(item[0] for item in described))
 	existing = set(frappe.get_all(
 		"WhatsApp Core Event",
-		filters={"name": ["in", event_ids]},
-		pluck="name",
+		filters={"event_id": ["in", event_ids]},
+		pluck="event_id",
 	))
 	new_items = []
 	seen = set(existing)
@@ -413,9 +419,14 @@ def receive_batch(payloads):
 		seen.add(event_id)
 		new_items.append((event_id, event, canonical_payload))
 
-	immediate_ids = []
+	status_ids = []
 	deferred_ids = []
+	deferred_groups = {}
 	if new_items:
+		named_new_items = [
+			(frappe.generate_hash(length=10), event_id, event, canonical_payload)
+			for event_id, event, canonical_payload in new_items
+		]
 		timestamp = now_datetime()
 		user = frappe.session.user or "Administrator"
 		fields = [
@@ -425,12 +436,12 @@ def receive_batch(payloads):
 		]
 		values = [
 			(
-				event_id, timestamp, timestamp, user, user, 0, 0,
+				record_name, timestamp, timestamp, user, user, 0, 0,
 				event_id, "Pending", event["event_type"], "Inbound",
 				event["channel_key"], event["external_id"], event["conversation_key"],
 				canonical_payload, 0,
 			)
-			for event_id, event, canonical_payload in new_items
+			for record_name, event_id, event, canonical_payload in named_new_items
 		]
 		frappe.db.bulk_insert(
 			"WhatsApp Core Event",
@@ -438,47 +449,59 @@ def receive_batch(payloads):
 			values=values,
 			ignore_duplicates=True,
 		)
-		for event_id, event, _canonical_payload in new_items:
-			(
-				immediate_ids
-				if _requires_immediate_projection(event)
-				else deferred_ids
-			).append(event_id)
+		for record_name, _event_id, event, _canonical_payload in named_new_items:
+			if _is_status_event(event):
+				status_ids.append(record_name)
+			else:
+				deferred_ids.append(record_name)
+				serialization_key = event.get("conversation_key") or record_name
+				deferred_groups.setdefault(serialization_key, []).append(record_name)
 
-		# Customer messages, echoes, calls and group activity must be visible in
-		# the operator UI in the same transaction that accepts the relay batch.
-		# High-volume delivery/read receipts stay on the short queue so they can
-		# be coalesced without delaying human-visible activity.
-		immediate_results = []
-		for offset in range(0, len(immediate_ids), 100):
-			immediate_results.extend(
-				process_event_batch(
-					immediate_ids[offset : offset + 100],
-					retry_deadlocks=False,
+		# The Core Event table is the durable ingress boundary. Human-visible work
+		# (messages, echoes, calls and groups) is projected on short workers only
+		# after this request commits, so a burst cannot hold the relay callback open
+		# until its HTTP timeout and create duplicate JetStream deliveries. Small
+		# status windows stay synchronous because their projector is a bounded bulk
+		# update and the UI benefits from immediate sent/delivered/read state.
+		if status_ids and len(status_ids) <= IMMEDIATE_STATUS_BATCH_SIZE:
+			status_results = process_event_batch(status_ids)
+			if any(
+				result.get("status") not in {"completed", "deferred", "missing"}
+				for result in status_results
+			):
+				frappe.throw(
+					"One or more WhatsApp status updates could not be projected",
+					frappe.ValidationError,
 				)
+		else:
+			deferred_ids.extend(status_ids)
+
+		for serialization_key, group_ids in deferred_groups.items():
+			enqueue_event_batch(
+				group_ids,
+				enqueue_after_commit=True,
+				serialization_key=serialization_key,
 			)
-		if any(result.get("status") != "completed" for result in immediate_results):
-			frappe.throw(
-				"One or more inbound WhatsApp messages could not be projected",
-				frappe.ValidationError,
-			)
-		if deferred_ids:
-			enqueue_event_batch(deferred_ids, enqueue_after_commit=True)
+		if status_ids and len(status_ids) > IMMEDIATE_STATUS_BATCH_SIZE:
+			enqueue_event_batch(status_ids, enqueue_after_commit=True)
+
+	immediate_count = (
+		len(status_ids) if len(status_ids) <= IMMEDIATE_STATUS_BATCH_SIZE else 0
+	)
 
 	return {
-		"status": "processed" if immediate_ids and not deferred_ids else "queued",
+		"status": "processed" if immediate_count and not deferred_ids else "queued",
 		"received": len(payloads),
 		"inserted": len(new_items),
 		"duplicates": len(payloads) - len(new_items),
 		"event_ids": [item[0] for item in new_items],
-		"immediate": len(immediate_ids),
+		"immediate": immediate_count,
 		"deferred": len(deferred_ids),
 	}
 
 
-def _requires_immediate_projection(event: dict) -> bool:
-	event_type = str(event.get("event_type") or "")
-	return event_type.startswith(("message:", "message_echo:", "call:", "group:"))
+def _is_status_event(event: dict) -> bool:
+	return str(event.get("event_type") or "").startswith("status:")
 
 
 def payload_fingerprint(payload):

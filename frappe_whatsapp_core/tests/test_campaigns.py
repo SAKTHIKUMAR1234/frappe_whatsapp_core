@@ -6,14 +6,19 @@ from frappe.tests.utils import FrappeTestCase
 
 from frappe_whatsapp_core.api import receive_outbound_result
 from frappe_whatsapp_core.campaigns import (
+	DIRTY_CAMPAIGNS_CACHE_KEY,
+	_sync_campaign_recipient_statuses,
 	_complete_campaign,
 	_lock_campaign_rows,
 	authorize_campaign,
 	cancel_campaign,
+	campaign_summaries,
 	create_campaign,
 	launch_campaign,
 	prepare_campaign,
 	process_campaign_batch,
+	refresh_active_campaigns,
+	refresh_dirty_campaign_counts,
 )
 from frappe_whatsapp_core.materializer import materialize_status
 from frappe_whatsapp_core.outbound import queue_campaign_recipient, retry_queued_messages
@@ -170,6 +175,26 @@ class TestCampaigns(FrappeTestCase):
 		self.assertTrue(summary["send_authorized"])
 		self.assertEqual(summary["template_approval_status"], "APPROVED")
 
+	def test_campaign_workspace_summaries_use_bounded_bulk_queries(self):
+		with (
+			patch(
+				"frappe_whatsapp_core.campaigns.frappe.get_all",
+				wraps=frappe.get_all,
+			) as get_all,
+			patch(
+				"frappe_whatsapp_core.campaigns.frappe.get_cached_doc",
+				side_effect=AssertionError("workspace performed a per-campaign lookup"),
+			),
+		):
+			summaries = campaign_summaries(limit=500)
+
+		self.assertEqual(get_all.call_count, 2)
+		summary = next(row for row in summaries if row["name"] == self.campaign.name)
+		self.assertEqual(summary["template_name"], frappe.db.get_value(
+			"WhatsApp Core Template", self.template, "template_name"
+		))
+		self.assertEqual(summary["template_approval_status"], "APPROVED")
+
 	def test_plain_text_campaign_uses_service_window_guarded_sender(self):
 		campaign = create_campaign(
 			campaign_key=f"campaign.text.{frappe.generate_hash(length=8).lower()}",
@@ -303,6 +328,34 @@ class TestCampaigns(FrappeTestCase):
 		self.assertIn("FOR UPDATE", query)
 		self.assertEqual(values["campaign_names"], ["campaign.a", "campaign.z"])
 
+	def test_full_status_projection_never_update_joins_the_hot_message_table(self):
+		def sql_result(query, *_args, **_kwargs):
+			if str(query).lstrip().startswith("SELECT name, status, core_message"):
+				return [frappe._dict(
+					name="recipient-1",
+					status="Queued",
+					core_message="message-1",
+				)]
+			return None
+
+		with (
+			patch("frappe_whatsapp_core.campaigns._lock_campaign_rows"),
+			patch(
+				"frappe_whatsapp_core.campaigns._message_delivery_statuses",
+				return_value={"message-1": "Read"},
+			),
+			patch("frappe_whatsapp_core.campaigns.frappe.db.sql", side_effect=sql_result) as sql,
+		):
+			_sync_campaign_recipient_statuses("campaign-1")
+
+		queries = [str(call.args[0]) for call in sql.call_args_list]
+		self.assertTrue(any("FOR UPDATE" in query for query in queries))
+		self.assertTrue(any("status = %(status)s" in query for query in queries))
+		self.assertFalse(any(
+			"UPDATE" in query and "tabWhatsApp Core Message" in query
+			for query in queries
+		))
+
 	def test_campaign_completion_does_not_run_hot_path_full_reconciliation(self):
 		self.campaign.status = "Running"
 		self.campaign.save(ignore_permissions=True)
@@ -313,6 +366,50 @@ class TestCampaigns(FrappeTestCase):
 			frappe.db.get_value("WhatsApp Core Campaign", self.campaign.name, "status"),
 			"Completed",
 		)
+
+	@patch("frappe_whatsapp_core.campaigns._mark_campaigns_dirty")
+	@patch("frappe_whatsapp_core.campaigns.frappe.get_all")
+	def test_active_campaign_repair_only_marks_serialized_dirty_work(self, get_all, mark_dirty):
+		get_all.side_effect = [["RUNNING-1"], ["COMPLETED-1"]]
+
+		refresh_active_campaigns()
+
+		mark_dirty.assert_called_once_with(["RUNNING-1", "COMPLETED-1"])
+		self.assertEqual(get_all.call_args_list[0].kwargs["filters"]["status"], "Running")
+		self.assertEqual(get_all.call_args_list[1].kwargs["filters"]["status"], "Completed")
+
+	@patch("frappe_whatsapp_core.campaigns.refresh_campaign_counts")
+	@patch("frappe_whatsapp_core.campaigns.frappe.db.get_value")
+	@patch("frappe_whatsapp_core.campaigns.frappe.cache.srem")
+	@patch("frappe_whatsapp_core.campaigns.frappe.cache.smembers")
+	def test_dirty_campaign_repair_retains_running_campaign(
+		self, smembers, srem, get_value, refresh
+	):
+		smembers.return_value = {b"RUNNING-1"}
+		get_value.return_value = "Running"
+
+		self.assertEqual(refresh_dirty_campaign_counts(), 0)
+
+		refresh.assert_not_called()
+		srem.assert_not_called()
+
+	@patch("frappe_whatsapp_core.campaigns.frappe.db.rollback")
+	@patch("frappe_whatsapp_core.campaigns.frappe.cache.sadd")
+	@patch("frappe_whatsapp_core.campaigns.frappe.cache.srem")
+	@patch("frappe_whatsapp_core.campaigns.frappe.cache.smembers", return_value={b"DONE-1"})
+	@patch("frappe_whatsapp_core.campaigns.frappe.db.get_value", return_value="Completed")
+	@patch(
+		"frappe_whatsapp_core.campaigns.refresh_campaign_counts",
+		side_effect=frappe.QueryDeadlockError("deadlock"),
+	)
+	def test_dirty_campaign_repair_requeues_after_deadlock(
+		self, refresh, get_value, smembers, srem, sadd, rollback
+	):
+		self.assertEqual(refresh_dirty_campaign_counts(), 0)
+
+		srem.assert_called_once_with(DIRTY_CAMPAIGNS_CACHE_KEY, b"DONE-1")
+		rollback.assert_called_once()
+		sadd.assert_called_once_with(DIRTY_CAMPAIGNS_CACHE_KEY, "DONE-1")
 
 	def test_provider_failure_reconciles_campaign_immediately(self):
 		prepare_campaign(self.campaign.name, [self.identities[0].name])

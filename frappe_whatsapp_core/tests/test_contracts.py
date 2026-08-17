@@ -7,6 +7,7 @@ from unittest.mock import patch
 import frappe
 
 from frappe_whatsapp_core.api import (
+	IMMEDIATE_STATUS_BATCH_SIZE,
 	MAX_RECEIVE_BATCH_SIZE,
 	_apply_outbound_result,
 	describe_payload,
@@ -20,10 +21,12 @@ from frappe_whatsapp_core.dispatcher import (
 	_lock_status_projection_rows,
 	_process_status_event_batch,
 	enqueue_event_batch,
+	enqueue_event_rows_by_lane,
 	enqueue_orphan_status_retry,
 	enqueue_waiting_status_events,
 	process_event_batch,
 	retry_orphan_status_events,
+	retry_failed_events,
 	retry_stale_events,
 	wake_waiting_status_events,
 )
@@ -193,13 +196,9 @@ class TestPayloadContract(unittest.TestCase):
 	@patch("frappe_whatsapp_core.api.process_event_batch")
 	@patch("frappe_whatsapp_core.api.frappe.db.bulk_insert")
 	@patch("frappe_whatsapp_core.api.frappe.get_all", return_value=[])
-	def test_inbound_message_batch_is_projected_immediately(
+	def test_inbound_message_batch_is_durably_queued_after_ingress_commit(
 		self, _get_all, bulk_insert, process_batch, enqueue_batch
 	):
-		process_batch.return_value = [
-			{"event_id": f"event-{index}", "status": "completed"}
-			for index in range(3)
-		]
 		payloads = [
 			{"entry": [{"changes": [{"field": "messages", "value": {
 				"metadata": {"phone_number_id": "PHONE-1"},
@@ -209,21 +208,30 @@ class TestPayloadContract(unittest.TestCase):
 		]
 		result = receive_batch(payloads)
 		self.assertEqual(result["inserted"], 3)
-		self.assertEqual(result["status"], "processed")
-		self.assertEqual(result["immediate"], 3)
-		self.assertEqual(result["deferred"], 0)
+		self.assertEqual(result["status"], "queued")
+		self.assertEqual(result["immediate"], 0)
+		self.assertEqual(result["deferred"], 3)
 		bulk_insert.assert_called_once()
-		process_batch.assert_called_once()
-		self.assertEqual(len(process_batch.call_args.args[0]), 3)
-		enqueue_batch.assert_not_called()
+		process_batch.assert_not_called()
+		enqueue_batch.assert_called_once()
+		self.assertEqual(len(enqueue_batch.call_args.args[0]), 3)
+		self.assertTrue(enqueue_batch.call_args.kwargs["enqueue_after_commit"])
+		self.assertEqual(
+			enqueue_batch.call_args.kwargs["serialization_key"],
+			"919999999999",
+		)
 
 	@patch("frappe_whatsapp_core.api.enqueue_event_batch")
 	@patch("frappe_whatsapp_core.api.process_event_batch")
 	@patch("frappe_whatsapp_core.api.frappe.db.bulk_insert")
 	@patch("frappe_whatsapp_core.api.frappe.get_all", return_value=[])
-	def test_status_batch_stays_deferred(
+	def test_small_status_batch_is_projected_immediately(
 		self, _get_all, bulk_insert, process_batch, enqueue_batch
 	):
+		process_batch.return_value = [
+			{"event_id": f"event-{index}", "status": "completed"}
+			for index in range(3)
+		]
 		payloads = [{
 			"entry": [{"changes": [{"field": "messages", "value": {
 				"metadata": {"phone_number_id": "PHONE-1"},
@@ -237,12 +245,89 @@ class TestPayloadContract(unittest.TestCase):
 
 		result = receive_batch(payloads)
 
+		self.assertEqual(result["status"], "processed")
+		self.assertEqual(result["immediate"], 3)
+		self.assertEqual(result["deferred"], 0)
+		bulk_insert.assert_called_once()
+		process_batch.assert_called_once()
+		enqueue_batch.assert_not_called()
+
+	@patch("frappe_whatsapp_core.api.enqueue_event_batch")
+	@patch("frappe_whatsapp_core.api.process_event_batch")
+	@patch("frappe_whatsapp_core.api.frappe.db.bulk_insert")
+	@patch("frappe_whatsapp_core.api.frappe.get_all", return_value=[])
+	def test_large_status_batch_stays_deferred(
+		self, _get_all, bulk_insert, process_batch, enqueue_batch
+	):
+		payloads = [{
+			"entry": [{"changes": [{"field": "messages", "value": {
+				"metadata": {"phone_number_id": "PHONE-1"},
+				"statuses": [{
+					"id": f"wamid.{index}",
+					"recipient_id": "919999999999",
+					"status": "read",
+				}],
+			}}]}],
+		} for index in range(IMMEDIATE_STATUS_BATCH_SIZE + 1)]
+
+		result = receive_batch(payloads)
+
 		self.assertEqual(result["immediate"], 0)
-		self.assertEqual(result["deferred"], 3)
+		self.assertEqual(result["deferred"], IMMEDIATE_STATUS_BATCH_SIZE + 1)
 		bulk_insert.assert_called_once()
 		process_batch.assert_not_called()
 		enqueue_batch.assert_called_once()
-		self.assertEqual(len(enqueue_batch.call_args.args[0]), 3)
+
+	@patch("frappe_whatsapp_core.dispatcher.frappe.enqueue")
+	def test_single_event_enqueue_uses_deadlock_safe_batch_job(self, enqueue):
+		from frappe_whatsapp_core.dispatcher import enqueue_event
+
+		enqueue_event("event-1", enqueue_after_commit=True)
+		enqueue.assert_called_once_with(
+			"frappe_whatsapp_core.dispatcher.process_event_batch",
+			queue="short",
+			enqueue_after_commit=True,
+			event_ids=["event-1"],
+			serialization_key=None,
+		)
+
+	@patch("frappe_whatsapp_core.dispatcher.enqueue_event_rows_by_lane")
+	@patch(
+		"frappe_whatsapp_core.dispatcher.frappe.get_all",
+		return_value=[frappe._dict(name="FAILED-1", event_type="message:text", conversation_key="chat-1")],
+	)
+	@patch("frappe_whatsapp_core.dispatcher.frappe.db.sql", return_value=[])
+	def test_periodic_failure_retry_does_not_compete_for_pending_events(
+		self, db_sql, get_all, enqueue_rows
+	):
+		self.assertEqual(retry_failed_events(), 1)
+		self.assertEqual(get_all.call_args.kwargs["filters"]["status"], "Failed")
+		enqueue_rows.assert_called_once_with(
+			[frappe._dict(name="FAILED-1", event_type="message:text", conversation_key="chat-1")],
+			enqueue_after_commit=True,
+		)
+
+	@patch("frappe_whatsapp_core.dispatcher.enqueue_event_batch")
+	def test_repair_queue_preserves_conversation_lanes(self, enqueue_batch):
+		enqueue_event_rows_by_lane([
+			frappe._dict(name="human-1", event_type="message:text", conversation_key="chat-1"),
+			frappe._dict(name="human-2", event_type="message:image", conversation_key="chat-1"),
+			frappe._dict(name="human-3", event_type="call:voice", conversation_key="chat-2"),
+			frappe._dict(name="status-1", event_type="status:read", conversation_key="chat-1"),
+		], enqueue_after_commit=True)
+
+		self.assertEqual(enqueue_batch.call_count, 3)
+		enqueue_batch.assert_any_call(
+			["human-1", "human-2"],
+			enqueue_after_commit=True,
+			serialization_key="chat-1",
+		)
+		enqueue_batch.assert_any_call(
+			["human-3"],
+			enqueue_after_commit=True,
+			serialization_key="chat-2",
+		)
+		enqueue_batch.assert_any_call(["status-1"], enqueue_after_commit=True)
 
 	@patch("frappe_whatsapp_core.dispatcher.frappe.enqueue")
 	def test_dispatcher_chunks_realtime_work_at_one_hundred(self, enqueue):
@@ -264,27 +349,35 @@ class TestPayloadContract(unittest.TestCase):
 
 	@patch("frappe_whatsapp_core.dispatcher.process_event_batch", return_value=[{"status": "completed"}])
 	@patch("frappe_whatsapp_core.dispatcher.time.sleep")
-	def test_orphan_status_retry_runs_in_fresh_job(self, sleep, process_batch):
+	@patch("frappe_whatsapp_core.dispatcher.frappe.db.commit")
+	def test_orphan_status_retry_runs_in_fresh_job(self, commit, sleep, process_batch):
 		result = retry_orphan_status_events(["event-1"], delay_seconds=99)
 		sleep.assert_called_once_with(2.0)
+		commit.assert_called_once_with()
 		process_batch.assert_called_once_with(["event-1"])
 		self.assertEqual(result, [{"status": "completed"}])
 
-	@patch("frappe_whatsapp_core.dispatcher.enqueue_event_batch")
+	@patch("frappe_whatsapp_core.dispatcher.enqueue_event_rows_by_lane")
 	@patch("frappe_whatsapp_core.dispatcher.frappe.db.sql")
 	@patch(
 		"frappe_whatsapp_core.dispatcher.frappe.get_all",
-		return_value=["event-1", "event-2"],
+		return_value=[
+			frappe._dict(name="event-1", event_type="message:text", conversation_key="chat-1"),
+			frappe._dict(name="event-2", event_type="message:text", conversation_key="chat-1"),
+		],
 	)
 	def test_stale_event_recovery_conditionally_requeues_after_commit(
-		self, _get_all, db_sql, enqueue_batch
+		self, _get_all, db_sql, enqueue_rows
 	):
 		result = retry_stale_events()
 
 		self.assertEqual(result, {"requeued": 2})
 		self.assertIn("status IN ('Pending', 'Queued')", db_sql.call_args.args[0])
-		enqueue_batch.assert_called_once_with(
-			["event-1", "event-2"],
+		enqueue_rows.assert_called_once_with(
+			[
+				frappe._dict(name="event-1", event_type="message:text", conversation_key="chat-1"),
+				frappe._dict(name="event-2", event_type="message:text", conversation_key="chat-1"),
+			],
 			enqueue_after_commit=True,
 		)
 

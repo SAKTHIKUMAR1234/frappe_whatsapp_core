@@ -7,6 +7,7 @@ import frappe
 from frappe.utils import add_to_date, now, now_datetime
 
 from frappe_whatsapp_core.materializer import materialize_event
+from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.message_media import enqueue_message_media_cache
 from frappe_whatsapp_core.realtime import publish_invalidation
 
@@ -19,16 +20,21 @@ ORPHAN_STATUS_RETRY_BASE_SECONDS = 0.25
 ORPHAN_STATUS_RETRY_MAX_SECONDS = 2.0
 
 
-def enqueue_event(event_id, enqueue_after_commit=False):
+def enqueue_event(event_id, enqueue_after_commit=False, serialization_key=None):
 	frappe.enqueue(
-		"frappe_whatsapp_core.dispatcher.process_event",
+		"frappe_whatsapp_core.dispatcher.process_event_batch",
 		queue="short",
 		enqueue_after_commit=enqueue_after_commit,
-		event_id=event_id,
+		event_ids=[event_id],
+		serialization_key=serialization_key,
 	)
 
 
-def enqueue_event_batch(event_ids, enqueue_after_commit=False):
+def enqueue_event_batch(
+	event_ids,
+	enqueue_after_commit=False,
+	serialization_key=None,
+):
 	if not event_ids:
 		return
 	unique_ids = list(dict.fromkeys(event_ids))
@@ -38,7 +44,32 @@ def enqueue_event_batch(event_ids, enqueue_after_commit=False):
 			queue="short",
 			enqueue_after_commit=enqueue_after_commit,
 			event_ids=unique_ids[offset : offset + MAX_REALTIME_BATCH_SIZE],
+			serialization_key=serialization_key,
 		)
+
+
+def enqueue_event_rows_by_lane(event_rows, enqueue_after_commit=False):
+	"""Queue events without losing per-conversation ordering on repair paths."""
+	status_ids = []
+	human_lanes = {}
+	for row in event_rows or []:
+		event_id = row.get("name")
+		if not event_id:
+			continue
+		if str(row.get("event_type") or "").startswith("status:"):
+			status_ids.append(event_id)
+			continue
+		lane = row.get("conversation_key") or event_id
+		human_lanes.setdefault(lane, []).append(event_id)
+
+	for lane, event_ids in human_lanes.items():
+		enqueue_event_batch(
+			event_ids,
+			enqueue_after_commit=enqueue_after_commit,
+			serialization_key=lane,
+		)
+	if status_ids:
+		enqueue_event_batch(status_ids, enqueue_after_commit=enqueue_after_commit)
 
 
 def enqueue_orphan_status_retry(event_ids, attempt=1, enqueue_after_commit=True):
@@ -69,6 +100,10 @@ def enqueue_orphan_status_retry(event_ids, attempt=1, enqueue_after_commit=True)
 def retry_orphan_status_events(event_ids, delay_seconds=ORPHAN_STATUS_RETRY_BASE_SECONDS):
 	"""Run a deferred receipt retry in a new database transaction."""
 	time.sleep(max(0.0, min(float(delay_seconds or 0), ORPHAN_STATUS_RETRY_MAX_SECONDS)))
+	# Frappe job bootstrap may have opened a REPEATABLE READ snapshot before the
+	# delay. Reset it after sleeping so the retry can observe a provider-id binding
+	# committed by the independent outbound-result callback during that window.
+	frappe.db.commit()
 	return process_event_batch(event_ids)
 
 
@@ -80,18 +115,19 @@ def retry_stale_events(limit=1000):
 	"""
 	limit = max(1, min(int(limit or 1000), 5000))
 	cutoff = add_to_date(now_datetime(), minutes=-2)
-	event_ids = frappe.get_all(
+	events = frappe.get_all(
 		"WhatsApp Core Event",
 		filters={
 			"status": ["in", ["Pending", "Queued"]],
 			"modified": ["<", cutoff],
 		},
 		order_by="modified asc",
-		pluck="name",
+		fields=["name", "event_type", "conversation_key"],
 		limit_page_length=limit,
 	)
-	if not event_ids:
+	if not events:
 		return {"requeued": 0}
+	event_ids = [row.name for row in events]
 	frappe.db.sql(
 		"""
 		UPDATE `tabWhatsApp Core Event`
@@ -101,7 +137,7 @@ def retry_stale_events(limit=1000):
 		""",
 		{"event_ids": event_ids},
 	)
-	enqueue_event_batch(event_ids, enqueue_after_commit=True)
+	enqueue_event_rows_by_lane(events, enqueue_after_commit=True)
 	return {"requeued": len(event_ids)}
 
 
@@ -224,8 +260,24 @@ def replay_orphaned_status_events(limit=5000, since=None, start=0):
 	return {"requeued": len(event_ids)}
 
 
-def process_event_batch(event_ids, retry_deadlocks=True):
+def process_event_batch(event_ids, retry_deadlocks=True, serialization_key=None):
 	"""Process one committed relay window and notify clients once per batch."""
+	if serialization_key:
+		lock_key = hashlib.sha256(str(serialization_key).encode()).hexdigest()
+		with frappe.cache.lock(
+			f"whatsapp_core_projection:{lock_key}",
+			timeout=600,
+			blocking_timeout=240,
+		):
+			# Job bootstrap may already have opened a REPEATABLE READ snapshot.
+			# Reset it only after owning the conversation lane so rows committed by
+			# the previous batch are visible before create-or-reuse projection.
+			frappe.db.commit()
+			return _process_event_batch(event_ids, retry_deadlocks)
+	return _process_event_batch(event_ids, retry_deadlocks)
+
+
+def _process_event_batch(event_ids, retry_deadlocks=True):
 	if len(event_ids) > MAX_REALTIME_BATCH_SIZE:
 		frappe.throw(
 			f"Core event batches cannot exceed {MAX_REALTIME_BATCH_SIZE} events",
@@ -249,12 +301,16 @@ def process_event_batch(event_ids, retry_deadlocks=True):
 def _process_generic_event_batch(event_ids):
 	"""Process non-status work as one retryable database transaction."""
 	results = []
+	projection_cache = {}
 	frappe.flags.whatsapp_core_batch_processing = True
 	frappe.flags.whatsapp_core_campaign_message_names = set()
 	try:
 		for event_id in event_ids:
 			try:
-				results.append({"event_id": event_id, **process_event(event_id)})
+				results.append({
+					"event_id": event_id,
+					**process_event(event_id, projection_cache=projection_cache),
+				})
 			except frappe.QueryDeadlockError:
 				# A deadlock invalidates every earlier savepoint/write in this
 				# transaction, so the complete committed batch must be replayed.
@@ -496,7 +552,7 @@ def _has_orphan_status(projections):
 	)
 
 
-def process_event(event_id):
+def process_event(event_id, projection_cache=None):
 	event = frappe.get_doc("WhatsApp Core Event", event_id)
 	if event.status == "Completed":
 		return {"status": "completed"}
@@ -508,7 +564,11 @@ def process_event(event_id):
 
 	payload = json.loads(event.payload)
 	try:
-		projections = materialize_event(event, payload)
+		projections = materialize_event(
+			event,
+			payload,
+			projection_cache=projection_cache,
+		)
 		if _has_orphan_status(projections):
 			event.status = "Pending" if event.attempts < MAX_ATTEMPTS else "Failed"
 			event.error = "Awaiting matching outbound provider result"
@@ -546,9 +606,12 @@ def process_event(event_id):
 		results = []
 		for handler_path in handlers:
 			run_key = hashlib.sha256(f"{event.name}:{handler_path}:v1".encode()).hexdigest()
-			if frappe.db.exists(
+			if frappe.db.get_value(
 				"WhatsApp Core Handler Run",
-				{"name": run_key, "status": "Completed"},
+				{"relay_event": event.name, "handler": handler_path, "status": "Completed"},
+				"name",
+			) or name_by_key(
+				"WhatsApp Core Handler Run", run_key, filters={"status": "Completed"}
 			):
 				results.append({"handler": handler_path, "status": "duplicate"})
 				continue
@@ -599,8 +662,13 @@ def _publish_batch_refresh(event_ids, results):
 
 
 def _start_handler_run(run_key, event_id, handler_path):
-	if frappe.db.exists("WhatsApp Core Handler Run", run_key):
-		run = frappe.get_doc("WhatsApp Core Handler Run", run_key)
+	run_name = frappe.db.get_value(
+		"WhatsApp Core Handler Run",
+		{"relay_event": event_id, "handler": handler_path},
+		"name",
+	) or name_by_key("WhatsApp Core Handler Run", run_key)
+	if run_name:
+		run = frappe.get_doc("WhatsApp Core Handler Run", run_name)
 		run.status = "Processing"
 		run.started_at = now()
 		run.completed_at = None
@@ -649,12 +717,18 @@ def retry_failed_events():
 	events = frappe.get_all(
 		"WhatsApp Core Event",
 		filters={
-			"status": ["in", ["Pending", "Failed"]],
+			# Pending/Queued rows still belong to their original batch or the
+			# two-minute stale-event repair. Re-enqueueing them here creates a
+			# second owner and races the first worker on MyRocks.
+			"status": "Failed",
 			"attempts": ["<", MAX_ATTEMPTS],
 		},
-		pluck="name",
+		fields=["name", "event_type", "conversation_key"],
 		limit_page_length=200,
 	)
-	for event_id in events:
-		enqueue_event(event_id)
-	return len(recoverable) + len(events)
+	recoverable_set = set(recoverable)
+	failed_rows = [row for row in events if row.name not in recoverable_set]
+	failed = [row.name for row in failed_rows]
+	if failed:
+		enqueue_event_rows_by_lane(failed_rows, enqueue_after_commit=True)
+	return len(set(recoverable) | set(failed))

@@ -140,6 +140,9 @@
 			error.value = 'Advanced calling settings must be a JSON object.'
 			return
 		}
+		if (String(calling.call_icon_visibility || '').toUpperCase() === 'NOT_SET') {
+			delete calling.call_icon_visibility
+		}
 		calling = { ...calling, status: settingsStatus.value }
 		const result = await run(
 			'settings',

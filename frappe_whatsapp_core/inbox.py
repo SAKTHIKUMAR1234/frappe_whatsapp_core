@@ -17,6 +17,7 @@ from frappe_whatsapp_core.materializer import inbound_message_body
 from frappe_whatsapp_core.message_media import add_media_url
 from frappe_whatsapp_core.message_quotes import attach_quoted_messages
 from frappe_whatsapp_core.message_reactions import attach_message_reactions
+from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.outbound import outbound_state, template_message_snapshot
 from frappe_whatsapp_core.permissions import (
 	CORE_MANAGEMENT_ROLES,
@@ -371,28 +372,51 @@ def _attach_template_snapshots(messages) -> None:
 
 
 def _conversation_message_rows(conversation: str, limit: int, current_read) -> tuple[list, dict, str | None]:
-	"""Open at the first exact unread inbound message, otherwise at the bottom."""
+	"""Resume at the user's cursor, or at the first unread message for a new reader.
+
+	The exact message-read ledger intentionally allows unread holes.  Those holes
+	must continue to drive unread counts, but they must not drag a returning user
+	backward after they deliberately jumped to and read a newer viewport.
+	"""
 	fields = """
 		name, provider_message_id, direction, message_type, body, content,
 		provider_timestamp, delivery_status, failure, owner, creation
 	"""
-	anchor = frappe.db.sql(
-		"""
-		SELECT message.name, message.provider_timestamp, message.creation
-		FROM `tabWhatsApp Core Message` message
-		LEFT JOIN `tabWhatsApp Core Message Read` message_read
-			ON message_read.message = message.name
-			AND message_read.user = %(user)s
-		WHERE message.conversation = %(conversation)s
-			AND message.direction = 'Inbound'
-			AND message.message_type != 'reaction'
-			AND message_read.name IS NULL
-		ORDER BY message.provider_timestamp ASC, message.creation ASC, message.name ASC
-		LIMIT 1
-		""",
-		{"conversation": conversation, "user": frappe.session.user},
-		as_dict=True,
-	)
+	anchor = []
+	if current_read and current_read.get("last_read_message"):
+		anchor = frappe.db.sql(
+			"""
+			SELECT name, provider_timestamp, creation
+			FROM `tabWhatsApp Core Message`
+			WHERE name = %(message)s
+				AND conversation = %(conversation)s
+				AND message_type != 'reaction'
+			LIMIT 1
+			""",
+			{
+				"message": current_read.last_read_message,
+				"conversation": conversation,
+			},
+			as_dict=True,
+		)
+	if not anchor:
+		anchor = frappe.db.sql(
+			"""
+			SELECT message.name, message.provider_timestamp, message.creation
+			FROM `tabWhatsApp Core Message` message
+			LEFT JOIN `tabWhatsApp Core Message Read` message_read
+				ON message_read.message = message.name
+				AND message_read.user = %(user)s
+			WHERE message.conversation = %(conversation)s
+				AND message.direction = 'Inbound'
+				AND message.message_type != 'reaction'
+				AND message_read.name IS NULL
+			ORDER BY message.provider_timestamp ASC, message.creation ASC, message.name ASC
+			LIMIT 1
+			""",
+			{"conversation": conversation, "user": frappe.session.user},
+			as_dict=True,
+		)
 	anchor = anchor[0] if anchor else None
 	if anchor:
 		values = {
@@ -576,8 +600,13 @@ def toggle_message_bookmark(message: str) -> dict:
 	assert_conversation_access(conversation_name)
 	frappe.has_permission("WhatsApp Core Conversation", "read", conversation_name, throw=True)
 	key = hashlib.sha256(f"{message}:{frappe.session.user}".encode()).hexdigest()
-	if frappe.db.exists("WhatsApp Core Message Bookmark", key):
-		frappe.delete_doc("WhatsApp Core Message Bookmark", key, ignore_permissions=True)
+	record_name = frappe.db.get_value(
+		"WhatsApp Core Message Bookmark",
+		{"message": message, "user": frappe.session.user},
+		"name",
+	) or name_by_key("WhatsApp Core Message Bookmark", key)
+	if record_name:
+		frappe.delete_doc("WhatsApp Core Message Bookmark", record_name, ignore_permissions=True)
 		return {"message": message, "bookmarked": False}
 	frappe.get_doc({
 		"doctype": "WhatsApp Core Message Bookmark",

@@ -2,8 +2,8 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Conversation",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:conversation_key",
-	"naming_rule": "By fieldname",
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
 		"conversation_key",

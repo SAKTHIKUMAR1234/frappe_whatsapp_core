@@ -4,9 +4,14 @@ import uuid
 import frappe
 from frappe.utils import now
 
+from frappe_whatsapp_core.naming import resolve_name
+
 
 def create_case(case_type_key, title, field_values=None, conversation=None, origin_message=None):
-	case_type = frappe.get_doc("WhatsApp Core Case Type", case_type_key)
+	case_type_name = resolve_name("WhatsApp Core Case Type", case_type_key)
+	if not case_type_name:
+		frappe.throw("Case type was not found", frappe.DoesNotExistError)
+	case_type = frappe.get_doc("WhatsApp Core Case Type", case_type_name)
 	if not case_type.enabled:
 		frappe.throw("Case type is disabled")
 	stage = _stage(case_type, case_type.initial_stage_key)

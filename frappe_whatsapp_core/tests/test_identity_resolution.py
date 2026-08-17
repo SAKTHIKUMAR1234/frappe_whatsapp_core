@@ -123,6 +123,9 @@ class TestIdentityResolution(FrappeTestCase):
 		self.assertEqual(link.reference_name, user.name)
 		self.assertEqual(link.match_quality, "Exact")
 		self.assertEqual(link.is_primary, 1)
+		self.assertEqual(identity.display_value, user.full_name)
+		self.assertEqual(get_or_create_identity(suffix).display_value, user.full_name)
+		identity.reload()
 
 		source.enabled = 0
 		source.save(ignore_permissions=True)

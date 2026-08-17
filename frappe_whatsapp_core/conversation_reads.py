@@ -37,7 +37,10 @@ def message_readers(message_names: list[str]) -> dict[str, list[dict]]:
 			message_read.message,
 			message_read.user,
 			message_read.read_at,
-			COALESCE(user.full_name, message_read.user) AS full_name,
+			user.first_name,
+			user.last_name,
+			user.full_name,
+			user.username,
 			COALESCE(user.user_image, '') AS user_image
 		FROM `tabWhatsApp Core Message Read` message_read
 		LEFT JOIN `tabUser` user ON user.name = message_read.user
@@ -49,13 +52,30 @@ def message_readers(message_names: list[str]) -> dict[str, list[dict]]:
 	)
 	result = {}
 	for row in rows:
+		display_name = _reader_display_name(row, row.user)
 		result.setdefault(row.message, []).append({
 			"user": row.user,
-			"full_name": row.full_name or row.user,
+			"display_name": display_name,
+			"full_name": display_name,
 			"user_image": row.user_image or "",
 			"read_at": row.read_at,
 		})
 	return result
+
+
+def _reader_display_name(profile, user: str) -> str:
+	"""Return a human label without exposing an email address in the UI."""
+	def value(fieldname: str) -> str:
+		if isinstance(profile, dict):
+			return str(profile.get(fieldname) or "").strip()
+		return str(getattr(profile, fieldname, "") or "").strip()
+
+	first_and_last = " ".join(part for part in (value("first_name"), value("last_name")) if part)
+	for candidate in (first_and_last, value("full_name"), value("username"), str(user or "")):
+		candidate = candidate.strip()
+		if candidate and "@" not in candidate:
+			return candidate
+	return "Team member"
 
 
 @frappe.whitelist()
@@ -108,7 +128,17 @@ def _advance_conversation_cursor(conversation: str, target, recorded: list[str])
 	therefore upsert it atomically instead of racing Frappe's ``modified`` check.
 	"""
 	user = frappe.session.user
-	read_key = hashlib.sha256(f"{conversation}:{user}".encode()).hexdigest()
+	existing_cursor = frappe.db.get_value(
+		"WhatsApp Core Conversation Read",
+		{"conversation": conversation, "user": user},
+		["name", "read_key"],
+		as_dict=True,
+	)
+	read_key = (
+		existing_cursor.read_key
+		if existing_cursor
+		else hashlib.sha256(f"{conversation}:{user}".encode()).hexdigest()
+	)
 	changed_at = now_datetime()
 	position_advances = """(
 		VALUES(last_read_at) > COALESCE(last_read_at, '1970-01-01 00:00:00')
@@ -131,7 +161,7 @@ def _advance_conversation_cursor(conversation: str, target, recorded: list[str])
 			last_read_creation
 		) VALUES (
 			%(name)s, %(changed_at)s, %(changed_at)s, %(user)s, %(user)s, 0, 0,
-			%(name)s, %(conversation)s, %(user)s, %(message)s, %(read_at)s,
+			%(read_key)s, %(conversation)s, %(user)s, %(message)s, %(read_at)s,
 			%(read_creation)s
 		)
 		ON DUPLICATE KEY UPDATE
@@ -146,7 +176,8 @@ def _advance_conversation_cursor(conversation: str, target, recorded: list[str])
 			last_read_at = IF({position_advances}, VALUES(last_read_at), last_read_at)
 		""",
 		{
-			"name": read_key,
+			"name": existing_cursor.name if existing_cursor else frappe.generate_hash(length=10),
+			"read_key": read_key,
 			"changed_at": changed_at,
 			"user": user,
 			"conversation": conversation,
@@ -158,7 +189,7 @@ def _advance_conversation_cursor(conversation: str, target, recorded: list[str])
 	cursor_changed = bool(frappe.db.sql("SELECT ROW_COUNT()", pluck=True)[0])
 	row = frappe.db.get_value(
 		"WhatsApp Core Conversation Read",
-		read_key,
+		{"read_key": read_key},
 		[
 			"conversation",
 			"user",
@@ -251,22 +282,25 @@ def _record_message_reads(conversation: str, messages: list, user: str) -> list[
 	)
 	if not contact:
 		frappe.throw("Conversation contact was not found", frappe.DoesNotExistError)
-	keyed = {
-		hashlib.sha256(f"{_get(message, 'name')}:{user}".encode()).hexdigest(): _get(message, "name")
-		for message in messages
-	}
-	existing = set(frappe.get_all(
+	message_names = [_get(message, "name") for message in messages]
+	existing_rows = frappe.get_all(
 		"WhatsApp Core Message Read",
-		filters={"name": ["in", list(keyed)]},
-		pluck="name",
-		limit_page_length=len(keyed),
-	))
+		filters={"message": ["in", message_names], "user": user},
+		fields=["message", "read_key"],
+		limit_page_length=len(message_names),
+	)
+	existing_messages = {row.message for row in existing_rows}
+	keyed = {
+		hashlib.sha256(f"{message_name}:{user}".encode()).hexdigest(): message_name
+		for message_name in message_names
+		if message_name not in existing_messages
+	}
 	read_at = now_datetime()
 	new_rows = sorted(
 		[
 		(read_key, message_name)
 		for read_key, message_name in keyed.items()
-		if read_key not in existing
+		if message_name not in existing_messages
 		],
 		key=lambda row: row[0],
 	)
@@ -281,7 +315,7 @@ def _record_message_reads(conversation: str, messages: list, user: str) -> list[
 		fields=fields,
 		values=[
 			(
-				read_key, read_at, read_at, user, user, 0, 0, read_key,
+				frappe.generate_hash(length=10), read_at, read_at, user, user, 0, 0, read_key,
 				message_name, conversation, contact, user, read_at,
 			)
 			for read_key, message_name in new_rows
@@ -416,12 +450,13 @@ def conversation_readers(conversation: str) -> list[dict]:
 		for row in frappe.get_all(
 			"User",
 			filters={"name": ["in", list(users)]},
-			fields=["name", "full_name", "user_image"],
+			fields=["name", "first_name", "last_name", "full_name", "username", "user_image"],
 			limit_page_length=len(users),
 		)
 	} if users else {}
 	for row in rows:
 		profile = profiles.get(row.user) or {}
-		row.full_name = profile.get("full_name") or row.user
+		row.display_name = _reader_display_name(profile, row.user)
+		row.full_name = row.display_name
 		row.user_image = profile.get("user_image") or ""
 	return rows

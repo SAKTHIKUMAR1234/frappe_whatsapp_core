@@ -22,6 +22,7 @@ from frappe_whatsapp_core.materializer import (
 	materialize_status,
 )
 from frappe_whatsapp_core.mcp_tools import call_tool
+from frappe_whatsapp_core.naming import name_by_key
 
 
 class TestGroupsAndCalling(FrappeTestCase):
@@ -207,7 +208,10 @@ class TestGroupsAndCalling(FrappeTestCase):
 			"timestamp": "1785900000", "session": {"sdp_type": "offer", "sdp": "v=0"},
 		})
 		self.assertEqual(created["status"], "created")
-		self.assertEqual(frappe.db.get_value("WhatsApp Core Call", "CALL-1", "status"), "connect")
+		self.assertEqual(
+			frappe.db.get_value("WhatsApp Core Call", created["name"], "status"),
+			"connect",
+		)
 
 	def test_group_webhooks_project_members_and_participant_receipts(self):
 		channel = get_or_create_channel("GROUP-PHONE", "GROUP-WABA")
@@ -225,10 +229,11 @@ class TestGroupsAndCalling(FrappeTestCase):
 			"added_participants": [{"wa_id": "919876543210"}],
 		})
 		self.assertEqual(projected["status"], "created")
+		group_name = projected["name"]
 		self.assertEqual(
 			frappe.db.get_value(
 				"WhatsApp Core Group Member",
-				{"group": "GROUP-2", "participant_id": "919876543210"},
+				{"group": group_name, "participant_id": "919876543210"},
 				"status",
 			),
 			"Active",
@@ -331,8 +336,11 @@ class TestGroupsAndCalling(FrappeTestCase):
 			}],
 			[{"account_name": "Hub Account", "channel": channel.name}],
 		)
-		group = frappe.get_doc("WhatsApp Core Group", "GROUP-LIST-1")
-		identity = get_or_create_group_identity(group.name)
+		group = frappe.get_doc(
+			"WhatsApp Core Group",
+			name_by_key("WhatsApp Core Group", "GROUP-LIST-1"),
+		)
+		identity = get_or_create_group_identity(group.group_id)
 		self.assertEqual(group.participant_count, 24)
 		self.assertEqual(identity.display_value, "Distributor Updates")
 
@@ -363,7 +371,10 @@ class TestGroupsAndCalling(FrappeTestCase):
 				"sha256": "json-hash", "url": "https://example.test/transcript",
 			}},
 		})
-		call = frappe.get_doc("WhatsApp Core Call", "CALL-ARTIFACT-1")
+		call = frappe.get_doc(
+			"WhatsApp Core Call",
+			name_by_key("WhatsApp Core Call", "CALL-ARTIFACT-1"),
+		)
 		self.assertEqual(call.remote_user_id, "US.CallArtifact1")
 		self.assertEqual(call.recording_media_id, "MEDIA-AUDIO-1")
 		self.assertEqual(call.transcript_media_id, "MEDIA-JSON-1")

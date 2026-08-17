@@ -68,7 +68,11 @@ class TestIntegrationCallbackContract(FrappeTestCase):
 			"roles": [{"role": "WhatsApp Core Transport Service"}],
 		}).insert(ignore_permissions=True)
 		original_user = frappe.session.user
+		original_request = getattr(frappe.local, "request", None)
+		original_session_obj = getattr(frappe.local, "session_obj", None)
 		frappe.local.session.user = transport_user
+		frappe.local.request = frappe._dict(method="POST")
+		frappe.local.session_obj = object()
 		try:
 			with (
 				patch.object(api, "_apply_outbound_result", return_value={"status": "applied"}),
@@ -77,8 +81,11 @@ class TestIntegrationCallbackContract(FrappeTestCase):
 					api.receive_outbound_result("transport-proof", "sent"),
 					{"status": "applied"},
 				)
+				self.assertIsNone(frappe.local.session_obj)
 		finally:
 			frappe.local.session.user = original_user
+			frappe.local.request = original_request
+			frappe.local.session_obj = original_session_obj
 
 	def test_transport_role_on_desk_user_is_rejected(self):
 		user_name = f"transport-desk-{frappe.generate_hash(length=8).lower()}@example.com"
@@ -488,7 +495,11 @@ class TestIntegrationCallbackContract(FrappeTestCase):
 		self.assertEqual(result["template"]["approval_status"], "DRAFT")
 		key = template_catalog.scoped_template_key(self.account, "failed_submit", "en")
 		self.assertEqual(
-			frappe.db.get_value("WhatsApp Core Template", key, "approval_status"),
+			frappe.db.get_value(
+				"WhatsApp Core Template",
+				{"template_key": key},
+				"approval_status",
+			),
 			"DRAFT",
 		)
 

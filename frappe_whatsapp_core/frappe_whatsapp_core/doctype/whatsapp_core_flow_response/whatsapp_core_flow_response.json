@@ -2,39 +2,160 @@
 	"doctype": "DocType",
 	"name": "WhatsApp Core Flow Response",
 	"module": "Frappe WhatsApp Core",
-	"autoname": "field:response_key",
-	"naming_rule": "By fieldname",
+	"autoname": "hash",
+	"naming_rule": "Random",
 	"engine": "InnoDB",
 	"field_order": [
-		"response_key", "response_type", "flow", "flow_instance", "conversation", "message",
-		"relay_event", "channel", "provider_flow_name", "flow_token", "action", "screen",
-		"status", "received_at", "processed_at", "request_payload", "response_payload",
-		"action_results", "error"
+		"response_key",
+		"response_type",
+		"flow",
+		"flow_instance",
+		"conversation",
+		"message",
+		"relay_event",
+		"channel",
+		"provider_flow_name",
+		"flow_token",
+		"action",
+		"screen",
+		"status",
+		"received_at",
+		"processed_at",
+		"request_payload",
+		"response_payload",
+		"action_results",
+		"error"
 	],
 	"fields": [
-		{"fieldname": "response_key", "fieldtype": "Data", "label": "Response Key", "reqd": 1, "unique": 1, "in_list_view": 1},
-		{"fieldname": "response_type", "fieldtype": "Select", "label": "Response Type", "options": "Automation\nMeta Submission\nData Exchange", "reqd": 1, "in_list_view": 1},
-		{"fieldname": "flow", "fieldtype": "Link", "label": "Flow", "options": "WhatsApp Core Flow", "in_list_view": 1},
-		{"fieldname": "flow_instance", "fieldtype": "Link", "label": "Flow Instance", "options": "WhatsApp Core Flow Instance"},
-		{"fieldname": "conversation", "fieldtype": "Link", "label": "Conversation", "options": "WhatsApp Core Conversation", "in_list_view": 1},
-		{"fieldname": "message", "fieldtype": "Link", "label": "Message", "options": "WhatsApp Core Message"},
-		{"fieldname": "relay_event", "fieldtype": "Link", "label": "Relay Event", "options": "WhatsApp Core Event"},
-		{"fieldname": "channel", "fieldtype": "Link", "label": "Channel", "options": "WhatsApp Core Channel"},
-		{"fieldname": "provider_flow_name", "fieldtype": "Data", "label": "Provider Flow"},
-		{"fieldname": "flow_token", "fieldtype": "Data", "label": "Flow Token"},
-		{"fieldname": "action", "fieldtype": "Data", "label": "Action", "in_list_view": 1},
-		{"fieldname": "screen", "fieldtype": "Data", "label": "Screen"},
-		{"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Received\nProcessing\nCompleted\nRejected\nFailed", "reqd": 1, "in_list_view": 1},
-		{"fieldname": "received_at", "fieldtype": "Datetime", "label": "Received At"},
-		{"fieldname": "processed_at", "fieldtype": "Datetime", "label": "Processed At"},
-		{"fieldname": "request_payload", "fieldtype": "JSON", "label": "Request Payload", "read_only": 1},
-		{"fieldname": "response_payload", "fieldtype": "JSON", "label": "Response Payload", "read_only": 1},
-		{"fieldname": "action_results", "fieldtype": "JSON", "label": "Action Results", "read_only": 1},
-		{"fieldname": "error", "fieldtype": "Long Text", "label": "Error", "read_only": 1}
+		{
+			"fieldname": "response_key",
+			"fieldtype": "Data",
+			"label": "Response Key",
+			"reqd": 1,
+			"unique": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "response_type",
+			"fieldtype": "Select",
+			"label": "Response Type",
+			"options": "Automation\nMeta Submission\nData Exchange",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "flow",
+			"fieldtype": "Link",
+			"label": "Flow",
+			"options": "WhatsApp Core Flow",
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "flow_instance",
+			"fieldtype": "Link",
+			"label": "Flow Instance",
+			"options": "WhatsApp Core Flow Instance"
+		},
+		{
+			"fieldname": "conversation",
+			"fieldtype": "Link",
+			"label": "Conversation",
+			"options": "WhatsApp Core Conversation",
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "message",
+			"fieldtype": "Link",
+			"label": "Message",
+			"options": "WhatsApp Core Message"
+		},
+		{
+			"fieldname": "relay_event",
+			"fieldtype": "Link",
+			"label": "Relay Event",
+			"options": "WhatsApp Core Event"
+		},
+		{
+			"fieldname": "channel",
+			"fieldtype": "Link",
+			"label": "Channel",
+			"options": "WhatsApp Core Channel"
+		},
+		{
+			"fieldname": "provider_flow_name",
+			"fieldtype": "Data",
+			"label": "Provider Flow"
+		},
+		{
+			"fieldname": "flow_token",
+			"fieldtype": "Data",
+			"label": "Flow Token"
+		},
+		{
+			"fieldname": "action",
+			"fieldtype": "Data",
+			"label": "Action",
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "screen",
+			"fieldtype": "Data",
+			"label": "Screen"
+		},
+		{
+			"fieldname": "status",
+			"fieldtype": "Select",
+			"label": "Status",
+			"options": "Received\nProcessing\nCompleted\nRejected\nFailed",
+			"reqd": 1,
+			"in_list_view": 1
+		},
+		{
+			"fieldname": "received_at",
+			"fieldtype": "Datetime",
+			"label": "Received At"
+		},
+		{
+			"fieldname": "processed_at",
+			"fieldtype": "Datetime",
+			"label": "Processed At"
+		},
+		{
+			"fieldname": "request_payload",
+			"fieldtype": "JSON",
+			"label": "Request Payload",
+			"read_only": 1
+		},
+		{
+			"fieldname": "response_payload",
+			"fieldtype": "JSON",
+			"label": "Response Payload",
+			"read_only": 1
+		},
+		{
+			"fieldname": "action_results",
+			"fieldtype": "JSON",
+			"label": "Action Results",
+			"read_only": 1
+		},
+		{
+			"fieldname": "error",
+			"fieldtype": "Long Text",
+			"label": "Error",
+			"read_only": 1
+		}
 	],
 	"permissions": [
-		{"role": "System Manager", "read": 1, "export": 1},
-		{"role": "WhatsApp Manager", "read": 1, "export": 1}
+		{
+			"role": "System Manager",
+			"read": 1,
+			"export": 1
+		},
+		{
+			"role": "WhatsApp Manager",
+			"read": 1,
+			"export": 1
+		}
 	],
 	"sort_field": "creation",
 	"sort_order": "DESC",

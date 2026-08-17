@@ -11,6 +11,7 @@ from frappe.utils import cint, getdate, now_datetime, nowdate
 from redis.exceptions import LockError
 
 from frappe_whatsapp_core.message_categories import categories_for_messages
+from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.permissions import assert_identity_team_access
 
 PERIODS = ("Daily", "Weekly", "Monthly", "Yearly")
@@ -123,9 +124,14 @@ def _refresh_period(identity: str, period_type: str, start: date, end: date) -> 
 	if not sources:
 		return None
 	key = hashlib.sha256(f"{identity}:{period_type}:{start.isoformat()}".encode()).hexdigest()
+	record_name = frappe.db.get_value(
+		"WhatsApp Core Summary Period",
+		{"identity": identity, "period_type": period_type, "period_start": start},
+		"name",
+	) or name_by_key("WhatsApp Core Summary Period", key)
 	doc = (
-		frappe.get_doc("WhatsApp Core Summary Period", key)
-		if frappe.db.exists("WhatsApp Core Summary Period", key)
+		frappe.get_doc("WhatsApp Core Summary Period", record_name)
+		if record_name
 		else frappe.get_doc({
 			"doctype": "WhatsApp Core Summary Period",
 			"summary_key": key,
