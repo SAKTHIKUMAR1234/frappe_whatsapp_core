@@ -9,7 +9,7 @@ from frappe.utils import add_to_date, now, now_datetime
 from frappe_whatsapp_core.materializer import materialize_event
 from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.message_media import enqueue_message_media_cache
-from frappe_whatsapp_core.realtime import publish_invalidation
+from frappe_whatsapp_core.realtime import publish_batch_notice, publish_message_changes
 
 MAX_ATTEMPTS = 6
 MAX_REALTIME_BATCH_SIZE = 100
@@ -654,13 +654,15 @@ def process_event(event_id, projection_cache=None):
 
 
 def _publish_batch_refresh(event_ids, results):
-	"""Tell clients to refetch through permission-filtered APIs after commit.
-
-	Site-wide realtime rooms cannot carry row-scoped data safely: any Desk user
-	can receive them. Keep this event payload-free and let each client re-query
-	the conversations it is currently authorised to view.
-	"""
-	publish_invalidation("whatsapp_core_batch_committed")
+	"""Publish one permission-scoped delta per affected operator after commit."""
+	projections = [
+		projection
+		for result in results or []
+		for projection in result.get("projections") or []
+		if isinstance(projection, dict)
+	]
+	publish_message_changes(projections)
+	publish_batch_notice([projection.get("kind") for projection in projections])
 
 
 def _start_handler_run(run_key, event_id, handler_path):

@@ -111,7 +111,7 @@ class TestCoreProduct(FrappeTestCase):
 			patch("frappe_whatsapp_core.outbound.outbound_ready", return_value=True),
 			patch("frappe_whatsapp_core.outbound._run_preflight_hooks"),
 			patch("frappe_whatsapp_core.outbound.frappe.enqueue"),
-			patch("frappe_whatsapp_core.outbound.frappe.publish_realtime"),
+			patch("frappe_whatsapp_core.outbound.publish_message_changes"),
 		):
 			client_message_id = "f9cc5adc-1b9c-4be1-aee7-b23e4c390ac2"
 			text = queue_text_internal(

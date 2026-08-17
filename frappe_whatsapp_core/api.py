@@ -18,7 +18,7 @@ from frappe_whatsapp_core.dispatcher import (
 	process_event_batch,
 )
 from frappe_whatsapp_core.permissions import require_transport_access
-from frappe_whatsapp_core.realtime import publish_invalidation
+from frappe_whatsapp_core.realtime import publish_message_changes
 
 MAX_RECEIVE_BATCH_SIZE = 1000
 IMMEDIATE_STATUS_BATCH_SIZE = 10
@@ -134,7 +134,11 @@ def _apply_outbound_result(
 	)
 	if message:
 		enqueue_campaign_refresh_for_messages([message.name])
-		publish_invalidation("whatsapp_core_message_status")
+		publish_message_changes([{
+			"kind": "status",
+			"status": "updated",
+			"name": message.name,
+		}])
 	return result
 
 
@@ -179,7 +183,10 @@ def _receive_outbound_results_once(results):
 	))
 	if message_names:
 		enqueue_campaign_refresh_for_messages(message_names)
-		publish_invalidation("whatsapp_core_batch_committed")
+		publish_message_changes([
+			{"kind": "status", "status": "updated", "name": name}
+			for name in message_names
+		])
 	ignored = sum(row.get("status") == "ignored" for row in applied)
 	unchanged = sum(row.get("status") == "noop" for row in applied)
 	return {

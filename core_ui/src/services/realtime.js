@@ -2,6 +2,7 @@ import { io } from 'socket.io-client'
 
 let socket = null
 let activeSite = null
+let activeConsumers = 0
 
 export function socketEndpoint(site, boot = window.core_boot || {}) {
 	const origin = new URL(window.location.origin)
@@ -29,16 +30,36 @@ function connection(site) {
 	return socket
 }
 
+function retainConnection() {
+	activeConsumers += 1
+}
+
+function releaseConnection() {
+	activeConsumers = Math.max(0, activeConsumers - 1)
+	if (activeConsumers || !socket) return
+	socket.disconnect()
+	socket = null
+	activeSite = null
+}
+
 export function subscribe(site, event, callback) {
 	if (!site) return () => {}
 	const client = connection(site)
+	retainConnection()
 	client.on(event, callback)
-	return () => client.off(event, callback)
+	let active = true
+	return () => {
+		if (!active) return
+		active = false
+		client.off(event, callback)
+		releaseConnection()
+	}
 }
 
 export function subscribeConnection(site, callback) {
 	if (!site) return () => {}
 	const client = connection(site)
+	retainConnection()
 	const connected = () => callback('connected')
 	const disconnected = () => callback('disconnected')
 	const failed = () => callback('reconnecting')
@@ -46,9 +67,13 @@ export function subscribeConnection(site, callback) {
 	client.on('disconnect', disconnected)
 	client.on('connect_error', failed)
 	callback(client.connected ? 'connected' : 'connecting')
+	let active = true
 	return () => {
+		if (!active) return
+		active = false
 		client.off('connect', connected)
 		client.off('disconnect', disconnected)
 		client.off('connect_error', failed)
+		releaseConnection()
 	}
 }

@@ -207,6 +207,38 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		self.assertIn("'Scroll to bottom'", inbox)
 		self.assertNotIn("row.unread_count = 0", inbox)
 
+	def test_inbox_applies_complete_realtime_deltas_without_refetching(self):
+		inbox = (
+			Path(__file__).resolve().parents[2]
+			/ "core_ui"
+			/ "src"
+			/ "features"
+			/ "inbox"
+			/ "views"
+			/ "InboxView.vue"
+		).read_text()
+		batch_handler = inbox.split("function refreshCommittedBatch(event)", 1)[1].split(
+			"async function refreshVisibleMessages()", 1
+		)[0]
+		self.assertIn("batch?.conversation_rows", batch_handler)
+		self.assertIn("upsertConversationRow(row)", batch_handler)
+		self.assertIn("allowAppend: isCreated", batch_handler)
+		self.assertIn("alreadyLoaded", batch_handler)
+		self.assertNotIn("hydrateConversationRow", batch_handler)
+		self.assertIn("if (!needsCompatibilityReload) return", batch_handler)
+		self.assertIn("subscribeConnection", inbox)
+		self.assertIn("unsubscribers.forEach((unsubscribe) => unsubscribe())", inbox)
+		realtime = (
+			Path(__file__).resolve().parents[2]
+			/ "core_ui"
+			/ "src"
+			/ "services"
+			/ "realtime.js"
+		).read_text()
+		self.assertIn("activeConsumers", realtime)
+		self.assertIn("socket.disconnect()", realtime)
+		self.assertIn("releaseConnection()", realtime)
+
 	def test_ai_summary_settings_require_a_frappe_tools_action(self):
 		with self.assertRaises(frappe.ValidationError):
 			save_ai_summary_settings(enabled=1, action="Missing I2A Action")

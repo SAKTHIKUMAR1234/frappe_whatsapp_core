@@ -20,7 +20,7 @@ from frappe_whatsapp_core.outbound import (
 	queue_template_internal,
 	queue_text_internal,
 )
-from frappe_whatsapp_core.realtime import publish_invalidation
+from frappe_whatsapp_core.realtime import publish_invalidation, publish_message_changes
 
 
 def handle_core_event(payload, event) -> dict:
@@ -72,7 +72,11 @@ def handle_core_event(payload, event) -> dict:
 			publish_invalidation("whatsapp_core_group")
 	for message in messages:
 		if not frappe.flags.whatsapp_core_batch_processing:
-			publish_invalidation("whatsapp_core_message")
+			publish_message_changes([{
+				"kind": "message",
+				"status": "created",
+				"name": message.name,
+			}])
 		flow_event = _flow_event(message)
 		response_doc = (
 			record_meta_submission(message, event, flow_event)

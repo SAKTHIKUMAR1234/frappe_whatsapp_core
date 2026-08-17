@@ -298,7 +298,7 @@ class TestBatchTransport(TestCase):
 				"frappe_whatsapp_core.outbound.send_hub_batch",
 			) as hub_batch,
 			patch("frappe_whatsapp_core.outbound.frappe.db.sql") as db_sql,
-			patch("frappe_whatsapp_core.outbound.frappe.publish_realtime") as publish,
+			patch("frappe_whatsapp_core.outbound.publish_message_changes") as publish,
 			patch("frappe_whatsapp_core.outbound.frappe.enqueue") as enqueue,
 		):
 			result = queue_campaign_batch(campaign, recipients)
@@ -314,7 +314,10 @@ class TestBatchTransport(TestCase):
 		self.assertTrue(all(row["success"] for row in result.values()))
 		db_sql.assert_called_once()
 		publish.assert_called_once()
-		self.assertEqual(publish.call_args.args[1], {"changed": True})
+		publish.assert_called_once_with([
+			{"kind": "message", "status": "created", "name": "message-0"},
+			{"kind": "message", "status": "created", "name": "message-1"},
+		])
 
 	def test_campaign_batch_never_converts_deadlock_to_recipient_failure(self):
 		campaign = SimpleNamespace(

@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import now_datetime
@@ -5,6 +7,7 @@ from frappe.utils import now_datetime
 from frappe_whatsapp_core.identity import contact_options
 from frappe_whatsapp_core.inbox import conversation_page, conversations
 from frappe_whatsapp_core.permissions import assert_conversation_access
+from frappe_whatsapp_core.realtime import conversation_recipients, publish_message_changes
 from frappe_whatsapp_core.workspace_api import upsert_team
 from frappe_whatsapp_core.template_catalog import sync_template_projection
 
@@ -133,6 +136,87 @@ class TestTeamContactAccess(FrappeTestCase):
 		rows = conversation_page(team=self.team["name"], limit=20)["rows"]
 		self.assertIn(self.conversation.name, {row["name"] for row in rows})
 		self.assertNotIn(self.open_conversation.name, {row["name"] for row in rows})
+
+	def test_realtime_recipients_match_team_and_uncategorized_scope(self):
+		recipients = conversation_recipients([
+			self.conversation.name,
+			self.open_conversation.name,
+		])
+
+		self.assertIn("Administrator", recipients[self.conversation.name])
+		self.assertIn(self.member, recipients[self.conversation.name])
+		self.assertNotIn(self.outsider, recipients[self.conversation.name])
+		self.assertIn("Administrator", recipients[self.open_conversation.name])
+		self.assertIn(self.outsider, recipients[self.open_conversation.name])
+		self.assertNotIn(self.member, recipients[self.open_conversation.name])
+
+	def test_created_message_publishes_complete_delta_only_to_scoped_user_rooms(self):
+		message = frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": f"realtime-{frappe.generate_hash(length=10).lower()}",
+			"provider_message_id": f"wamid.realtime-{frappe.generate_hash(length=10).lower()}",
+			"conversation": self.conversation.name,
+			"channel": self.conversation.channel,
+			"remote_identity": self.identity.name,
+			"direction": "Inbound",
+			"message_type": "text",
+			"body": "Scoped realtime message",
+			"content": {"text": {"body": "Scoped realtime message"}},
+			"provider_timestamp": now_datetime(),
+			"delivery_status": "Received",
+		}).insert(ignore_permissions=True)
+		with patch("frappe_whatsapp_core.realtime.frappe.publish_realtime") as publish:
+			publish_message_changes([{
+				"kind": "message",
+				"status": "created",
+				"name": message.name,
+			}])
+
+		calls_by_user = {call.kwargs.get("user"): call for call in publish.call_args_list}
+		self.assertIn(self.member, calls_by_user)
+		self.assertNotIn(self.outsider, calls_by_user)
+		payload = calls_by_user[self.member].args[1]
+		self.assertEqual(payload["message_changes"][0]["message"]["name"], message.name)
+		self.assertEqual(payload["conversation_rows"][0]["name"], self.conversation.name)
+		self.assertIn("unread_count", payload["conversation_rows"][0])
+		self.assertTrue(calls_by_user[self.member].kwargs["after_commit"])
+
+	def test_status_delta_does_not_rebuild_conversation_projection(self):
+		message = frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": f"status-realtime-{frappe.generate_hash(length=10).lower()}",
+			"provider_message_id": f"wamid.status-realtime-{frappe.generate_hash(length=10).lower()}",
+			"conversation": self.conversation.name,
+			"channel": self.conversation.channel,
+			"remote_identity": self.identity.name,
+			"direction": "Outbound",
+			"message_type": "text",
+			"body": "Status only",
+			"content": {"text": {"body": "Status only"}},
+			"provider_timestamp": now_datetime(),
+			"delivery_status": "Delivered",
+		}).insert(ignore_permissions=True)
+		with (
+			patch("frappe_whatsapp_core.realtime.frappe.publish_realtime") as publish,
+			patch("frappe_whatsapp_core.inbox.conversation_rows_for_realtime") as rows,
+		):
+			publish_message_changes([{
+				"kind": "status",
+				"status": "updated",
+				"name": message.name,
+			}])
+
+		rows.assert_not_called()
+		member_payload = next(
+			call.args[1]
+			for call in publish.call_args_list
+			if call.kwargs.get("user") == self.member
+		)
+		self.assertEqual(member_payload["conversation_rows"], [])
+		self.assertEqual(
+			set(member_payload["message_changes"][0]["message"]),
+			{"name", "conversation", "provider_message_id", "delivery_status", "failure"},
+		)
 
 	def _user(self, email):
 		user = frappe.get_doc({

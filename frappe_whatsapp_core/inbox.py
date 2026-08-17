@@ -188,7 +188,12 @@ def conversation_summary(name: str) -> dict | None:
 	return result[0] if result else None
 
 
-def _enrich_conversation_rows(rows) -> list[dict]:
+def _enrich_conversation_rows(
+	rows,
+	*,
+	user: str | None = None,
+	include_unread: bool = True,
+) -> list[dict]:
 	if not rows:
 		return []
 	conversation_names = [row.name for row in rows]
@@ -212,7 +217,11 @@ def _enrich_conversation_rows(rows) -> list[dict]:
 	contact_teams = _identity_team_presentations(identity_names)
 	presentations = present_identity_names(identity_names, context={"surface": "inbox_list"})
 	latest_messages = _latest_messages(conversation_names)
-	unread_counts = _unread_counts(conversation_names)
+	unread_counts = (
+		_unread_counts(conversation_names, user=user)
+		if include_unread
+		else {}
+	)
 
 	result = []
 	for row in rows:
@@ -234,6 +243,51 @@ def _enrich_conversation_rows(rows) -> list[dict]:
 	return result
 
 
+def conversation_rows_for_realtime(
+	conversation_names: list[str],
+	*,
+	user: str | None = None,
+	include_unread: bool = True,
+) -> list[dict]:
+	"""Build trusted list-row projections for already-authorized realtime rooms.
+
+	The realtime dispatcher performs the canonical conversation access check before
+	calling this helper. Keeping the projection query separate from the whitelisted
+	``conversation_summary`` endpoint avoids impersonating each recipient or making
+	the browser perform an API round trip for a conversation that just arrived.
+	"""
+	names = list(dict.fromkeys(
+		str(name).strip() for name in conversation_names or [] if str(name).strip()
+	))
+	if not names:
+		return []
+	rows = frappe.db.sql(
+		"""
+		SELECT
+			conversation.name,
+			conversation.conversation_key,
+			conversation.channel,
+			conversation.remote_identity,
+			conversation.status,
+			conversation.workspace_key,
+			conversation.assigned_team,
+			conversation.assigned_user,
+			conversation.last_inbound_at,
+			conversation.last_message_at
+		FROM `tabWhatsApp Core Conversation` AS conversation
+		WHERE conversation.name IN %(conversation_names)s
+		ORDER BY conversation.last_message_at DESC, conversation.name DESC
+		""",
+		{"conversation_names": tuple(names)},
+		as_dict=True,
+	)
+	return _enrich_conversation_rows(
+		rows,
+		user=user,
+		include_unread=include_unread,
+	)
+
+
 @frappe.whitelist()
 @require_core_access()
 def category_catalog() -> list[dict]:
@@ -249,8 +303,8 @@ def category_catalog() -> list[dict]:
 
 @frappe.whitelist()
 @require_core_access()
-def conversation(name: str, message_limit: int = 20) -> dict:
-	message_limit = max(1, min(int(message_limit or 20), 100))
+def conversation(name: str, message_limit: int = 30) -> dict:
+	message_limit = max(1, min(int(message_limit or 30), 100))
 	assert_conversation_access(name)
 	doc = frappe.get_doc("WhatsApp Core Conversation", name)
 	frappe.has_permission(
@@ -405,7 +459,10 @@ def _conversation_message_rows(conversation: str, limit: int, current_read) -> t
 	# page and place its final message at the bottom like a regular chat client.
 	# If older unread holes remain, keep the monotonic cursor so an intentional
 	# jump forward does not drag the operator back through already-seen context.
-	if first_unread and current_read and current_read.get("last_read_message"):
+	resume_from_saved_cursor = bool(
+		first_unread and current_read and current_read.get("last_read_message")
+	)
+	if resume_from_saved_cursor:
 		anchor = frappe.db.sql(
 			"""
 			SELECT name, provider_timestamp, creation
@@ -432,6 +489,62 @@ def _conversation_message_rows(conversation: str, limit: int, current_read) -> t
 			"anchor_name": anchor.name,
 			"limit": limit + 1,
 		}
+		if resume_from_saved_cursor:
+			messages = frappe.db.sql(
+				f"""
+				SELECT {fields}
+				FROM `tabWhatsApp Core Message`
+				WHERE conversation = %(conversation)s AND message_type != 'reaction'
+					AND (
+						provider_timestamp < %(at)s
+						OR (
+							provider_timestamp = %(at)s
+							AND (
+								creation < %(creation)s
+								OR (creation = %(creation)s AND name <= %(anchor_name)s)
+							)
+						)
+					)
+				ORDER BY provider_timestamp DESC, creation DESC, name DESC
+				LIMIT %(limit)s
+				""",
+				values,
+				as_dict=True,
+			)
+			has_more_older = len(messages) > limit
+			messages = messages[:limit]
+			messages.reverse()
+			has_more_newer = bool(frappe.db.sql(
+				"""
+				SELECT name
+				FROM `tabWhatsApp Core Message`
+				WHERE conversation = %(conversation)s AND message_type != 'reaction'
+					AND (
+						provider_timestamp > %(at)s
+						OR (
+							provider_timestamp = %(at)s
+							AND (
+								creation > %(creation)s
+								OR (creation = %(creation)s AND name > %(anchor_name)s)
+							)
+						)
+					)
+				LIMIT 1
+				""",
+				values,
+			))
+			oldest = messages[0] if messages else None
+			newest = messages[-1] if messages else None
+			return messages, {
+				"has_more": has_more_older,
+				"has_more_newer": has_more_newer,
+				"next_before": oldest.provider_timestamp if has_more_older and oldest else None,
+				"next_before_creation": oldest.creation if has_more_older and oldest else None,
+				"next_before_name": oldest.name if has_more_older and oldest else None,
+				"next_after": newest.provider_timestamp if has_more_newer and newest else None,
+				"next_after_creation": newest.creation if has_more_newer and newest else None,
+				"next_after_name": newest.name if has_more_newer and newest else None,
+			}, anchor.name
 		newer = frappe.db.sql(
 			f"""
 			SELECT {fields}
@@ -732,7 +845,7 @@ def _latest_messages(conversation_names: list[str]) -> dict:
 	return {row.conversation: row for row in rows}
 
 
-def _unread_counts(conversation_names: list[str]) -> dict:
+def _unread_counts(conversation_names: list[str], *, user: str | None = None) -> dict:
 	rows = frappe.db.sql(
 		"""
 		SELECT
@@ -750,7 +863,7 @@ def _unread_counts(conversation_names: list[str]) -> dict:
 		""",
 		{
 			"conversation_names": tuple(conversation_names),
-			"user": frappe.session.user,
+			"user": user or frappe.session.user,
 		},
 		as_dict=True,
 	)

@@ -109,7 +109,7 @@ class TestPayloadContract(unittest.TestCase):
 		wake.assert_called_once_with(["wamid.1"], enqueue_after_commit=True)
 
 	@patch("frappe_whatsapp_core.api.enqueue_campaign_refresh_for_messages")
-	@patch("frappe_whatsapp_core.api.frappe.publish_realtime")
+	@patch("frappe_whatsapp_core.api.publish_message_changes")
 	@patch(
 		"frappe_whatsapp_core.api.frappe.get_all",
 		return_value=[frappe._dict(name="MSG-EXISTING", provider_message_id="wamid.collision")],
@@ -400,18 +400,19 @@ class TestPayloadContract(unittest.TestCase):
 			enqueue_after_commit=True,
 		)
 
-	@patch("frappe_whatsapp_core.dispatcher.frappe.publish_realtime")
+	@patch("frappe_whatsapp_core.dispatcher.publish_batch_notice")
+	@patch("frappe_whatsapp_core.dispatcher.publish_message_changes")
 	@patch("frappe_whatsapp_core.dispatcher.frappe.get_all", return_value=[])
 	@patch("frappe_whatsapp_core.dispatcher.process_event")
-	def test_event_batch_emits_one_after_commit_refresh(self, process, _get_all, publish):
+	def test_empty_event_batch_does_not_emit_inbox_refresh(
+		self, process, _get_all, publish_changes, publish_notice
+	):
 		process.return_value = {"status": "completed", "projections": []}
 		result = process_event_batch(["event-1", "event-2"])
 
 		self.assertEqual(len(result), 2)
-		publish.assert_called_once()
-		self.assertEqual(publish.call_args.args[0], "whatsapp_core_batch_committed")
-		self.assertEqual(publish.call_args.args[1], {"changed": True})
-		self.assertTrue(publish.call_args.kwargs["after_commit"])
+		publish_changes.assert_called_once_with([])
+		publish_notice.assert_called_once_with([])
 
 	@patch("frappe_whatsapp_core.dispatcher._process_status_event_batch")
 	@patch(
@@ -615,11 +616,12 @@ class TestPayloadContract(unittest.TestCase):
 		self.assertEqual(external_id.get("search_index"), 1)
 
 	@patch("frappe_whatsapp_core.ai_summaries.enqueue_summary_for_messages")
-	@patch("frappe_whatsapp_core.dispatcher.frappe.publish_realtime")
+	@patch("frappe_whatsapp_core.dispatcher.publish_batch_notice")
+	@patch("frappe_whatsapp_core.dispatcher.publish_message_changes")
 	@patch("frappe_whatsapp_core.dispatcher.frappe.get_all")
 	@patch("frappe_whatsapp_core.dispatcher.process_event")
-	def test_event_batch_emits_permission_neutral_invalidation(
-		self, process, get_all, publish, enqueue_summary
+	def test_event_batch_emits_permission_scoped_message_delta(
+		self, process, get_all, publish_changes, publish_notice, enqueue_summary
 	):
 		process.return_value = {
 			"status": "completed",
@@ -636,7 +638,10 @@ class TestPayloadContract(unittest.TestCase):
 
 		process_event_batch(["event-1"])
 
-		self.assertEqual(publish.call_args.args[1], {"changed": True})
+		publish_changes.assert_called_once_with([
+			{"kind": "message", "status": "created", "name": "MSG-1"}
+		])
+		publish_notice.assert_called_once_with(["message"])
 		self.assertFalse(
 			any(call.args and call.args[0] == "WhatsApp Core Message" for call in get_all.call_args_list)
 		)
@@ -645,7 +650,7 @@ class TestPayloadContract(unittest.TestCase):
 			enqueue_after_commit=True,
 		)
 
-	@patch("frappe_whatsapp_core.api.frappe.publish_realtime")
+	@patch("frappe_whatsapp_core.api.publish_message_changes")
 	@patch("frappe_whatsapp_core.api.frappe.get_all", return_value=[])
 	@patch("frappe_whatsapp_core.api._apply_outbound_result_batch")
 	@patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["System Manager"])
@@ -670,7 +675,7 @@ class TestPayloadContract(unittest.TestCase):
 		self.assertEqual(apply_result.call_args.args[0][0]["meta_error"]["code"], 131047)
 		publish.assert_called_once()
 
-	@patch("frappe_whatsapp_core.api.frappe.publish_realtime")
+	@patch("frappe_whatsapp_core.api.publish_message_changes")
 	@patch("frappe_whatsapp_core.api.frappe.get_all", return_value=[])
 	@patch("frappe_whatsapp_core.api._apply_outbound_result_batch")
 	@patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["System Manager"])
@@ -723,7 +728,7 @@ class TestPayloadContract(unittest.TestCase):
 		parameters = signature(__import__("frappe_whatsapp_core.api", fromlist=["_apply_outbound_result"])._apply_outbound_result).parameters
 		self.assertTrue(any(parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values()))
 
-	@patch("frappe_whatsapp_core.api.frappe.publish_realtime")
+	@patch("frappe_whatsapp_core.api.publish_message_changes")
 	@patch("frappe_whatsapp_core.api.frappe.get_all")
 	@patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["System Manager"])
 	def test_outbound_result_batch_acknowledges_control_operations(
@@ -744,7 +749,7 @@ class TestPayloadContract(unittest.TestCase):
 		publish.assert_not_called()
 
 	@patch("frappe_whatsapp_core.api.enqueue_campaign_refresh_for_messages")
-	@patch("frappe_whatsapp_core.api.frappe.publish_realtime")
+	@patch("frappe_whatsapp_core.api.publish_message_changes")
 	@patch(
 		"frappe_whatsapp_core.api.frappe.get_all",
 		side_effect=[
@@ -817,10 +822,12 @@ class TestPayloadContract(unittest.TestCase):
 		self.assertEqual(result["results"][0]["status"], "noop")
 		refresh.assert_called_once_with(["MSG-QUEUED"])
 		publish.assert_called_once()
-		self.assertEqual(publish.call_args.args[1], {"changed": True})
+		publish.assert_called_once_with([
+			{"kind": "status", "status": "updated", "name": "MSG-QUEUED"}
+		])
 
 	@patch("frappe_whatsapp_core.api.enqueue_campaign_refresh_for_messages")
-	@patch("frappe_whatsapp_core.api.frappe.publish_realtime")
+	@patch("frappe_whatsapp_core.api.publish_message_changes")
 	@patch(
 		"frappe_whatsapp_core.api.frappe.get_all",
 		side_effect=[

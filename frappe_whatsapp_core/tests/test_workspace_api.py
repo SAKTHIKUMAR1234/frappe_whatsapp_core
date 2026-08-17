@@ -247,6 +247,12 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertEqual(inbox_page["messages"][0].name, self.messages[1].name)
 		self.assertTrue(inbox_page["message_page"]["has_more"])
 		self.assertFalse(inbox_page["message_page"]["has_more_newer"])
+		context_page = conversation(self.conversation.name, message_limit=2)
+		self.assertEqual(
+			{message.name for message in context_page["messages"]},
+			{message.name for message in self.messages},
+		)
+		self.assertEqual(context_page["resume_message"], self.messages[1].name)
 		conversation_row = next(
 			row
 			for row in list_conversations(search=self.identity.display_value, limit=10)["rows"]

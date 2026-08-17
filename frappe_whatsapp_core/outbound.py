@@ -38,7 +38,7 @@ from frappe_whatsapp_core.materializer import (
 	normalize_phone,
 )
 from frappe_whatsapp_core.permissions import assert_conversation_access, require_core_access
-from frappe_whatsapp_core.realtime import publish_invalidation
+from frappe_whatsapp_core.realtime import publish_message_changes
 
 
 def outbound_ready(channel: str | None = None) -> bool:
@@ -1150,7 +1150,10 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 			""",
 			{"conversation_names": list(dict.fromkeys(conversation_names))},
 		)
-		publish_invalidation("whatsapp_core_batch_committed")
+		publish_message_changes([
+			{"kind": "message", "status": "created", "name": name}
+			for name in message_names
+		])
 
 	if message_names:
 		frappe.enqueue(
@@ -1555,7 +1558,11 @@ def _queue_message(
 		_enqueue_message_delivery(message.name)
 	message_payload = _message_response(message)
 	if not batch_context:
-		publish_invalidation("whatsapp_core_message")
+		publish_message_changes([{
+			"kind": "message",
+			"status": "created",
+			"name": message.name,
+		}])
 	return message_payload
 
 
@@ -2301,7 +2308,11 @@ def _reconcile_campaign_message(message_name: str) -> None:
 
 
 def _publish_status(message) -> None:
-	publish_invalidation("whatsapp_core_message_status")
+	publish_message_changes([{
+		"kind": "status",
+		"status": "updated",
+		"name": message.name,
+	}])
 
 
 def _json_dict(value) -> dict:

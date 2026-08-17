@@ -1317,6 +1317,9 @@
 			return
 		}
 		if (!event?.conversation || !event.message) return
+		const authoritativeRow = event.conversation_row
+			? upsertConversationRow(event.conversation_row)
+			: null
 		if (event.message.message_type === 'reaction') {
 			applyReactionMessage(event.message)
 			return
@@ -1327,20 +1330,49 @@
 			if (shouldStickToBottom) scrollToBottom().then(queueVisibleMessages)
 			else if (event.message.direction === 'Inbound') hasUnseenMessages.value = true
 		}
-		const row = rows.value.find((item) => item.name === event.conversation)
+		const row = authoritativeRow || rows.value.find((item) => item.name === event.conversation)
 		if (row) {
-			row.latest_message = event.message
-			row.last_message_at = event.message.provider_timestamp
-			if (
-				event.message.direction === 'Inbound' &&
-				event.conversation !== selectedName.value
-			) {
-				row.unread_count = Number(row.unread_count || 0) + 1
+			if (!authoritativeRow) {
+				row.latest_message = event.message
+				row.last_message_at = event.message.provider_timestamp
+				if (
+					event.message.direction === 'Inbound' &&
+					event.conversation !== selectedName.value
+				) {
+					row.unread_count = Number(row.unread_count || 0) + 1
+				}
+				sortConversationRows()
 			}
-			rows.value = [row, ...rows.value.filter((item) => item.name !== row.name)]
 		} else {
 			hydrateConversationRow(event.conversation)
 		}
+	}
+
+	function conversationMatchesTeam(row) {
+		if (!team.value) return true
+		return (row?.contact_teams || []).some((contactTeam) => contactTeam.name === team.value)
+	}
+
+	function sortConversationRows() {
+		rows.value = [...rows.value].sort((left, right) => {
+			const timestamp = String(right.last_message_at || '').localeCompare(
+				String(left.last_message_at || ''),
+			)
+			return timestamp || String(right.name || '').localeCompare(String(left.name || ''))
+		})
+	}
+
+	function upsertConversationRow(incoming) {
+		if (!incoming?.name) return null
+		const existing = rows.value.find((row) => row.name === incoming.name)
+		if (!conversationMatchesTeam(incoming)) {
+			if (existing) rows.value = rows.value.filter((row) => row.name !== incoming.name)
+			return null
+		}
+		const merged = { ...existing, ...incoming }
+		rows.value = [merged, ...rows.value.filter((row) => row.name !== incoming.name)]
+		sortConversationRows()
+		return merged
 	}
 
 	async function hydrateConversationRow(conversation) {
@@ -1365,6 +1397,7 @@
 		if (message) {
 			message.delivery_status = event.delivery_status
 			message.provider_message_id = event.provider_message_id || message.provider_message_id
+			if (event.failure !== undefined) message.failure = event.failure
 		}
 	}
 
@@ -1373,6 +1406,7 @@
 			refreshCommittedBatch(event)
 			return
 		}
+		if (event?.conversation_row) upsertConversationRow(event.conversation_row)
 		if (event?.conversation !== selectedName.value || !detail.value || !event.user) return
 		const previous = (detail.value.readers || []).find((reader) => reader.user === event.user)
 		const staleCursor = previous && compareCursorPosition(event, previous) < 0
@@ -1387,7 +1421,10 @@
 					full_name:
 						previous?.full_name ||
 						(session.user?.name === event.user ? session.user?.full_name : '') ||
+						event.full_name ||
 						event.user,
+					display_name: previous?.display_name || event.display_name || event.full_name,
+					user_image: previous?.user_image || event.user_image || '',
 				}
 		if (!staleCursor) {
 			const readers = (detail.value.readers || []).filter(
@@ -1408,7 +1445,7 @@
 		}
 	}
 
-	function mergeCommittedMessage(message) {
+	function mergeCommittedMessage(message, { allowAppend = true } = {}) {
 		if (!detail.value || !message || message.conversation !== selectedName.value) return
 		if (message.message_type === 'reaction') {
 			applyReactionMessage(message)
@@ -1420,7 +1457,7 @@
 				...detail.value.messages[index],
 				...message,
 			})
-		} else {
+		} else if (allowAppend) {
 			detail.value.messages.push({ bookmarked: false, ...message })
 		}
 	}
@@ -1442,6 +1479,7 @@
 			const shouldStickToBottom = atMessageBottom.value
 			const events = pendingBatchEvents.splice(0)
 			const changesByMessage = new Map()
+			const conversationRowsByName = new Map()
 			const kinds = new Set()
 			const conversations = new Set()
 			let needsCompatibilityReload = false
@@ -1450,6 +1488,9 @@
 				for (const kind of batch?.kinds || []) kinds.add(kind)
 				for (const conversation of batch?.conversations || [])
 					conversations.add(conversation)
+				for (const row of batch?.conversation_rows || []) {
+					if (row?.name) conversationRowsByName.set(row.name, row)
+				}
 				for (const change of batch?.message_changes || []) {
 					const name = change?.message?.name
 					if (!name) continue
@@ -1465,43 +1506,48 @@
 					})
 				}
 			}
+			for (const row of conversationRowsByName.values()) upsertConversationRow(row)
 			const changes = [...changesByMessage.values()]
 			if (changes.length) {
-				const missingConversations = new Set()
 				let selectedChanged = false
 				let latestSelectedInbound = null
 				for (const change of changes) {
 					const message = change?.message
 					if (!message?.conversation) continue
+					const isCreated = change.status === 'created'
 					if (message.message_type === 'reaction') {
-						if (message.conversation === selectedName.value)
+						if (isCreated && message.conversation === selectedName.value)
 							applyReactionMessage(message)
 						continue
 					}
 					if (message.conversation === selectedName.value) {
-						mergeCommittedMessage(message)
-						selectedChanged = true
-						if (change.status === 'created' && message.direction === 'Inbound')
+						const alreadyLoaded = detail.value?.messages?.some(
+							(item) => item.name === message.name,
+						)
+						if (isCreated || alreadyLoaded) {
+							mergeCommittedMessage(message, { allowAppend: isCreated })
+							selectedChanged = true
+						}
+						if (isCreated && message.direction === 'Inbound')
 							latestSelectedInbound = message
 					}
 					const row = rows.value.find((item) => item.name === message.conversation)
-					if (!row) {
-						missingConversations.add(message.conversation)
-						continue
-					}
-					if (isNewerMessage(message, row.latest_message)) {
+					if (!row || conversationRowsByName.has(message.conversation)) continue
+					if (
+						(isCreated && isNewerMessage(message, row.latest_message)) ||
+						(!isCreated && row.latest_message?.name === message.name)
+					) {
 						row.latest_message = { ...row.latest_message, ...message }
 						row.last_message_at = message.provider_timestamp || message.creation
-						rows.value = [row, ...rows.value.filter((item) => item.name !== row.name)]
+						sortConversationRows()
 					}
 					if (
-						change.status === 'created' &&
+						isCreated &&
 						message.direction === 'Inbound' &&
 						message.conversation !== selectedName.value
 					)
 						row.unread_count = Number(row.unread_count || 0) + 1
 				}
-				await Promise.all([...missingConversations].map(hydrateConversationRow))
 				if (selectedChanged && shouldStickToBottom) await scrollToBottom()
 				else if (latestSelectedInbound) hasUnseenMessages.value = true
 				if (selectedChanged) queueVisibleMessages()

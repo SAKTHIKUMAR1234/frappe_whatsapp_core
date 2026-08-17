@@ -13,7 +13,7 @@ import frappe
 from frappe.utils import now_datetime
 
 from frappe_whatsapp_core.permissions import assert_conversation_access, require_core_access
-from frappe_whatsapp_core.realtime import publish_invalidation
+from frappe_whatsapp_core.realtime import publish_conversation_read
 
 MAX_READ_BATCH = 100
 
@@ -201,7 +201,7 @@ def _advance_conversation_cursor(conversation: str, target, recorded: list[str])
 	)
 	read_state = _read_state(row, recorded)
 	if cursor_changed or recorded:
-		publish_invalidation("whatsapp_core_conversation_read")
+		publish_conversation_read(read_state)
 	provider_message = (
 		_latest_inbound_provider_message(conversation, at_or_before=target)
 		if cursor_changed

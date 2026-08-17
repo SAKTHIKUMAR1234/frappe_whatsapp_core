@@ -118,7 +118,7 @@ class TestConversationReads(TestCase):
 				"get_value",
 				side_effect=[existing_cursor, read_row],
 			),
-			patch.object(conversation_reads.frappe, "publish_realtime") as publish_realtime,
+			patch.object(conversation_reads, "publish_conversation_read") as publish_read,
 		):
 			result = conversation_reads._advance_conversation_cursor(
 				"CONV-1", target, ["MSG-1"]
@@ -127,7 +127,7 @@ class TestConversationReads(TestCase):
 		self.assertEqual(result["last_read_message"], "MSG-1")
 		self.assertEqual(result["messages"], ["MSG-1"])
 		self.assertIn("ON DUPLICATE KEY UPDATE", db_sql.call_args_list[0].args[0])
-		publish_realtime.assert_called_once()
+		publish_read.assert_called_once_with(result)
 		latest.assert_called_once_with("CONV-1", at_or_before=target)
 		enqueue.assert_called_once_with(
 			"frappe_whatsapp_core.conversation_reads.sync_provider_read",
@@ -166,14 +166,14 @@ class TestConversationReads(TestCase):
 				"get_value",
 				side_effect=[existing_cursor, read_row],
 			),
-			patch.object(conversation_reads.frappe, "publish_realtime") as publish_realtime,
+			patch.object(conversation_reads, "publish_conversation_read") as publish_read,
 		):
 			result = conversation_reads._advance_conversation_cursor("CONV-1", target, [])
 
 		self.assertEqual(result["last_read_message"], "MSG-1")
 		latest.assert_not_called()
 		enqueue.assert_not_called()
-		publish_realtime.assert_not_called()
+		publish_read.assert_not_called()
 
 	@patch("frappe_whatsapp_core.conversation_reads.frappe.db.sql")
 	def test_provider_receipt_query_is_bounded_by_exact_cursor(self, db_sql):
