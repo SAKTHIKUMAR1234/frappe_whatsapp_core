@@ -1,9 +1,40 @@
 from __future__ import annotations
 
+import re
+
 import frappe
 from frappe.model.document import Document
 
 from frappe_whatsapp_core.network_security import validate_service_origin
+
+
+ICE_URL_PATTERN = re.compile(
+	r"^(?P<scheme>stun|stuns|turn|turns):"
+	r"(?P<host>\[[0-9a-f:]+\]|[a-z0-9.-]+)"
+	r"(?::(?P<port>[0-9]{1,5}))?"
+	r"(?:\?transport=(?:udp|tcp))?$",
+	re.IGNORECASE,
+)
+DEFAULT_STUN_URL = "stun:stun.cloudflare.com:3478"
+
+
+def parse_ice_urls(value, *, schemes, label):
+	urls = []
+	for candidate in re.split(r"[,\r\n]+", str(value or "")):
+		url = candidate.strip()
+		if not url:
+			continue
+		match = ICE_URL_PATTERN.fullmatch(url)
+		if not match or match.group("scheme").lower() not in schemes:
+			frappe.throw(f"{label} contains an invalid ICE server URL: {url}")
+		port = match.group("port")
+		if port and not 1 <= int(port) <= 65535:
+			frappe.throw(f"{label} contains an invalid port: {url}")
+		if url not in urls:
+			urls.append(url)
+	if len(urls) > 10:
+		frappe.throw(f"{label} cannot contain more than 10 URLs")
+	return urls
 
 
 class WhatsAppCoreSettings(Document):
@@ -23,6 +54,26 @@ class WhatsAppCoreSettings(Document):
 			frappe.throw("Go Relay URL is required when WhatsApp Core is enabled")
 		if self.outbound_enabled and not self.enabled:
 			frappe.throw("Enable WhatsApp Core before enabling outbound messages")
+
+		stun_urls = parse_ice_urls(
+			self.webrtc_stun_urls,
+			schemes={"stun", "stuns"},
+			label="STUN Server URLs",
+		)
+		turn_urls = parse_ice_urls(
+			self.webrtc_turn_urls,
+			schemes={"turn", "turns"},
+			label="TURN Server URLs",
+		)
+		self.webrtc_stun_urls = "\n".join(stun_urls)
+		self.webrtc_turn_urls = "\n".join(turn_urls)
+		turn_username = str(self.webrtc_turn_username or "").strip()
+		self.webrtc_turn_username = turn_username
+		turn_credential = bool(self.webrtc_turn_credential)
+		if turn_urls and (not turn_username or not turn_credential):
+			frappe.throw("TURN Username and TURN Credential are required when TURN URLs are configured")
+		if not turn_urls and (turn_username or turn_credential):
+			frappe.throw("Configure a TURN Server URL before entering TURN credentials")
 
 		channels = set()
 		account_names = set()
@@ -47,6 +98,31 @@ class WhatsAppCoreSettings(Document):
 			defaults += int(bool(row.is_default))
 		if defaults > 1:
 			frappe.throw("Only one Hub account can be the default")
+
+	def get_webrtc_ice_servers(self) -> list[dict]:
+		stun_urls = parse_ice_urls(
+			self.webrtc_stun_urls,
+			schemes={"stun", "stuns"},
+			label="STUN Server URLs",
+		)
+		turn_urls = parse_ice_urls(
+			self.webrtc_turn_urls,
+			schemes={"turn", "turns"},
+			label="TURN Server URLs",
+		)
+		if not stun_urls and not turn_urls:
+			return []
+		servers = [{"urls": stun_urls or [DEFAULT_STUN_URL]}]
+		if turn_urls:
+			username = str(self.webrtc_turn_username or "").strip()
+			credential = self.get_password("webrtc_turn_credential", raise_exception=False)
+			if username and credential:
+				servers.append({
+					"urls": turn_urls,
+					"username": username,
+					"credential": credential,
+				})
+		return servers
 
 	def get_hub_auth_headers(self) -> dict:
 		api_key = self.get_password("api_key")

@@ -238,6 +238,11 @@ def _calling_state(response):
 
 
 def _rtc_configuration():
+	settings = frappe.get_single("WhatsApp Core Settings")
+	desk_servers = settings.get_webrtc_ice_servers()
+	if desk_servers:
+		return {**DEFAULT_RTC_CONFIGURATION, "iceServers": desk_servers}
+
 	configured = frappe.conf.get("whatsapp_core_webrtc_ice_servers")
 	if isinstance(configured, str):
 		try:

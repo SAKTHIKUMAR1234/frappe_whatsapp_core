@@ -5,12 +5,16 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from frappe_whatsapp_core.calling import (
+	_rtc_configuration,
 	call_action as core_call_action,
 	call_history,
 	calling_workspace,
 	get_call_permission,
 	send_call_button,
 	update_call_settings,
+)
+from frappe_whatsapp_core.frappe_whatsapp_core.doctype.whatsapp_core_settings.whatsapp_core_settings import (
+	parse_ice_urls,
 )
 from frappe_whatsapp_core.groups import (
 	_sync_group_summaries,
@@ -35,6 +39,49 @@ from frappe_whatsapp_core.naming import name_by_key
 class TestGroupsAndCalling(FrappeTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
+
+	@patch("frappe_whatsapp_core.calling.frappe.get_single")
+	def test_calling_uses_desk_managed_ice_servers(self, get_single):
+		get_single.return_value.get_webrtc_ice_servers.return_value = [
+			{"urls": ["stun:stun.example.test:3478"]},
+			{
+				"urls": ["turns:turn.example.test:5349?transport=tcp"],
+				"username": "core-user",
+				"credential": "secret",
+			},
+		]
+		self.assertEqual(
+			_rtc_configuration()["iceServers"],
+			get_single.return_value.get_webrtc_ice_servers.return_value,
+		)
+
+	def test_ice_server_urls_are_validated_and_deduplicated(self):
+		self.assertEqual(
+			parse_ice_urls(
+				"stun:one.example.test:3478,\nstuns:two.example.test:5349\n"
+				"stun:one.example.test:3478",
+				schemes={"stun", "stuns"},
+				label="STUN Server URLs",
+			),
+			["stun:one.example.test:3478", "stuns:two.example.test:5349"],
+		)
+		with self.assertRaises(frappe.ValidationError):
+			parse_ice_urls(
+				"https://turn.example.test",
+				schemes={"turn", "turns"},
+				label="TURN Server URLs",
+			)
+
+	def test_turn_settings_keep_default_stun_and_decrypt_credential(self):
+		settings = frappe.get_doc({
+			"doctype": "WhatsApp Core Settings",
+			"webrtc_turn_urls": "turn:turn.example.test:3478?transport=udp",
+			"webrtc_turn_username": "core-user",
+		})
+		with patch.object(settings, "get_password", return_value="secret"):
+			servers = settings.get_webrtc_ice_servers()
+		self.assertEqual(servers[0]["urls"], ["stun:stun.cloudflare.com:3478"])
+		self.assertEqual(servers[1]["credential"], "secret")
 
 	@patch("frappe_whatsapp_core.groups._accounts")
 	@patch("frappe_whatsapp_core.groups._account", return_value="Hub Account")

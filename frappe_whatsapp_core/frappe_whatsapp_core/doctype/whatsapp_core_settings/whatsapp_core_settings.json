@@ -15,6 +15,12 @@
 		"api_secret",
 		"request_timeout",
 		"default_country_calling_code",
+		"section_call_connectivity",
+		"webrtc_stun_urls",
+		"column_call_connectivity",
+		"webrtc_turn_urls",
+		"webrtc_turn_username",
+		"webrtc_turn_credential",
 		"section_ai_summaries",
 		"enable_ai_summaries",
 		"summary_i2a_action",
@@ -80,6 +86,38 @@
 			"fieldname": "default_country_calling_code",
 			"fieldtype": "Data",
 			"label": "Default Country Calling Code"
+		},
+		{
+			"fieldname": "section_call_connectivity",
+			"fieldtype": "Section Break",
+			"label": "Call Connectivity"
+		},
+		{
+			"description": "Optional STUN URLs, one per line or comma-separated. The built-in STUN server is used when this is empty.",
+			"fieldname": "webrtc_stun_urls",
+			"fieldtype": "Small Text",
+			"label": "STUN Server URLs"
+		},
+		{
+			"fieldname": "column_call_connectivity",
+			"fieldtype": "Column Break"
+		},
+		{
+			"description": "Optional TURN/TURNS URLs, one per line or comma-separated.",
+			"fieldname": "webrtc_turn_urls",
+			"fieldtype": "Small Text",
+			"label": "TURN Server URLs"
+		},
+		{
+			"fieldname": "webrtc_turn_username",
+			"fieldtype": "Data",
+			"label": "TURN Username"
+		},
+		{
+			"description": "Stored encrypted and supplied only to authorized WhatsApp Core users for browser call setup.",
+			"fieldname": "webrtc_turn_credential",
+			"fieldtype": "Password",
+			"label": "TURN Credential"
 		},
 		{
 			"fieldname": "section_ai_summaries",
