@@ -887,6 +887,7 @@ def health_workspace():
 @require_system_manager()
 def settings_workspace():
 	settings = frappe.get_single("WhatsApp Core Settings")
+	i2a_schema_available = _i2a_schema_available()
 	return {
 		"site": frappe.local.site,
 		"time_zone": frappe.db.get_single_value(
@@ -947,7 +948,7 @@ def settings_workspace():
 			"batch_size": settings.summary_batch_size or 100,
 			"max_media_mb": settings.summary_max_media_mb or 15,
 			"configured": bool(
-				settings.summary_i2a_action
+				i2a_schema_available and settings.summary_i2a_action
 				and frappe.db.exists("I2A Action", settings.summary_i2a_action)
 			),
 		},
@@ -959,7 +960,7 @@ def settings_workspace():
 				order_by="action_name asc",
 				limit_page_length=100,
 			)
-			if frappe.db.exists("DocType", "I2A Action")
+			if i2a_schema_available
 			else []
 		),
 		"contact_sources": _contact_sources(),
@@ -1145,6 +1146,11 @@ def save_ai_summary_settings(
 	settings = frappe.get_single("WhatsApp Core Settings")
 	action = str(action or "").strip()
 	if cint(enabled):
+		if not _i2a_schema_available():
+			frappe.throw(
+				"Install Frappe Tools before enabling AI summaries",
+				frappe.ValidationError,
+			)
 		if not action or not frappe.db.exists("I2A Action", action):
 			frappe.throw("Select a valid Frappe Tools I2A Action", frappe.ValidationError)
 		if not cint(frappe.db.get_value("I2A Action", action, "enabled")):
@@ -1155,6 +1161,14 @@ def save_ai_summary_settings(
 	settings.summary_max_media_mb = max(1, min(cint(max_media_mb) or 15, 50))
 	settings.save()
 	return settings_workspace()
+
+
+def _i2a_schema_available() -> bool:
+	"""Return true only when the optional Frappe Tools schema is safe to query."""
+	return (
+		"frappe_tools" in frappe.get_installed_apps()
+		and frappe.db.exists("DocType", "I2A Action")
+	)
 
 
 def _validated_hub_account_mappings(accounts) -> list[dict]:

@@ -119,9 +119,8 @@
   },
   {
    "fieldname": "ai_action",
-   "fieldtype": "Link",
-   "label": "I2A Action",
-   "options": "I2A Action"
+   "fieldtype": "Data",
+   "label": "I2A Action"
   },
   {
    "fieldname": "ai_model",

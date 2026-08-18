@@ -93,18 +93,16 @@
 			"label": "Enable Incremental AI Summaries"
 		},
 		{
-			"description": "Enabled I2A Action in Frappe Tools used for transcription, message intent and incremental summaries.",
+			"description": "Optional enabled I2A Action name. Used only when Frappe Tools is installed.",
 			"fieldname": "summary_i2a_action",
-			"fieldtype": "Link",
-			"label": "Summary I2A Action",
-			"options": "I2A Action"
+			"fieldtype": "Data",
+			"label": "Summary I2A Action"
 		},
 		{
-			"description": "Core-owned I2A Action used to compact daily summaries into weekly, monthly, and yearly context.",
+			"description": "Optional Core-owned I2A Action name used for summary rollups when Frappe Tools is installed.",
 			"fieldname": "summary_rollup_i2a_action",
-			"fieldtype": "Link",
-			"label": "Summary Rollup I2A Action",
-			"options": "I2A Action"
+			"fieldtype": "Data",
+			"label": "Summary Rollup I2A Action"
 		},
 		{
 			"default": "100",

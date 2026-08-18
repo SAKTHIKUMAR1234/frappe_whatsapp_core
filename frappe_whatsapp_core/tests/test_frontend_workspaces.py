@@ -8,6 +8,7 @@ from frappe.tests.utils import FrappeTestCase
 from frappe.utils import now_datetime
 
 from frappe_whatsapp_core.frontend_api import (
+	_i2a_schema_available,
 	_validated_hub_account_mappings,
 	ai_queue_workspace,
 	bootstrap,
@@ -252,6 +253,26 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		self.assertFalse(settings["ai_summary"]["enabled"])
 		self.assertEqual(settings["ai_summary"]["batch_size"], 100)
 		self.assertEqual(settings["ai_summary"]["max_media_mb"], 50)
+
+	def test_i2a_schema_probe_short_circuits_when_frappe_tools_is_absent(self):
+		with (
+			patch(
+				"frappe_whatsapp_core.frontend_api.frappe.get_installed_apps",
+				return_value=["frappe", "frappe_whatsapp_core"],
+			),
+			patch("frappe_whatsapp_core.frontend_api.frappe.db.exists") as exists,
+		):
+			self.assertFalse(_i2a_schema_available())
+		exists.assert_not_called()
+
+		with (
+			patch("frappe_whatsapp_core.frontend_api._i2a_schema_available", return_value=False),
+			self.assertRaisesRegex(
+				frappe.ValidationError,
+				"Install Frappe Tools before enabling AI summaries",
+			),
+		):
+			save_ai_summary_settings(enabled=1, action="Optional Action")
 
 	@patch("frappe_whatsapp_core.frontend_api.call_management")
 	def test_hub_account_discovery_returns_only_integration_options(self, call_management):
