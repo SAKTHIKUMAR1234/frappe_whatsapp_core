@@ -6,6 +6,7 @@ from frappe.tests.utils import FrappeTestCase
 
 from frappe_whatsapp_core.calling import (
 	call_action as core_call_action,
+	call_history,
 	calling_workspace,
 	get_call_permission,
 	send_call_button,
@@ -89,6 +90,17 @@ class TestGroupsAndCalling(FrappeTestCase):
 		self.assertEqual(result["calls"][0]["call_id"], "CALL-LOCAL")
 		self.assertEqual(result["contacts"][0]["identity"], "CONTACT-1")
 		call_rows.assert_called_once_with()
+
+	@patch("frappe_whatsapp_core.calling._call_rows")
+	def test_call_history_is_bounded_and_reports_the_next_page(self, call_rows):
+		call_rows.return_value = [
+			{"name": f"CALL-{index}"} for index in range(31)
+		]
+		result = call_history(start=60, limit=30)
+		self.assertEqual(len(result["rows"]), 30)
+		self.assertTrue(result["has_more"])
+		self.assertEqual(result["next_start"], 90)
+		call_rows.assert_called_once_with(start=60, limit=31)
 
 	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
 	@patch("frappe_whatsapp_core.calling._call", return_value={"success": True})
@@ -218,6 +230,49 @@ class TestGroupsAndCalling(FrappeTestCase):
 			"Hub Account", user_wa_id="919876543219", recipient=None,
 		)
 
+	@patch("frappe_whatsapp_core.calling._record_call_action")
+	@patch("frappe_whatsapp_core.calling.assert_call_access")
+	@patch("frappe_whatsapp_core.calling._assert_call_account")
+	@patch("frappe_whatsapp_core.calling._claim_call")
+	@patch("frappe_whatsapp_core.calling._contact_target", return_value=(None, None))
+	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
+	@patch("frappe_whatsapp_core.calling.relay_call_action", return_value={"success": True})
+	def test_accept_after_preaccept_does_not_resend_the_sdp_answer(
+		self, relay, resolve, target, claim, assert_account, assert_access, record,
+	):
+		result = core_call_action("Hub Account", "accept", call_id="CALL-1")
+		self.assertTrue(result["success"])
+		payload = relay.call_args.args[1]
+		self.assertEqual(payload["action"], "accept")
+		self.assertNotIn("session", payload)
+		self.assertEqual(payload["recording"]["status"], "ENABLED")
+		self.assertEqual(payload["recording"]["announcement_language"], "en_US")
+
+	@patch("frappe_whatsapp_core.calling.assert_call_access")
+	@patch("frappe_whatsapp_core.calling._assert_call_account")
+	@patch("frappe_whatsapp_core.calling._claim_call")
+	@patch("frappe_whatsapp_core.calling._contact_target", return_value=(None, None))
+	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
+	def test_preaccept_still_requires_a_complete_sdp_answer(
+		self, resolve, target, claim, assert_account, assert_access,
+	):
+		with self.assertRaises(frappe.ValidationError):
+			core_call_action("Hub Account", "pre_accept", call_id="CALL-1")
+
+	@patch("frappe_whatsapp_core.calling._contact_target", return_value=("919876543210", None))
+	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
+	@patch("frappe_whatsapp_core.calling.relay_call_action")
+	def test_call_recording_cannot_be_disabled(self, relay, resolve, target):
+		with self.assertRaises(frappe.ValidationError):
+			core_call_action(
+				"Hub Account",
+				"connect",
+				sdp_type="offer",
+				sdp="v=0\r\n",
+				recording={"status": "DISABLED"},
+			)
+		relay.assert_not_called()
+
 	@patch("frappe_whatsapp_core.calling.resolve_recipient_phone", return_value="919876543219")
 	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
 	@patch("frappe_whatsapp_core.calling.send_account_raw", return_value={"success": True})
@@ -292,6 +347,8 @@ class TestGroupsAndCalling(FrappeTestCase):
 		self.assertTrue(row.conversation)
 		self.assertEqual(row.direction, "Outbound")
 		self.assertEqual(row.status, "connect")
+		payload = relay.call_args.args[1]
+		self.assertEqual(payload["recording"]["status"], "ENABLED")
 
 	@patch("frappe_whatsapp_core.calling.frappe.log_error")
 	@patch(

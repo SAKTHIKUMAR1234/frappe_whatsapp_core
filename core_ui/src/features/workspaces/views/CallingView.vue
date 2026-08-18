@@ -18,6 +18,7 @@
 	} from 'lucide-vue-next'
 	import AppDialog from '@/components/AppDialog.vue'
 	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
+	import { normalizeCallPermission } from '@/features/calling/services/callPermission'
 	import ContactSelect from '@/features/contacts/components/ContactSelect.vue'
 	import { call, errorMessage } from '@/services/frappe'
 	import { useCallingStore } from '@/stores/calling'
@@ -109,26 +110,14 @@
 				identity: selectedIdentity.value,
 			}),
 		)
-		const value = result?.data?.[0] || result
-		if (value) {
-			permission.value = {
-				status:
-					value.call_permission_status ||
-					value.permission_status ||
-					value.permission ||
-					value.status ||
-					'unknown',
-				expiresAt: value.expiration_time || value.expires_at || value.expiration || '',
-			}
-		}
+		if (result) permission.value = normalizeCallPermission(result)
 		return permission.value
 	}
 
 	async function startCall() {
 		if (!selectedContact.value) return
 		const currentPermission = permission.value || (await checkPermission())
-		const normalized = String(currentPermission?.status || '').toLowerCase()
-		if (!['granted', 'active', 'allowed', 'approved'].includes(normalized)) {
+		if (!currentPermission?.allowed) {
 			localError.value =
 				'This contact has not granted an active business-call permission. Send a call invitation first.'
 			return
@@ -260,7 +249,7 @@
 				<div v-if="permission" class="permission-result">
 					<div>
 						<small>Business-call permission</small>
-						<strong>{{ String(permission.status).replaceAll('_', ' ') }}</strong>
+						<strong>{{ permission.label }}</strong>
 					</div>
 					<span v-if="permission.expiresAt"
 						>Until {{ formatDateTime(permission.expiresAt) }}</span
@@ -308,6 +297,7 @@
 				<ul>
 					<li><CheckCircle2 :size="17" /> Team-scoped contacts and incoming calls</li>
 					<li><CheckCircle2 :size="17" /> Secure browser voice calls</li>
+					<li><CheckCircle2 :size="17" /> Announced call recording for every call</li>
 					<li><CheckCircle2 :size="17" /> Global call controls while you work</li>
 					<li><CheckCircle2 :size="17" /> Live ringing, answer and call status</li>
 				</ul>
@@ -347,6 +337,9 @@
 							<ArrowDownLeft v-if="callRow.direction === 'Inbound'" :size="14" />
 							<ArrowUpRight v-else :size="14" />
 							{{ callRow.direction }} · {{ callRow.remote_number || 'WhatsApp' }}
+						</span>
+						<span v-if="callRow.handled_by_name" class="handled-by">
+							Answered by {{ callRow.handled_by_name }}
 						</span>
 					</div>
 					<div class="call-time">
@@ -390,6 +383,15 @@
 						/>
 					</div>
 				</article>
+				<div v-if="calling.workspace.calls_has_more" class="history-more">
+					<Button
+						label="Load more calls"
+						severity="secondary"
+						outlined
+						:loading="calling.loadingMore"
+						@click="calling.loadMoreCalls()"
+					/>
+				</div>
 			</div>
 			<div v-else class="empty-history">
 				<PhoneMissed :size="28" />
@@ -634,6 +636,10 @@
 		gap: 5px;
 		align-items: center;
 	}
+	.call-person .handled-by {
+		color: var(--wa-primary);
+		font-weight: 600;
+	}
 	.call-time {
 		display: grid;
 		gap: 3px;
@@ -650,6 +656,12 @@
 		display: flex;
 		justify-content: flex-end;
 		align-items: center;
+	}
+	.history-more {
+		padding: 16px 20px;
+		display: flex;
+		justify-content: center;
+		border-top: 1px solid var(--wa-border-soft);
 	}
 	.empty-history {
 		min-height: 180px;

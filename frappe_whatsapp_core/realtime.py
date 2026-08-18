@@ -328,6 +328,18 @@ def publish_call_changes(call_names, *, after_commit: bool = True) -> int:
 		[row.remote_identity for row in rows if row.remote_identity],
 		context={"surface": "calling_realtime"},
 	)
+	handler_users = {row.handled_by for row in rows if row.handled_by}
+	handler_names = {}
+	if handler_users:
+		handler_names = {
+			profile.name: profile.full_name or profile.first_name or profile.name
+			for profile in frappe.get_all(
+				"User",
+				filters={"name": ["in", list(handler_users)]},
+				fields=["name", "full_name", "first_name"],
+				limit_page_length=len(handler_users),
+			)
+		}
 	recipients = conversation_recipients(
 		[row.conversation for row in rows if row.conversation]
 	)
@@ -341,6 +353,9 @@ def publish_call_changes(call_names, *, after_commit: bool = True) -> int:
 			or "WhatsApp contact"
 		)
 		row["presentation"] = presentation
+		row["handled_by_name"] = handler_names.get(
+			row.handled_by, row.handled_by or ""
+		)
 		for user in recipients.get(row.conversation, set()):
 			frappe.publish_realtime(
 				"whatsapp_core_call",

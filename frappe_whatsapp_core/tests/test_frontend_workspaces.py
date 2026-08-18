@@ -189,6 +189,18 @@ class TestFrontendWorkspaces(FrappeTestCase):
 					violations.append(f"{path.relative_to(ui_root)} imports {import_path}")
 		self.assertEqual(violations, [])
 
+	def test_workspace_routes_mount_directly_without_fragment_transitions(self):
+		shell = (
+			Path(__file__).resolve().parents[2]
+			/ "core_ui"
+			/ "src"
+			/ "layouts"
+			/ "AppShell.vue"
+		).read_text()
+		self.assertIn(':key="activeRoute.fullPath"', shell)
+		self.assertNotIn('<Transition name="workspace-view"', shell)
+		self.assertNotIn(".workspace-view-enter-active", shell)
+
 	def test_inbox_marks_only_the_settled_visible_message_window(self):
 		inbox = (
 			Path(__file__).resolve().parents[2]

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
 import { call, errorMessage } from '@/services/frappe'
 import { subscribe } from '@/services/realtime'
+import { acceptIncomingMedia } from '@/features/calling/services/callSignaling'
 import {
 	TERMINAL_CALL_STATES,
 	WhatsAppWebRTCSession,
@@ -31,9 +32,13 @@ export const useCallingStore = defineStore('core-calling', () => {
 		accounts: [],
 		calls: [],
 		contacts: [],
+		calls_has_more: false,
+		calls_next_start: 0,
+		calls_page_size: 30,
 		calling: { enabled: false, status: 'UNAVAILABLE' },
 	})
 	const loading = ref(false)
+	const loadingMore = ref(false)
 	const initialized = ref(false)
 	const error = ref('')
 	const notice = ref('')
@@ -79,7 +84,13 @@ export const useCallingStore = defineStore('core-calling', () => {
 		)
 		const merged = index >= 0 ? { ...calls.value[index], ...item } : item
 		if (index >= 0) calls.value.splice(index, 1, merged)
-		else calls.value.unshift(merged)
+		else {
+			calls.value.unshift(merged)
+			if (workspace.value.calls_has_more) {
+				workspace.value.calls_next_start =
+					Number(workspace.value.calls_next_start || 0) + 1
+			}
+		}
 	}
 
 	async function applyRealtime(event) {
@@ -140,6 +151,39 @@ export const useCallingStore = defineStore('core-calling', () => {
 	async function selectAccount(value) {
 		if (!value || value === selectedAccount.value) return
 		await load(value)
+	}
+
+	async function loadMoreCalls() {
+		if (loadingMore.value || !workspace.value.calls_has_more) return
+		loadingMore.value = true
+		error.value = ''
+		try {
+			const result = await call('frappe_whatsapp_core.calling.call_history', {
+				start: workspace.value.calls_next_start || calls.value.length,
+				limit: workspace.value.calls_page_size || 30,
+			})
+			const known = new Set(
+				calls.value.map((row) => row.name || row.call_id).filter(Boolean),
+			)
+			for (const row of result?.rows || []) {
+				const key = row.name || row.call_id
+				if (key && !known.has(key)) {
+					calls.value.push(row)
+					known.add(key)
+				}
+			}
+			workspace.value.calls_has_more = Boolean(result?.has_more)
+			workspace.value.calls_next_start = Number(result?.next_start || calls.value.length)
+			workspace.value.calls_page_size = Number(
+				result?.page_size || workspace.value.calls_page_size || 30,
+			)
+			return result
+		} catch (exception) {
+			error.value = errorMessage(exception, 'More call history could not be loaded.')
+			throw exception
+		} finally {
+			loadingMore.value = false
+		}
 	}
 
 	async function enableCalling() {
@@ -220,22 +264,28 @@ export const useCallingStore = defineStore('core-calling', () => {
 		}
 		try {
 			const answer = await createRtc().prepareIncoming(item.session)
-			const args = {
-				account_name: active.value.account_name,
-				call_id: item.call_id,
-				sdp_type: answer.sdp_type,
-				sdp: answer.sdp,
-			}
-			await call('frappe_whatsapp_core.calling.call_action', {
-				...args,
-				action: 'pre_accept',
+			await acceptIncomingMedia({
+				invoke: (args) => call('frappe_whatsapp_core.calling.call_action', args),
+				rtc,
+				accountName: active.value.account_name,
+				callId: item.call_id,
+				answer,
+				onPhase: (phase) => {
+					if (active.value?.call_id === item.call_id)
+						active.value = { ...active.value, phase }
+				},
 			})
-			await call('frappe_whatsapp_core.calling.call_action', {
-				...args,
-				action: 'accept',
-			})
-			active.value = { ...active.value, phase: 'connecting', handled_by: currentUser }
+			active.value = { ...active.value, phase: 'connected', handled_by: currentUser }
 		} catch (exception) {
+			try {
+				await call('frappe_whatsapp_core.calling.call_action', {
+					account_name: active.value?.account_name || accountForChannel(item.channel),
+					action: 'terminate',
+					call_id: item.call_id,
+				})
+			} catch {
+				// Meta may already have closed a failed negotiation.
+			}
 			finishCall()
 			error.value = errorMessage(exception, 'The incoming call could not be answered.')
 			throw exception
@@ -317,6 +367,7 @@ export const useCallingStore = defineStore('core-calling', () => {
 	return {
 		workspace,
 		loading,
+		loadingMore,
 		initialized,
 		error,
 		notice,
@@ -335,6 +386,7 @@ export const useCallingStore = defineStore('core-calling', () => {
 		initialize,
 		load,
 		selectAccount,
+		loadMoreCalls,
 		enableCalling,
 		startCall,
 		answerCall,

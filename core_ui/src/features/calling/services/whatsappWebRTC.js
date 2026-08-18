@@ -117,22 +117,31 @@ export class WhatsAppWebRTCSession {
 	}
 
 	async waitUntilConnected(timeout = 5000) {
-		if (['connected', 'completed'].includes(this.peer?.connectionState)) return true
+		const connected = () =>
+			this.peer?.connectionState === 'connected' ||
+			['connected', 'completed'].includes(this.peer?.iceConnectionState)
+		if (connected()) return true
 		return new Promise((resolve) => {
 			let settled = false
 			const finish = (connected) => {
 				if (settled) return
 				settled = true
-				window.clearTimeout(timer)
+				globalThis.clearTimeout(timer)
 				this.peer?.removeEventListener('connectionstatechange', changed)
+				this.peer?.removeEventListener('iceconnectionstatechange', changed)
 				resolve(connected)
 			}
 			const changed = () => {
-				if (this.peer?.connectionState === 'connected') finish(true)
-				if (['failed', 'closed'].includes(this.peer?.connectionState)) finish(false)
+				if (connected()) finish(true)
+				if (
+					['failed', 'closed'].includes(this.peer?.connectionState) ||
+					['failed', 'closed'].includes(this.peer?.iceConnectionState)
+				)
+					finish(false)
 			}
-			const timer = window.setTimeout(() => finish(false), timeout)
+			const timer = globalThis.setTimeout(() => finish(false), timeout)
 			this.peer?.addEventListener('connectionstatechange', changed)
+			this.peer?.addEventListener('iceconnectionstatechange', changed)
 		})
 	}
 

@@ -26,7 +26,9 @@
 				preparing: 'Preparing microphone…',
 				calling: 'Calling…',
 				answering: 'Answering…',
+				pre_accepting: 'Securing audio…',
 				connecting: 'Connecting audio…',
+				accepting: 'Starting call…',
 				connected: duration(calling.elapsedSeconds),
 				ending: 'Ending call…',
 			}[phase] || 'WhatsApp call'

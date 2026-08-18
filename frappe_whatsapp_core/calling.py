@@ -4,7 +4,7 @@ import mimetypes
 from pathlib import Path
 
 import frappe
-from frappe.utils import now_datetime
+from frappe.utils import cint, now_datetime
 
 from frappe_whatsapp_core.contact_presentation import present_identity_names
 from frappe_whatsapp_core.hub_client import (
@@ -52,6 +52,14 @@ CALL_ACTION_SOURCE_STATES = {
 		"accepted",
 		"connected",
 	},
+}
+
+CALL_HISTORY_PAGE_SIZE = 30
+CALL_HISTORY_MAX_PAGE_SIZE = 100
+DEFAULT_CALL_RECORDING = {
+	"status": "ENABLED",
+	"purpose": "Customer service quality and record keeping",
+	"announcement_language": "en_US",
 }
 
 
@@ -143,12 +151,16 @@ def _calling_settings(value):
 	return value
 
 
-def _call_rows(channel=None):
+def _call_rows(channel=None, *, start=0, limit=CALL_HISTORY_PAGE_SIZE):
 	conditions, values = conversation_conditions("conversation")
 	if channel:
 		conditions.append("call_log.channel = %(channel)s")
 		values["channel"] = channel
-	values["limit"] = 100
+	values["start"] = max(0, cint(start))
+	values["limit"] = min(
+		CALL_HISTORY_MAX_PAGE_SIZE + 1,
+		max(1, cint(limit) or CALL_HISTORY_PAGE_SIZE),
+	)
 	rows = frappe.db.sql(
 		f"""
 		SELECT
@@ -165,7 +177,7 @@ def _call_rows(channel=None):
 			ON conversation.name = call_log.conversation
 		WHERE {" AND ".join(conditions)}
 		ORDER BY call_log.modified DESC
-		LIMIT %(limit)s
+		LIMIT %(start)s, %(limit)s
 		""",
 		values,
 		as_dict=True,
@@ -183,7 +195,37 @@ def _call_rows(channel=None):
 			or "WhatsApp contact"
 		)
 		row["presentation"] = presentation
+	handlers = {
+		str(row.handled_by)
+		for row in rows
+		if str(row.handled_by or "").strip()
+	}
+	if handlers:
+		profiles = frappe.get_all(
+			"User",
+			filters={"name": ["in", list(handlers)]},
+			fields=["name", "full_name", "first_name"],
+			limit_page_length=len(handlers),
+		)
+		labels = {
+			profile.name: profile.full_name or profile.first_name or profile.name
+			for profile in profiles
+		}
+		for row in rows:
+			row["handled_by_name"] = labels.get(row.handled_by, row.handled_by or "")
 	return rows
+
+
+def _call_history_page(*, start=0, limit=CALL_HISTORY_PAGE_SIZE):
+	start = max(0, cint(start))
+	limit = min(CALL_HISTORY_MAX_PAGE_SIZE, max(1, cint(limit) or CALL_HISTORY_PAGE_SIZE))
+	rows = _call_rows(start=start, limit=limit + 1)
+	return {
+		"rows": rows[:limit],
+		"has_more": len(rows) > limit,
+		"next_start": start + min(limit, len(rows)),
+		"page_size": limit,
+	}
 
 
 def _calling_state(response):
@@ -222,7 +264,8 @@ def calling_workspace(account_name=None, include_sip_credentials=0):
 		channel = next(row["channel"] for row in accounts if row["account_name"] == selected)
 		# The global call dock must recover every pending scoped call after a page
 		# reload, even when a different account happens to be selected in the page.
-		calls = _call_rows()
+		call_page = _call_history_page()
+		calls = call_page["rows"]
 		templates = frappe.get_all(
 			"WhatsApp Core Template",
 			filters={"approval_status": "APPROVED", "enabled": 1, "channel": channel},
@@ -243,6 +286,9 @@ def calling_workspace(account_name=None, include_sip_credentials=0):
 			"can_manage": _can_manage(),
 			"rtc_configuration": _rtc_configuration(),
 			"calls": calls,
+			"calls_has_more": call_page["has_more"],
+			"calls_next_start": call_page["next_start"],
+			"calls_page_size": call_page["page_size"],
 			"templates": templates,
 			"contacts": contacts,
 		}
@@ -257,9 +303,19 @@ def calling_workspace(account_name=None, include_sip_credentials=0):
 			can_manage=_can_manage(),
 			rtc_configuration=_rtc_configuration(),
 			calls=calls,
+			calls_has_more=False,
+			calls_next_start=len(calls),
+			calls_page_size=CALL_HISTORY_PAGE_SIZE,
 			templates=templates,
 			contacts=contacts,
 		)
+
+
+@frappe.whitelist()
+@require_core_access()
+def call_history(start=0, limit=CALL_HISTORY_PAGE_SIZE):
+	"""Return one bounded, permission-scoped page of call history."""
+	return _call_history_page(start=start, limit=limit)
 
 
 @frappe.whitelist()
@@ -645,12 +701,25 @@ def call_action(
 		if action in {"pre_accept", "accept"}:
 			_claim_call(call_id)
 		payload["call_id"] = call_id
-	if action in {"connect", "pre_accept", "accept"}:
+	if action in {"connect", "pre_accept"}:
 		if sdp_type not in {"offer", "answer"} or not sdp:
 			frappe.throw("A valid SDP offer or answer is required", frappe.ValidationError)
 		payload["session"] = {"sdp_type": sdp_type, "sdp": sdp}
+	elif action == "accept" and (sdp_type or sdp):
+		if sdp_type != "answer" or not sdp:
+			frappe.throw("A complete SDP answer is required", frappe.ValidationError)
+		payload["session"] = {"sdp_type": sdp_type, "sdp": sdp}
 	if biz_opaque_callback_data:
 		payload["biz_opaque_callback_data"] = str(biz_opaque_callback_data)[:512]
+	# Recording is part of the product contract, not an operator-facing toggle.
+	# Meta plays the consent announcement declared here before it records audio.
+	if action in {"connect", "accept"}:
+		if (
+			recording is not None
+			and _consent_option(recording, "recording").get("status") != "ENABLED"
+		):
+			frappe.throw("Call recording cannot be disabled", frappe.ValidationError)
+		recording = dict(DEFAULT_CALL_RECORDING)
 	if recording is not None or transcription is not None:
 		if action not in {"connect", "accept"}:
 			frappe.throw("Recording controls require connect or accept", frappe.ValidationError)
