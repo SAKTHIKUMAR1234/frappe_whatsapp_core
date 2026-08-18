@@ -9,7 +9,11 @@ from frappe.utils import add_to_date, now, now_datetime
 from frappe_whatsapp_core.materializer import materialize_event
 from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.message_media import enqueue_message_media_cache
-from frappe_whatsapp_core.realtime import publish_batch_notice, publish_message_changes
+from frappe_whatsapp_core.realtime import (
+	publish_batch_notice,
+	publish_call_changes,
+	publish_message_changes,
+)
 
 MAX_ATTEMPTS = 6
 MAX_REALTIME_BATCH_SIZE = 100
@@ -662,6 +666,11 @@ def _publish_batch_refresh(event_ids, results):
 		if isinstance(projection, dict)
 	]
 	publish_message_changes(projections)
+	publish_call_changes([
+		projection.get("name")
+		for projection in projections
+		if projection.get("kind") == "call"
+	])
 	publish_batch_notice([projection.get("kind") for projection in projections])
 
 

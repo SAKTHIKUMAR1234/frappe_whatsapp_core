@@ -17,10 +17,13 @@
 	} from 'lucide-vue-next'
 	import { navigation } from '@/config/navigation'
 	import { useSessionStore } from '@/stores/session'
+	import { useCallingStore } from '@/stores/calling'
+	import CallDock from '@/features/calling/components/CallDock.vue'
 	import { subscribeConnection } from '@/services/realtime'
 	import { onAuthExpired } from '@/services/frappe'
 
 	const session = useSessionStore()
+	const calling = useCallingStore()
 	const route = useRoute()
 	const router = useRouter()
 	const profileMenu = ref()
@@ -168,6 +171,9 @@
 			session.expire()
 			router.replace({ name: 'login', query: { redirect: route.fullPath, expired: '1' } })
 		})
+		if (session.boot?.modules?.includes('calling')) {
+			calling.initialize(session.boot?.site, session.user?.name)
+		}
 	})
 	onUnmounted(() => {
 		document.documentElement.classList.remove('mobile-navigation-open')
@@ -175,11 +181,13 @@
 		window.removeEventListener('keydown', handleShortcut)
 		unsubscribeConnection()
 		unsubscribeAuth()
+		calling.destroy()
 	})
 </script>
 
 <template>
 	<div class="app-shell">
+		<CallDock v-if="session.boot?.modules?.includes('calling')" />
 		<Button
 			v-if="mobileOpen"
 			unstyled

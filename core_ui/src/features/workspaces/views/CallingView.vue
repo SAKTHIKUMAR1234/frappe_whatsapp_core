@@ -1,890 +1,720 @@
 <script setup>
-	import { onMounted, onUnmounted, ref } from 'vue'
+	import { computed, ref, watch } from 'vue'
 	import Button from 'primevue/button'
-	import Checkbox from 'primevue/checkbox'
-	import Column from 'primevue/column'
-	import DataTable from 'primevue/datatable'
-	import AppDialog from '@/components/AppDialog.vue'
-	import InputText from 'primevue/inputtext'
 	import Select from 'primevue/select'
 	import Tag from 'primevue/tag'
 	import Textarea from 'primevue/textarea'
+	import {
+		ArrowDownLeft,
+		ArrowUpRight,
+		CheckCircle2,
+		Clock3,
+		History,
+		Phone,
+		PhoneCall,
+		PhoneMissed,
+		Send,
+		ShieldCheck,
+	} from 'lucide-vue-next'
+	import AppDialog from '@/components/AppDialog.vue'
 	import ContactSelect from '@/features/contacts/components/ContactSelect.vue'
-	import { call, errorMessage, uploadFile } from '@/services/frappe'
-	import { subscribe } from '@/services/realtime'
-	import { useSessionStore } from '@/stores/session'
-	import { formatDateTime } from '@/utils/datetime'
-	import { focusDialogControl } from '@/utils/focus'
+	import { call, errorMessage } from '@/services/frappe'
+	import { useCallingStore } from '@/stores/calling'
+	import { formatDateTime, parseDateTime } from '@/utils/datetime'
 
-	const session = useSessionStore(),
-		loading = ref(false),
-		action = ref(''),
-		error = ref(''),
-		notice = ref(''),
-		account = ref(''),
-		showSettings = ref(false),
-		showAction = ref(false),
-		showOutreach = ref(false)
-	const settingsDialog = ref(null)
-	const actionDialog = ref(null)
-	const outreachDialog = ref(null)
-	const voicemailInput = ref(null)
-	const workspace = ref({
-		accounts: [],
-		calls: [],
-		templates: [],
-		contacts: [],
-		settings: {},
-		selected_account: '',
+	const calling = useCallingStore()
+	const selectedIdentity = ref('')
+	const action = ref('')
+	const localError = ref('')
+	const permission = ref(null)
+	const invitationOpen = ref(false)
+	const invitationText = ref('Call us on WhatsApp when it is convenient for you.')
+
+	const selectedContact = computed(() =>
+		calling.contacts.find((item) => item.identity === selectedIdentity.value),
+	)
+	const statusSeverity = computed(() =>
+		calling.callingEnabled ? 'success' : calling.workspace.available ? 'warn' : 'danger',
+	)
+	const statusLabel = computed(() =>
+		calling.callingEnabled
+			? 'Ready to call'
+			: calling.workspace.available
+				? 'Calling not enabled'
+				: 'Calling unavailable',
+	)
+	const visibleError = computed(() => {
+		if (localError.value) return localError.value
+		if (!calling.error) return ''
+		return 'Calling is temporarily unavailable. Ask a WhatsApp Manager to check the Hub connection.'
 	})
-	const settingsStatus = ref('DISABLED')
-	const settingsVisibility = ref('')
-	const retainedCallingSettings = ref({})
-	const visibilityOptions = [
-		{ label: 'Use Meta default', value: 'DEFAULT' },
-		{ label: 'Hide for all customers', value: 'DISABLE_ALL' },
-		{ label: 'Leave unchanged', value: '' },
-	]
-	const form = ref({
-		action: 'connect',
-		call_id: '',
-		identity: '',
-		manual_number: '',
-		sdp_type: 'offer',
-		sdp: '',
-		biz_opaque_callback_data: '',
-		recording_enabled: false,
-		transcription_enabled: false,
-		purpose: '',
-		announcement_language: 'en_IN',
-	})
-	const outreach = ref({
-		operation: 'button',
-		identity: '',
-		manual_number: '',
-		body_text: 'Call us on WhatsApp for faster support.',
-		display_text: 'Call Now',
-		template_name: '',
-		language_code: 'en',
-		ttl_minutes: 10080,
-		payload: '',
-	})
-	const permission = ref({
-		identity: '',
-		manual_number: '',
-		body_text: 'May we call you on WhatsApp?',
-	})
-	const permissionResult = ref(null)
-	const ACTION_FAILED = Symbol('action-failed')
-	let unsubscribe = () => {}
-	let unsubscribeBatch = () => {}
-	let refreshTimer = null
-	let loadSequence = 0
-	function hasTarget(values) {
-		return Boolean(values.identity || values.manual_number?.trim())
+
+	function statusLabelFor(callRow) {
+		const value = String(callRow?.status || '').toLowerCase()
+		return (
+			{
+				connect: callRow.direction === 'Inbound' ? 'Incoming' : 'Calling',
+				pre_accept: 'Connecting',
+				accept: 'Answered',
+				accepted: 'Answered',
+				terminate: 'Completed',
+				terminated: 'Completed',
+				ended: 'Completed',
+				reject: 'Declined',
+				rejected: 'Declined',
+				missed: 'Missed',
+				failed: 'Failed',
+			}[value] || (value ? value.replaceAll('_', ' ') : 'Unknown')
+		)
 	}
-	function permissionSummary(result) {
-		const value = result?.data?.[0] || result || {}
-		return {
-			status:
-				value.permission_status || value.permission || value.status || 'Response received',
-			expiresAt: value.expiration_time || value.expires_at || value.expiration || '',
-		}
+
+	function statusSeverityFor(callRow) {
+		const value = String(callRow?.status || '').toLowerCase()
+		if (['accept', 'accepted', 'terminate', 'terminated', 'ended'].includes(value))
+			return 'success'
+		if (['reject', 'rejected', 'missed', 'failed'].includes(value)) return 'danger'
+		return 'info'
 	}
-	async function run(name, task, success = '') {
+
+	function duration(callRow) {
+		const start = parseDateTime(callRow?.started_at)
+		const end = parseDateTime(callRow?.ended_at)
+		if (!start || !end) return ''
+		const seconds = Math.max(0, Math.round((end.getTime() - start.getTime()) / 1000))
+		if (seconds < 60) return `${seconds}s`
+		return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+	}
+
+	async function run(name, callback) {
 		action.value = name
-		error.value = ''
-		notice.value = ''
+		localError.value = ''
+		calling.clearMessages()
 		try {
-			const result = await task()
-			notice.value = success
-			return result
-		} catch (e) {
-			error.value = errorMessage(e)
-			return ACTION_FAILED
+			return await callback()
+		} catch (error) {
+			localError.value = errorMessage(error)
+			return null
 		} finally {
 			action.value = ''
 		}
 	}
-	async function load(selected = account.value, { silent = false } = {}) {
-		const request = ++loadSequence
-		if (!silent) loading.value = true
-		error.value = ''
-		try {
-			const result = await call('frappe_whatsapp_core.calling.calling_workspace', {
-				account_name: selected,
-			})
-			if (request !== loadSequence) return
-			workspace.value = result
-			account.value = workspace.value.selected_account || ''
-			error.value = workspace.value.error || ''
-			const calling = {
-				...(workspace.value.settings?.calling || workspace.value.settings || {}),
-			}
-			settingsStatus.value = String(calling.status || 'DISABLED').toUpperCase()
-			delete calling.status
-			const visibility = String(calling.call_icon_visibility || '').toUpperCase()
-			settingsVisibility.value = ['DEFAULT', 'DISABLE_ALL'].includes(visibility)
-				? visibility
-				: ''
-			delete calling.call_icon_visibility
-			retainedCallingSettings.value = calling
-		} catch (e) {
-			if (request === loadSequence) error.value = errorMessage(e)
-		} finally {
-			if (!silent && request === loadSequence) loading.value = false
-		}
-	}
-	function scheduleRefresh() {
-		window.clearTimeout(refreshTimer)
-		refreshTimer = window.setTimeout(() => load(account.value, { silent: true }), 180)
-	}
-	async function saveSettings() {
-		const calling = {
-			...retainedCallingSettings.value,
-			status: settingsStatus.value,
-			...(settingsVisibility.value
-				? { call_icon_visibility: settingsVisibility.value }
-				: {}),
-		}
-		const result = await run(
-			'settings',
-			() =>
-				call('frappe_whatsapp_core.calling.update_call_settings', {
-					account_name: account.value,
-					calling,
-				}),
-			'Calling settings saved.',
-		)
-		if (result === ACTION_FAILED) return
-		showSettings.value = false
-		await load()
-	}
+
 	async function checkPermission() {
-		permissionResult.value = null
+		permission.value = null
+		if (!selectedIdentity.value) return
 		const result = await run('permission', () =>
 			call('frappe_whatsapp_core.calling.get_call_permission', {
-				account_name: account.value,
-				identity: permission.value.identity || null,
-				user_wa_id: permission.value.manual_number || null,
+				account_name: calling.selectedAccount,
+				identity: selectedIdentity.value,
 			}),
 		)
-		if (result === ACTION_FAILED) return
-		permissionResult.value = permissionSummary(result)
+		const value = result?.data?.[0] || result
+		if (value) {
+			permission.value = {
+				status:
+					value.call_permission_status ||
+					value.permission_status ||
+					value.permission ||
+					value.status ||
+					'unknown',
+				expiresAt: value.expiration_time || value.expires_at || value.expiration || '',
+			}
+		}
+		return permission.value
 	}
-	async function requestPermission() {
-		await run(
-			'permission',
-			() =>
-				call('frappe_whatsapp_core.calling.request_call_permission', {
-					account_name: account.value,
-					body_text: permission.value.body_text,
-					identity: permission.value.identity || null,
-					to_number: permission.value.manual_number || null,
-				}),
-			'Call permission requested.',
+
+	async function startCall() {
+		if (!selectedContact.value) return
+		const currentPermission = permission.value || (await checkPermission())
+		const normalized = String(currentPermission?.status || '').toLowerCase()
+		if (!['granted', 'active', 'allowed', 'approved'].includes(normalized)) {
+			localError.value =
+				'This contact has not granted an active business-call permission. Send a call invitation first.'
+			return
+		}
+		await run('start', () => calling.startCall(selectedContact.value))
+	}
+
+	async function sendInvitation() {
+		if (!selectedIdentity.value || !invitationText.value.trim()) return
+		const result = await run('invite', () =>
+			call('frappe_whatsapp_core.calling.send_call_button', {
+				account_name: calling.selectedAccount,
+				identity: selectedIdentity.value,
+				body_text: invitationText.value.trim(),
+				display_text: 'Call Now',
+			}),
 		)
-	}
-	function openAction(row = null) {
-		form.value = {
-			action: row ? 'pre_accept' : 'connect',
-			call_id: row?.call_id || '',
-			identity: '',
-			manual_number: '',
-			sdp_type: row ? 'answer' : 'offer',
-			sdp: '',
-			biz_opaque_callback_data: '',
-			recording_enabled: false,
-			transcription_enabled: false,
-			purpose: '',
-			announcement_language: 'en_IN',
+		if (result) {
+			invitationOpen.value = false
+			calling.notice = 'Call invitation sent.'
 		}
-		showAction.value = true
 	}
-	async function executeAction() {
-		const {
-			recording_enabled,
-			transcription_enabled,
-			purpose,
-			announcement_language,
-			manual_number,
-			...values
-		} = form.value
-		if (!['connect', 'pre_accept', 'accept'].includes(values.action)) {
-			values.sdp_type = null
-			values.sdp = null
-		}
-		if (['connect', 'accept'].includes(values.action) && recording_enabled)
-			values.recording = { status: 'ENABLED', purpose, announcement_language }
-		if (['connect', 'accept'].includes(values.action) && transcription_enabled)
-			values.transcription = { status: 'ENABLED', purpose, announcement_language }
-		const result = await run(
-			'call',
-			() =>
-				call('frappe_whatsapp_core.calling.call_action', {
-					account_name: account.value,
-					...values,
-					to_number: manual_number || null,
-				}),
-			`Call action “${values.action}” sent.`,
-		)
-		if (result === ACTION_FAILED) return
-		showAction.value = false
-		await load()
-	}
-	async function sendOutreach() {
-		const values = outreach.value
-		if (values.operation === 'deep-link') {
-			const result = await run('outreach', () =>
-				call('frappe_whatsapp_core.calling.build_call_deep_link', {
-					account_name: account.value,
-					biz_payload: values.payload || null,
-				}),
-			)
-			if (result === ACTION_FAILED) return
-			notice.value = result?.url || 'Call deep link generated.'
-		} else {
-			const method =
-				values.operation === 'template' ? 'send_call_button_template' : 'send_call_button'
-			const result = await run(
-				'outreach',
-				() =>
-					call(`frappe_whatsapp_core.calling.${method}`, {
-						account_name: account.value,
-						identity: values.identity || null,
-						to_number: values.manual_number || null,
-						body_text: values.body_text,
-						display_text: values.display_text,
-						template_name: values.template_name,
-						language_code: values.language_code,
-						ttl_minutes: values.ttl_minutes,
-						payload: values.payload || null,
-					}),
-				'Call invitation queued.',
-			)
-			if (result === ACTION_FAILED) return
-		}
-		showOutreach.value = false
-	}
-	async function uploadVoicemail(event) {
-		const file = event.target.files?.[0]
-		if (!file) return
-		const result = await run('voicemail', async () => {
-			const stored = await uploadFile(file, true)
-			const result = await call(
-				'frappe_whatsapp_core.calling.upload_voicemail_announcement',
-				{ account_name: account.value, file_url: stored.file_url },
-			)
-			notice.value = `Voicemail media uploaded: ${result.media_id || ''}`
-			return result
-		})
-		if (result === ACTION_FAILED) return
-		event.target.value = ''
-	}
-	async function openArtifact(mediaId) {
-		const result = await run('artifact', () =>
+
+	async function openArtifact(callRow, kind) {
+		const mediaId = callRow?.[`${kind}_media_id`]
+		if (!mediaId) return
+		const result = await run(`artifact-${mediaId}`, () =>
 			call('frappe_whatsapp_core.calling.get_call_artifact', {
-				account_name: account.value,
+				account_name: calling.selectedAccount,
 				media_id: mediaId,
 				download: 1,
 			}),
 		)
-		if (result === ACTION_FAILED) return
 		if (result?.file_url) window.open(result.file_url, '_blank', 'noopener')
 	}
-	onMounted(() => {
-		load('')
-		unsubscribe = subscribe(session.boot?.site, 'whatsapp_core_call', scheduleRefresh)
-		unsubscribeBatch = subscribe(
-			session.boot?.site,
-			'whatsapp_core_batch_committed',
-			(event) => {
-				const kinds = Array.isArray(event?.kinds) ? event.kinds : null
-				if (!kinds || kinds.includes('call')) scheduleRefresh()
-			},
-		)
-	})
-	onUnmounted(() => {
-		window.clearTimeout(refreshTimer)
-		unsubscribe()
-		unsubscribeBatch()
+
+	async function callAgain(callRow) {
+		const contact = calling.contacts.find((item) => item.identity === callRow.remote_identity)
+		if (!contact) {
+			localError.value = 'This contact is no longer inside your calling scope.'
+			return
+		}
+		selectedIdentity.value = contact.identity
+		await startCall()
+	}
+
+	watch(selectedIdentity, () => {
+		permission.value = null
 	})
 </script>
 
 <template>
-	<div class="page-heading calling-heading">
-		<div>
-			<div class="eyebrow">WhatsApp Business Calling API</div>
-			<h1>Calling</h1>
-		</div>
-		<div class="actions calling-actions">
-			<Button
-				label="Call invitation"
-				icon="pi pi-send"
-				outlined
-				:disabled="!workspace.available"
-				@click="showOutreach = true"
-			/>
-			<input
-				ref="voicemailInput"
-				class="voicemail-input"
-				type="file"
-				accept="audio/ogg,.ogg"
-				:disabled="!workspace.available"
-				@change="uploadVoicemail"
-			/>
-			<Button
-				label="Voicemail audio"
-				icon="pi pi-upload"
-				outlined
-				:disabled="!workspace.available"
-				:loading="action === 'voicemail'"
-				@click="voicemailInput?.click()"
-			/>
-			<Button
-				label="Settings"
-				icon="pi pi-cog"
-				outlined
-				:disabled="!workspace.available"
-				@click="showSettings = true"
-			/><Button
-				label="Start call"
-				icon="pi pi-phone"
-				:disabled="!workspace.available"
-				@click="openAction()"
-			/>
-		</div>
-	</div>
-	<div v-if="error" class="banner error-banner">{{ error }}</div>
-	<div v-if="notice" class="banner success-banner">{{ notice }}</div>
-	<section class="surface-card panel">
-		<div class="toolbar">
-			<Select
-				v-model="account"
-				:options="workspace.accounts"
-				option-label="display_name"
-				option-value="account_name"
-				aria-label="WhatsApp account"
-				@change="load($event.value)"
-			/><Tag
-				:value="settingsStatus === 'ENABLED' ? 'Calling enabled' : 'Calling disabled'"
-				:severity="settingsStatus === 'ENABLED' ? 'success' : 'secondary'"
-			/><Button
-				label="Reload"
-				icon="pi pi-refresh"
-				severity="secondary"
-				outlined
-				:loading="loading"
-				@click="load()"
-			/>
-		</div>
-		<div class="permission-card">
+	<div class="calling-page">
+		<header class="page-heading calling-heading">
 			<div>
-				<strong>Customer call permission</strong
-				><small
-					>Select a Core contact, then check or request Meta's call permission.</small
-				>
+				<div class="eyebrow">WhatsApp Business Calling</div>
+				<h1>Call customers from the workspace</h1>
+				<p>Secure browser audio with the same team access rules as the shared inbox.</p>
 			</div>
-			<div class="target-fields">
-				<ContactSelect
-					v-model="permission.identity"
-					:options="workspace.contacts || []"
-					@update:model-value="permission.manual_number = ''"
+			<div class="heading-actions">
+				<Select
+					:model-value="calling.selectedAccount"
+					:options="calling.accounts"
+					option-label="display_name"
+					option-value="account_name"
+					aria-label="WhatsApp account"
+					:disabled="calling.loading || calling.busy"
+					@update:model-value="calling.selectAccount($event)"
 				/>
-				<span>or</span>
-				<InputText
-					v-model="permission.manual_number"
-					aria-label="WhatsApp number for call permission"
-					placeholder="Enter a WhatsApp number"
-					@input="permission.identity = ''"
-				/>
+				<Tag :value="statusLabel" :severity="statusSeverity" rounded />
 			</div>
-			<Textarea
-				v-model="permission.body_text"
-				rows="2"
-				aria-label="Call permission request message"
-				placeholder="Message shown with the call permission request"
-			/>
-			<div class="actions">
-				<Button
-					label="Check"
-					outlined
-					:loading="action === 'permission'"
-					:disabled="!hasTarget(permission)"
-					@click="checkPermission"
-				/><Button
-					label="Request"
-					:loading="action === 'permission'"
-					:disabled="!hasTarget(permission) || !permission.body_text.trim()"
-					@click="requestPermission"
-				/>
-			</div>
+		</header>
+
+		<div v-if="visibleError" class="banner error-banner">
+			{{ visibleError }}
 		</div>
-		<div v-if="permissionResult" class="permission-result">
-			<div>
-				<small>Current permission</small>
-				<strong>{{ permissionResult.status }}</strong>
-			</div>
-			<span v-if="permissionResult.expiresAt"
-				>Expires {{ formatDateTime(permissionResult.expiresAt) }}</span
-			>
-		</div>
-		<DataTable
-			:value="workspace.calls || []"
-			:loading="loading"
-			striped-rows
-			responsive-layout="scroll"
-			><Column field="call_id" header="Call ID" /><Column
-				field="direction"
-				header="Direction"
-			/><Column field="remote_number" header="Remote party" /><Column
-				field="status"
-				header="Status"
-			/><Column field="started_at" header="Started"
-				><template #body="{ data }">{{
-					formatDateTime(data.started_at)
-				}}</template></Column
-			><Column field="ended_at" header="Ended"
-				><template #body="{ data }">{{ formatDateTime(data.ended_at) }}</template></Column
-			><Column header="Artifacts"
-				><template #body="{ data }"
-					><div class="artifact-actions">
-						<Button
-							v-if="data.recording_media_id"
-							label="Recording"
-							icon="pi pi-volume-up"
-							size="small"
-							text
-							@click="openArtifact(data.recording_media_id)"
-						/><Button
-							v-if="data.transcript_media_id"
-							label="Transcript"
-							icon="pi pi-file"
-							size="small"
-							text
-							@click="openArtifact(data.transcript_media_id)"
-						/><span v-if="!data.recording_media_id && !data.transcript_media_id"
-							>—</span
-						>
-					</div></template
-				></Column
-			><Column header=""
-				><template #body="{ data }"
-					><Button
-						label="Act"
-						size="small"
-						outlined
-						@click="openAction(data)" /></template></Column
-			><template #empty
-				><div class="empty">No call events received yet.</div></template
-			></DataTable
+		<div v-if="calling.notice" class="banner success-banner">{{ calling.notice }}</div>
+
+		<section
+			v-if="!calling.callingEnabled && calling.workspace.available"
+			class="surface-card activation-card"
 		>
-	</section>
-	<AppDialog
-		ref="settingsDialog"
-		v-model:visible="showSettings"
-		modal
-		header="Calling settings"
-		:style="{ width: 'min(48rem,calc(100vw - 2rem))' }"
-		@show="focusDialogControl(settingsDialog, '[role=combobox]')"
-		><div class="form">
-			<label
-				>Calling availability<Select
-					v-model="settingsStatus"
-					aria-label="Calling availability"
-					:options="[
-						{ label: 'Enabled', value: 'ENABLED' },
-						{ label: 'Disabled', value: 'DISABLED' },
-					]"
-					option-label="label"
-					option-value="value"
-			/></label>
-			<p class="help">
-				Audio transport and SIP credentials remain on the Integration hub. Core only
-				manages the Meta control plane.
-			</p>
-			<label
-				>Call icon visibility<Select
-					v-model="settingsVisibility"
-					aria-label="Call icon visibility"
-					:options="visibilityOptions"
-					option-label="label"
-					option-value="value"
-			/></label>
-			<p class="help">
-				Choose whether Meta should use its default call icon or hide it for all customers.
-				Leave unchanged preserves the provider's current setting.
-			</p>
-		</div>
-		<template #footer
-			><Button
-				label="Cancel"
-				severity="secondary"
-				outlined
-				@click="showSettings = false" /><Button
-				label="Save settings"
-				:loading="action === 'settings'"
-				@click="saveSettings" /></template
-	></AppDialog>
-	<AppDialog
-		ref="actionDialog"
-		v-model:visible="showAction"
-		modal
-		header="WhatsApp call action"
-		:style="{ width: 'min(48rem,calc(100vw - 2rem))' }"
-		@show="focusDialogControl(actionDialog, '[role=combobox]')"
-		><div class="form">
-			<label
-				>Action<Select
-					v-model="form.action"
-					aria-label="WhatsApp call action"
-					:options="['connect', 'pre_accept', 'accept', 'reject', 'terminate']"
-			/></label>
-			<template v-if="form.action === 'connect'">
-				<label
-					>Contact<ContactSelect
-						v-model="form.identity"
-						:options="workspace.contacts || []"
-						@update:model-value="form.manual_number = ''"
-				/></label>
-				<label
-					>Or enter a WhatsApp number<InputText
-						v-model="form.manual_number"
-						placeholder="Country code and number"
-						@input="form.identity = ''"
-				/></label>
-			</template>
-			<label v-else>Call ID<InputText v-model="form.call_id" /></label>
-			<details
-				v-if="['connect', 'pre_accept', 'accept'].includes(form.action)"
-				class="advanced"
-				:open="form.action !== 'connect'"
-			>
-				<summary>Advanced WebRTC signaling</summary>
-				<p class="help">
-					Supply the SDP created by your WebRTC/SIP client. Core sends signaling; it does
-					not carry call audio.
+			<div class="feature-icon"><ShieldCheck :size="25" /></div>
+			<div>
+				<strong>Calling is ready to be activated</strong>
+				<p>
+					The supported WhatsApp calling defaults are applied automatically. Your team
+					can start calling as soon as a manager enables it.
 				</p>
-				<div class="form compact-form">
-					<label
-						>SDP type<Select v-model="form.sdp_type" :options="['offer', 'answer']"
-					/></label>
-					<label
-						>SDP session<Textarea v-model="form.sdp" rows="9" placeholder="v=0…"
-					/></label>
-					<label
-						>Opaque callback data<InputText
-							v-model="form.biz_opaque_callback_data"
-							maxlength="512"
-					/></label>
-				</div>
-			</details>
-			<div v-if="['connect', 'accept'].includes(form.action)" class="consent-grid">
-				<label class="check-label">
-					<Checkbox v-model="form.recording_enabled" binary /> Record this call
-				</label>
-				<label class="check-label">
-					<Checkbox v-model="form.transcription_enabled" binary /> Transcribe this call
-				</label>
-				<template v-if="form.recording_enabled || form.transcription_enabled">
-					<label class="full-row"
-						>Purpose<InputText
-							v-model="form.purpose"
-							maxlength="250"
-							placeholder="Purpose included in Meta's call announcement"
-					/></label>
-					<label class="full-row"
-						>Announcement language<InputText
-							v-model="form.announcement_language"
-							placeholder="en_IN"
-					/></label>
-				</template>
 			</div>
-		</div>
-		<template #footer
-			><Button
-				label="Cancel"
-				severity="secondary"
-				outlined
-				@click="showAction = false" /><Button
-				label="Send action"
-				:loading="action === 'call'"
-				:disabled="
-					(form.action === 'connect' ? !hasTarget(form) : !form.call_id) ||
-					(['connect', 'pre_accept', 'accept'].includes(form.action) && !form.sdp.trim())
-				"
-				@click="executeAction" /></template
-	></AppDialog>
-	<AppDialog
-		ref="outreachDialog"
-		v-model:visible="showOutreach"
-		modal
-		header="WhatsApp call invitation"
-		:style="{ width: 'min(42rem,calc(100vw - 2rem))' }"
-		@show="focusDialogControl(outreachDialog, '[role=combobox]')"
-	>
-		<div class="form">
-			<label
-				>Invitation type<Select
-					v-model="outreach.operation"
-					aria-label="Call invitation type"
-					:options="[
-						{ label: 'Session call button', value: 'button' },
-						{ label: 'Approved template', value: 'template' },
-						{ label: 'Deep link', value: 'deep-link' },
-					]"
-					option-label="label"
-					option-value="value"
-			/></label>
-			<template v-if="outreach.operation !== 'deep-link'">
-				<label
-					>Contact<ContactSelect
-						v-model="outreach.identity"
-						:options="workspace.contacts || []"
-						@update:model-value="outreach.manual_number = ''"
-				/></label>
-				<label
-					>Or enter a WhatsApp number<InputText
-						v-model="outreach.manual_number"
-						placeholder="Country code and number"
-						@input="outreach.identity = ''"
-				/></label>
-			</template>
-			<label v-if="outreach.operation === 'button'"
-				>Message<Textarea v-model="outreach.body_text" rows="3"
-			/></label>
-			<label v-if="outreach.operation === 'button'"
-				>Button label<InputText v-model="outreach.display_text" maxlength="20"
-			/></label>
-			<label v-if="outreach.operation === 'template'"
-				>Approved template<Select
-					v-model="outreach.template_name"
-					:options="workspace.templates || []"
-					option-label="template_name"
-					option-value="template_name"
-					filter
-					placeholder="Select a synced Meta template"
-			/></label>
-			<label v-if="outreach.operation === 'template'"
-				>Language code<InputText v-model="outreach.language_code"
-			/></label>
-			<label v-if="outreach.operation !== 'deep-link'"
-				>Button TTL (minutes)<InputText
-					v-model="outreach.ttl_minutes"
-					type="number"
-					min="1"
-			/></label>
-			<label
-				>Business payload<InputText
-					v-model="outreach.payload"
-					placeholder="Optional opaque tracking payload"
-			/></label>
-		</div>
-		<template #footer>
 			<Button
-				label="Cancel"
-				severity="secondary"
-				outlined
-				@click="showOutreach = false"
-			/><Button
-				:label="outreach.operation === 'deep-link' ? 'Create link' : 'Send invitation'"
-				:loading="action === 'outreach'"
-				:disabled="
-					(outreach.operation !== 'deep-link' && !hasTarget(outreach)) ||
-					(outreach.operation === 'button' && !outreach.body_text.trim()) ||
-					(outreach.operation === 'template' && !outreach.template_name)
-				"
-				@click="sendOutreach"
+				v-if="calling.canManage"
+				label="Enable calling"
+				icon="pi pi-check"
+				:loading="action === 'enable'"
+				@click="run('enable', () => calling.enableCalling())"
 			/>
-		</template>
-	</AppDialog>
+			<small v-else>Ask a WhatsApp Manager to enable calling once.</small>
+		</section>
+
+		<div class="calling-grid">
+			<section class="surface-card dialer-card">
+				<div class="section-heading">
+					<div class="feature-icon"><PhoneCall :size="23" /></div>
+					<div>
+						<h2>Start a call</h2>
+						<p>Only contacts available to your team are shown.</p>
+					</div>
+				</div>
+				<label class="field-label">
+					Contact
+					<ContactSelect
+						v-model="selectedIdentity"
+						:options="calling.contacts"
+						placeholder="Search a contact by name or number"
+						:disabled="!calling.callingEnabled || calling.busy"
+					/>
+				</label>
+				<div v-if="selectedContact" class="selected-contact">
+					<div class="contact-avatar">
+						{{ (selectedContact.label || 'W').slice(0, 1).toUpperCase() }}
+					</div>
+					<div>
+						<strong>{{ selectedContact.label }}</strong>
+						<span>{{
+							selectedContact.phone_number || selectedContact.reference
+						}}</span>
+					</div>
+					<CheckCircle2 :size="20" />
+				</div>
+				<div v-if="permission" class="permission-result">
+					<div>
+						<small>Business-call permission</small>
+						<strong>{{ String(permission.status).replaceAll('_', ' ') }}</strong>
+					</div>
+					<span v-if="permission.expiresAt"
+						>Until {{ formatDateTime(permission.expiresAt) }}</span
+					>
+				</div>
+				<div class="dialer-actions">
+					<Button
+						label="Check permission"
+						severity="secondary"
+						outlined
+						:disabled="!selectedIdentity"
+						:loading="action === 'permission'"
+						@click="checkPermission"
+					/>
+					<Button
+						label="Invite to call"
+						severity="secondary"
+						outlined
+						:disabled="!selectedIdentity || !calling.callingEnabled"
+						@click="invitationOpen = true"
+					/>
+					<Button
+						class="call-button"
+						label="Call now"
+						:disabled="!selectedIdentity || !calling.callingEnabled || calling.busy"
+						:loading="action === 'start'"
+						@click="startCall"
+					>
+						<template #icon><Phone :size="18" /></template>
+					</Button>
+				</div>
+				<p class="privacy-note">
+					Your browser requests microphone access only when you start or answer a call.
+				</p>
+			</section>
+
+			<section class="surface-card readiness-card">
+				<div class="section-heading compact">
+					<div class="feature-icon"><ShieldCheck :size="21" /></div>
+					<div>
+						<h2>Private by design</h2>
+						<p>Your team sees only the contacts and calls they can handle.</p>
+					</div>
+				</div>
+				<ul>
+					<li><CheckCircle2 :size="17" /> Team-scoped contacts and incoming calls</li>
+					<li><CheckCircle2 :size="17" /> Secure browser voice calls</li>
+					<li><CheckCircle2 :size="17" /> Global call controls while you work</li>
+					<li><CheckCircle2 :size="17" /> Live ringing, answer and call status</li>
+				</ul>
+			</section>
+		</div>
+
+		<section class="surface-card history-card">
+			<div class="section-heading history-heading">
+				<div class="heading-copy">
+					<div class="feature-icon"><History :size="22" /></div>
+					<div>
+						<h2>Recent calls</h2>
+						<p>Your team-scoped call history.</p>
+					</div>
+				</div>
+				<Button
+					icon="pi pi-refresh"
+					label="Refresh"
+					severity="secondary"
+					text
+					:loading="calling.loading"
+					@click="calling.load()"
+				/>
+			</div>
+			<div v-if="calling.calls.length" class="call-list">
+				<article
+					v-for="callRow in calling.calls"
+					:key="callRow.name || callRow.call_id"
+					class="call-row"
+				>
+					<div class="contact-avatar small">
+						{{ (callRow.display_name || 'W').slice(0, 1).toUpperCase() }}
+					</div>
+					<div class="call-person">
+						<strong>{{ callRow.display_name }}</strong>
+						<span>
+							<ArrowDownLeft v-if="callRow.direction === 'Inbound'" :size="14" />
+							<ArrowUpRight v-else :size="14" />
+							{{ callRow.direction }} · {{ callRow.remote_number || 'WhatsApp' }}
+						</span>
+					</div>
+					<div class="call-time">
+						<strong>{{
+							formatDateTime(callRow.started_at || callRow.modified)
+						}}</strong>
+						<span v-if="duration(callRow)"
+							><Clock3 :size="13" />{{ duration(callRow) }}</span
+						>
+					</div>
+					<Tag
+						:value="statusLabelFor(callRow)"
+						:severity="statusSeverityFor(callRow)"
+						rounded
+					/>
+					<div class="row-actions">
+						<Button
+							v-if="callRow.recording_media_id"
+							label="Recording"
+							severity="secondary"
+							text
+							:loading="action === `artifact-${callRow.recording_media_id}`"
+							@click="openArtifact(callRow, 'recording')"
+						/>
+						<Button
+							v-if="callRow.transcript_media_id"
+							label="Transcript"
+							severity="secondary"
+							text
+							:loading="action === `artifact-${callRow.transcript_media_id}`"
+							@click="openArtifact(callRow, 'transcript')"
+						/>
+						<Button
+							icon="pi pi-phone"
+							aria-label="Call again"
+							severity="secondary"
+							text
+							rounded
+							:disabled="calling.busy || !callRow.remote_identity"
+							@click="callAgain(callRow)"
+						/>
+					</div>
+				</article>
+			</div>
+			<div v-else class="empty-history">
+				<PhoneMissed :size="28" />
+				<strong>No calls yet</strong>
+				<span>Your incoming and outgoing WhatsApp calls will appear here.</span>
+			</div>
+		</section>
+
+		<AppDialog
+			v-model:visible="invitationOpen"
+			modal
+			header="Invite this contact to call"
+			:style="{ width: 'min(32rem, calc(100vw - 2rem))' }"
+		>
+			<div class="invitation-form">
+				<p>Send a WhatsApp call button when a customer should initiate the call.</p>
+				<Textarea v-model="invitationText" rows="4" fluid maxlength="1024" />
+			</div>
+			<template #footer>
+				<Button
+					label="Cancel"
+					severity="secondary"
+					outlined
+					@click="invitationOpen = false"
+				/>
+				<Button
+					label="Send invitation"
+					:loading="action === 'invite'"
+					:disabled="!invitationText.trim()"
+					@click="sendInvitation"
+				>
+					<template #icon><Send :size="17" /></template>
+				</Button>
+			</template>
+		</AppDialog>
+	</div>
 </template>
+
 <style scoped>
-	.panel {
-		padding: 16px;
+	.calling-page {
 		display: grid;
-		gap: 16px;
-		min-width: 0;
-		max-width: 100%;
-		overflow: hidden;
-	}
-	.panel :deep(.p-datatable) {
-		min-width: 0;
-		max-width: 100%;
-	}
-	.panel :deep(.p-datatable-table-container) {
-		overflow-x: auto;
-	}
-	.toolbar,
-	.actions {
-		display: flex;
-		gap: 10px;
-		align-items: center;
-		flex-wrap: wrap;
-	}
-	.calling-actions :deep(.p-button) {
-		min-height: 44px;
-		justify-content: center;
-		white-space: nowrap;
+		gap: 18px;
 	}
 	.calling-heading {
-		flex-direction: column;
-		gap: 14px;
+		align-items: flex-start;
 	}
-	.permission-card {
-		display: grid;
-		grid-template-columns:
-			minmax(12rem, 1.1fr) minmax(18rem, 1.7fr) minmax(15rem, 1.3fr)
-			auto;
-		gap: 10px;
-		align-items: center;
-		padding: 14px;
-		border: 1px solid var(--wa-border);
-		border-radius: 14px;
+	.calling-heading p {
+		margin: 5px 0 0;
 	}
-	.permission-card > div:first-child {
-		display: grid;
-		gap: 4px;
-	}
-	.target-fields {
-		display: grid;
-		grid-template-columns: minmax(11rem, 1fr) auto minmax(10rem, 0.8fr);
-		gap: 8px;
-		align-items: center;
-		min-width: 0;
-	}
-	.target-fields > span {
-		color: var(--wa-muted);
+	.eyebrow {
+		color: var(--wa-primary);
 		font-size: 11px;
+		font-weight: 800;
+		letter-spacing: 0.12em;
 		text-transform: uppercase;
 	}
+	.heading-actions {
+		display: flex;
+		gap: 10px;
+		align-items: center;
+	}
+	.heading-actions :deep(.p-select) {
+		min-width: 220px;
+	}
+	.activation-card {
+		padding: 18px;
+		display: grid;
+		grid-template-columns: 46px minmax(0, 1fr) auto;
+		gap: 14px;
+		align-items: center;
+		border-color: color-mix(in srgb, var(--wa-primary) 35%, var(--wa-border));
+	}
+	.activation-card p,
+	.activation-card small {
+		margin: 4px 0 0;
+		color: var(--wa-muted);
+		font-size: 12px;
+	}
+	.feature-icon {
+		width: 42px;
+		height: 42px;
+		display: grid;
+		place-items: center;
+		border-radius: 12px;
+		color: var(--wa-primary);
+		background: var(--wa-primary-soft);
+		flex: 0 0 42px;
+	}
+	.calling-grid {
+		display: grid;
+		grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.8fr);
+		gap: 18px;
+	}
+	.dialer-card,
+	.readiness-card,
+	.history-card {
+		padding: 20px;
+	}
+	.section-heading,
+	.heading-copy {
+		display: flex;
+		gap: 12px;
+		align-items: center;
+	}
+	.section-heading h2 {
+		margin: 0;
+		color: var(--wa-text);
+		font-size: 16px;
+	}
+	.section-heading p {
+		margin: 3px 0 0;
+		color: var(--wa-muted);
+		font-size: 12px;
+	}
+	.field-label {
+		margin-top: 22px;
+		display: grid;
+		gap: 8px;
+		color: var(--wa-text);
+		font-size: 12px;
+		font-weight: 700;
+	}
+	.selected-contact {
+		margin-top: 12px;
+		padding: 12px;
+		display: grid;
+		grid-template-columns: 42px minmax(0, 1fr) 22px;
+		gap: 10px;
+		align-items: center;
+		border: 1px solid var(--wa-border);
+		border-radius: 12px;
+		background: var(--wa-surface-muted);
+	}
+	.contact-avatar {
+		width: 42px;
+		height: 42px;
+		display: grid;
+		place-items: center;
+		border-radius: 50%;
+		color: white;
+		background: linear-gradient(135deg, var(--wa-primary), var(--wa-green));
+		font-weight: 800;
+	}
+	.contact-avatar.small {
+		width: 38px;
+		height: 38px;
+	}
+	.selected-contact div:nth-child(2),
+	.call-person {
+		min-width: 0;
+		display: grid;
+		gap: 3px;
+	}
+	.selected-contact strong,
+	.selected-contact span,
+	.call-person strong,
+	.call-person span {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.selected-contact span,
+	.call-person span {
+		color: var(--wa-muted);
+		font-size: 11px;
+	}
+	.selected-contact > svg {
+		color: var(--wa-success);
+	}
 	.permission-result {
+		margin-top: 12px;
+		padding: 10px 12px;
 		display: flex;
 		justify-content: space-between;
-		gap: 16px;
-		align-items: center;
-		padding: 12px 14px;
-		border: 1px solid color-mix(in srgb, var(--wa-success, #087f5b) 35%, var(--wa-border));
-		border-radius: 12px;
-		background: color-mix(in srgb, var(--wa-success, #087f5b) 8%, transparent);
+		gap: 10px;
+		border-radius: 10px;
+		background: var(--wa-primary-soft);
 	}
-	.permission-result > div {
+	.permission-result div {
 		display: grid;
-		gap: 2px;
 	}
 	.permission-result small,
 	.permission-result span {
 		color: var(--wa-muted);
 		font-size: 11px;
 	}
-	.permission-card small,
-	.help {
-		color: var(--wa-muted);
+	.permission-result strong {
+		font-size: 12px;
+		text-transform: capitalize;
 	}
-	.form {
+	.dialer-actions {
+		margin-top: 18px;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 9px;
+	}
+	.call-button {
+		margin-left: auto;
+		background: var(--wa-green) !important;
+		border-color: var(--wa-green) !important;
+	}
+	.privacy-note {
+		margin: 14px 0 0;
+		color: var(--wa-muted);
+		font-size: 11px;
+	}
+	.readiness-card ul {
+		margin: 22px 0 0;
+		padding: 0;
 		display: grid;
 		gap: 14px;
+		list-style: none;
 	}
-	.form label {
-		display: grid;
-		gap: 6px;
+	.readiness-card li {
+		display: flex;
+		gap: 9px;
+		align-items: center;
+		color: var(--wa-text);
 		font-size: 12px;
 	}
-	.compact-form {
-		margin-top: 12px;
+	.readiness-card li svg {
+		color: var(--wa-success);
 	}
-	.advanced {
-		padding: 12px;
-		border: 1px solid var(--wa-border);
-		border-radius: 12px;
+	.history-heading {
+		justify-content: space-between;
 	}
-	.advanced summary {
-		cursor: pointer;
-		font-size: 13px;
-		font-weight: 650;
+	.call-list {
+		margin: 17px -20px -20px;
 	}
-	.advanced .help {
-		margin: 10px 0;
-	}
-	.consent-grid {
+	.call-row {
+		min-height: 70px;
+		padding: 12px 20px;
 		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
+		grid-template-columns: 38px minmax(180px, 1.3fr) minmax(160px, 0.8fr) 100px auto;
 		gap: 12px;
-		padding: 12px;
-		border: 1px solid var(--wa-border);
-		border-radius: 12px;
-	}
-	.consent-grid .check-label {
-		display: flex;
 		align-items: center;
-		gap: 8px;
+		border-top: 1px solid var(--wa-border-soft);
 	}
-	.full-row {
-		grid-column: 1 / -1;
-	}
-	.artifact-actions {
+	.call-person span,
+	.call-time span {
 		display: flex;
-		gap: 4px;
+		gap: 5px;
 		align-items: center;
-		flex-wrap: wrap;
 	}
-	.voicemail-input {
-		display: none;
+	.call-time {
+		display: grid;
+		gap: 3px;
 	}
-	.banner {
-		padding: 10px 14px;
-		margin-bottom: 12px;
-		border-radius: 10px;
+	.call-time strong {
+		font-size: 11px;
+		font-weight: 600;
 	}
-	.error-banner {
-		background: color-mix(in srgb, var(--wa-danger, #c92a2a) 10%, var(--wa-surface));
-		color: var(--wa-danger, #c92a2a);
-		border: 1px solid color-mix(in srgb, var(--wa-danger, #c92a2a) 28%, var(--wa-border));
-	}
-	.success-banner {
-		background: color-mix(in srgb, var(--wa-success, #087f5b) 10%, var(--wa-surface));
-		color: var(--wa-success, #087f5b);
-		border: 1px solid color-mix(in srgb, var(--wa-success, #087f5b) 28%, var(--wa-border));
-		overflow-wrap: anywhere;
-	}
-	.empty {
-		padding: 48px;
-		text-align: center;
+	.call-time span {
 		color: var(--wa-muted);
+		font-size: 11px;
 	}
-	@media (max-width: 1100px) {
-		.permission-card {
-			grid-template-columns: 1fr 1fr;
-		}
-		.permission-card > div:first-child,
-		.permission-card > textarea {
-			grid-column: 1/-1;
-		}
-		.permission-card > .target-fields {
-			grid-column: auto;
-		}
+	.row-actions {
+		display: flex;
+		justify-content: flex-end;
+		align-items: center;
 	}
-	@media (max-width: 600px) {
-		.toolbar,
-		.permission-card {
-			align-items: stretch;
+	.empty-history {
+		min-height: 180px;
+		display: grid;
+		place-items: center;
+		align-content: center;
+		gap: 7px;
+		color: var(--wa-muted);
+		text-align: center;
+	}
+	.empty-history strong {
+		color: var(--wa-text);
+	}
+	.empty-history span {
+		font-size: 12px;
+	}
+	.invitation-form {
+		display: grid;
+		gap: 12px;
+	}
+	.invitation-form p {
+		margin: 0;
+		color: var(--wa-muted);
+		font-size: 12px;
+	}
+	@media (max-width: 980px) {
+		.calling-grid {
 			grid-template-columns: 1fr;
 		}
-		.permission-card > * {
-			grid-column: 1 !important;
+		.call-row {
+			grid-template-columns: 38px minmax(160px, 1fr) 100px auto;
 		}
-		.target-fields {
-			grid-template-columns: 1fr;
-		}
-		.target-fields > span {
+		.call-time {
 			display: none;
 		}
-		.permission-result {
-			align-items: flex-start;
-			flex-direction: column;
+	}
+	@media (max-width: 680px) {
+		.calling-heading,
+		.heading-actions {
+			display: grid;
+			width: 100%;
 		}
-		.consent-grid {
-			grid-template-columns: 1fr;
+		.activation-card {
+			grid-template-columns: 42px 1fr;
+		}
+		.activation-card > :last-child {
+			grid-column: 1 / -1;
+		}
+		.dialer-actions > * {
+			width: 100%;
+		}
+		.call-button {
+			margin-left: 0;
+		}
+		.call-row {
+			grid-template-columns: 38px minmax(0, 1fr) auto;
+		}
+		.call-row > .p-tag {
+			grid-column: 2;
+			justify-self: start;
+		}
+		.row-actions {
+			grid-column: 3;
+			grid-row: 1 / span 2;
 		}
 	}
 </style>

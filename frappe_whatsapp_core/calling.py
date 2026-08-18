@@ -4,7 +4,9 @@ import mimetypes
 from pathlib import Path
 
 import frappe
+from frappe.utils import now_datetime
 
+from frappe_whatsapp_core.contact_presentation import present_identity_names
 from frappe_whatsapp_core.hub_client import (
 	call_action as relay_call_action,
 )
@@ -18,9 +20,43 @@ from frappe_whatsapp_core.hub_client import (
 	get_call_permission as relay_get_call_permission,
 )
 from frappe_whatsapp_core.identity import contact_options, is_business_scoped_user_id
+from frappe_whatsapp_core.materializer import get_or_create_conversation
 from frappe_whatsapp_core.meta_flows import _accounts, _call, _resolve_account_name, _workspace_failure
 from frappe_whatsapp_core.outbound import resolve_recipient_phone
-from frappe_whatsapp_core.permissions import require_core_access
+from frappe_whatsapp_core.permissions import (
+	CORE_MANAGEMENT_ROLES,
+	assert_call_access,
+	assert_identity_team_access,
+	conversation_conditions,
+	require_core_access,
+)
+
+
+DEFAULT_RTC_CONFIGURATION = {
+	"bundlePolicy": "max-bundle",
+	"rtcpMuxPolicy": "require",
+	"iceCandidatePoolSize": 2,
+	"iceServers": [{"urls": ["stun:stun.cloudflare.com:3478"]}],
+}
+
+CALL_ACTION_SOURCE_STATES = {
+	"pre_accept": {"connect", "ringing", "received"},
+	"accept": {"connect", "ringing", "received", "pre_accept"},
+	"reject": {"connect", "ringing", "received", "pre_accept"},
+	"terminate": {
+		"connect",
+		"ringing",
+		"received",
+		"pre_accept",
+		"accept",
+		"accepted",
+		"connected",
+	},
+}
+
+
+def _can_manage():
+	return bool(set(frappe.get_roles()) & CORE_MANAGEMENT_ROLES)
 
 
 def _contact_target(
@@ -32,19 +68,22 @@ def _contact_target(
 ):
 	"""Resolve a Core contact at send time while retaining advanced raw targets."""
 	if identity:
+		assert_identity_team_access(identity)
 		channel = frappe.db.get_value(
 			"WhatsApp Core Hub Account",
 			{"parent": "WhatsApp Core Settings", "account_name": account_name},
 			"channel",
 		)
 		target = resolve_recipient_phone(
-				identity,
-				context={
-					"operation": operation or "whatsapp_calling",
-					**({"channel": channel} if channel else {}),
-				},
-			)
+			identity,
+			context={
+				"operation": operation or "whatsapp_calling",
+				**({"channel": channel} if channel else {}),
+			},
+		)
 		return (None, target) if is_business_scoped_user_id(target) else (target, None)
+	if not _can_manage():
+		frappe.throw("Select a contact within your team scope", frappe.PermissionError)
 	return to_number, recipient
 
 
@@ -104,22 +143,75 @@ def _calling_settings(value):
 	return value
 
 
-@frappe.whitelist()
-@require_core_access(manage=True)
-def calling_workspace(account_name=None, include_sip_credentials=0):
-	call_fields = [
-		"name", "call_id", "channel", "direction", "status", "remote_number",
-		"remote_user_id", "remote_username", "started_at", "ended_at",
-		"cta_payload", "deeplink_payload", "recording_media_id",
-		"recording_mime_type", "transcript_media_id", "transcript_mime_type", "modified",
-	]
-	meta = frappe.get_meta("WhatsApp Core Call")
-	call_fields = [field for field in call_fields if field == "name" or meta.has_field(field)]
-	calls = frappe.get_all(
-		"WhatsApp Core Call",
-		fields=call_fields,
-		order_by="modified desc", limit_page_length=100,
+def _call_rows(channel=None):
+	conditions, values = conversation_conditions("conversation")
+	if channel:
+		conditions.append("call_log.channel = %(channel)s")
+		values["channel"] = channel
+	values["limit"] = 100
+	rows = frappe.db.sql(
+		f"""
+		SELECT
+			call_log.name, call_log.call_id, call_log.channel, call_log.conversation,
+			call_log.remote_identity, call_log.direction, call_log.status,
+			call_log.remote_number, call_log.remote_user_id, call_log.remote_username,
+			call_log.handled_by,
+			call_log.started_at, call_log.ended_at, call_log.cta_payload,
+			call_log.deeplink_payload, call_log.recording_media_id,
+			call_log.recording_mime_type, call_log.transcript_media_id,
+			call_log.transcript_mime_type, call_log.session, call_log.modified
+		FROM `tabWhatsApp Core Call` AS call_log
+		LEFT JOIN `tabWhatsApp Core Conversation` AS conversation
+			ON conversation.name = call_log.conversation
+		WHERE {" AND ".join(conditions)}
+		ORDER BY call_log.modified DESC
+		LIMIT %(limit)s
+		""",
+		values,
+		as_dict=True,
 	)
+	presentations = present_identity_names(
+		[row.remote_identity for row in rows if row.remote_identity],
+		context={"surface": "calling"},
+	)
+	for row in rows:
+		presentation = presentations.get(row.remote_identity) or {}
+		row["display_name"] = (
+			presentation.get("display_name")
+			or row.remote_username
+			or row.remote_number
+			or "WhatsApp contact"
+		)
+		row["presentation"] = presentation
+	return rows
+
+
+def _calling_state(response):
+	value = response if isinstance(response, dict) else {}
+	if isinstance(value.get("data"), list) and value["data"]:
+		value = value["data"][0] if isinstance(value["data"][0], dict) else {}
+	calling = value.get("calling") if isinstance(value.get("calling"), dict) else value
+	status = str(calling.get("status") or "DISABLED").upper()
+	return {"enabled": status == "ENABLED", "status": status}
+
+
+def _rtc_configuration():
+	configured = frappe.conf.get("whatsapp_core_webrtc_ice_servers")
+	if isinstance(configured, str):
+		try:
+			configured = frappe.parse_json(configured)
+		except Exception:
+			configured = None
+	servers = configured if isinstance(configured, list) and configured else DEFAULT_RTC_CONFIGURATION["iceServers"]
+	return {**DEFAULT_RTC_CONFIGURATION, "iceServers": servers}
+
+
+@frappe.whitelist()
+@require_core_access()
+def calling_workspace(account_name=None, include_sip_credentials=0):
+	if int(include_sip_credentials or 0):
+		frappe.throw("SIP credentials are not exposed to the browser", frappe.PermissionError)
+	calls = []
 	templates = []
 	accounts = []
 	selected = None
@@ -128,6 +220,9 @@ def calling_workspace(account_name=None, include_sip_credentials=0):
 		accounts = _accounts()
 		selected = _resolve_account_name(account_name)
 		channel = next(row["channel"] for row in accounts if row["account_name"] == selected)
+		# The global call dock must recover every pending scoped call after a page
+		# reload, even when a different account happens to be selected in the page.
+		calls = _call_rows()
 		templates = frappe.get_all(
 			"WhatsApp Core Template",
 			filters={"approval_status": "APPROVED", "enabled": 1, "channel": channel},
@@ -136,7 +231,7 @@ def calling_workspace(account_name=None, include_sip_credentials=0):
 			limit_page_length=500,
 		)
 		settings = _call("calling", "get_call_settings", {
-			"account_name": selected, "include_sip_credentials": include_sip_credentials,
+			"account_name": selected, "include_sip_credentials": 0,
 		})
 		return {
 			"configured": True,
@@ -144,17 +239,23 @@ def calling_workspace(account_name=None, include_sip_credentials=0):
 			"error": "",
 			"accounts": accounts,
 			"selected_account": selected,
-			"settings": settings,
+			"calling": _calling_state(settings),
+			"can_manage": _can_manage(),
+			"rtc_configuration": _rtc_configuration(),
 			"calls": calls,
 			"templates": templates,
 			"contacts": contacts,
 		}
 	except Exception as error:
+		if not calls:
+			calls = _call_rows()
 		return _workspace_failure(
 			error,
 			accounts=accounts,
 			selected_account=selected,
-			settings={},
+			calling={"enabled": False, "status": "UNAVAILABLE"},
+			can_manage=_can_manage(),
+			rtc_configuration=_rtc_configuration(),
 			calls=calls,
 			templates=templates,
 			contacts=contacts,
@@ -172,6 +273,114 @@ def update_call_settings(account_name, calling):
 
 @frappe.whitelist()
 @require_core_access(manage=True)
+def enable_calling(account_name):
+	"""Enable the supported Calling product defaults without exposing Meta enums."""
+	_call("calling", "update_call_settings", {
+		"account_name": _resolve_account_name(account_name),
+		"calling": {"status": "ENABLED", "call_icon_visibility": "DEFAULT"},
+	})
+	return {"success": True, "calling": {"enabled": True, "status": "ENABLED"}}
+
+
+def _claim_call(call_id):
+	row = frappe.db.sql(
+		"""SELECT name, handled_by FROM `tabWhatsApp Core Call`
+		WHERE call_id = %s FOR UPDATE""",
+		(str(call_id or "").strip(),),
+		as_dict=True,
+	)
+	if not row:
+		frappe.throw("Call not found", frappe.DoesNotExistError)
+	handler = str(row[0].handled_by or "")
+	if handler and handler != frappe.session.user:
+		frappe.throw("This call is already being handled by another team member", frappe.PermissionError)
+	if not handler:
+		frappe.db.set_value(
+			"WhatsApp Core Call", row[0].name, "handled_by", frappe.session.user,
+			update_modified=False,
+		)
+
+
+def _provider_call_id(result):
+	value = result.get("data") if isinstance(result, dict) else None
+	value = value if isinstance(value, dict) else result if isinstance(result, dict) else {}
+	calls = value.get("calls") if isinstance(value.get("calls"), list) else []
+	return str((calls[0].get("id") if calls and isinstance(calls[0], dict) else None) or value.get("call_id") or "").strip()
+
+
+def _record_outgoing_call(account_name, identity, payload, result):
+	"""Create the scoped call immediately; its webhook remains authoritative."""
+	call_id = _provider_call_id(result)
+	if not call_id or not identity:
+		return
+	channel_name = frappe.db.get_value(
+		"WhatsApp Core Hub Account",
+		{"parent": "WhatsApp Core Settings", "account_name": account_name},
+		"channel",
+	)
+	if not channel_name:
+		return
+	identity_doc = frappe.get_cached_doc("WhatsApp Core Identity", identity)
+	channel = frappe.get_cached_doc("WhatsApp Core Channel", channel_name)
+	conversation = get_or_create_conversation(channel, identity_doc)
+	name = frappe.db.get_value("WhatsApp Core Call", {"call_id": call_id}, "name")
+	values = {
+		"channel": channel.name,
+		"conversation": conversation.name,
+		"remote_identity": identity_doc.name,
+		"direction": "Outbound",
+		"status": "connect",
+		"remote_number": payload.get("to"),
+		"remote_user_id": payload.get("recipient"),
+		"started_at": now_datetime(),
+		"session": payload.get("session"),
+		"last_event": {"event": "connect", "source": "browser"},
+	}
+	if name:
+		frappe.db.set_value("WhatsApp Core Call", name, values, update_modified=False)
+	else:
+		name = frappe.get_doc({
+			"doctype": "WhatsApp Core Call",
+			"call_id": call_id,
+			**values,
+		}).insert(ignore_permissions=True).name
+	from frappe_whatsapp_core.realtime import publish_call_changes
+
+	publish_call_changes([name])
+
+
+def _assert_call_account(call_id, account_name):
+	"""Prevent an authorized call id from being submitted through another channel."""
+	account_channel = frappe.db.get_value(
+		"WhatsApp Core Hub Account",
+		{"parent": "WhatsApp Core Settings", "account_name": account_name},
+		"channel",
+	)
+	call_channel = frappe.db.get_value(
+		"WhatsApp Core Call", {"call_id": str(call_id or "").strip()}, "channel"
+	)
+	if not account_channel or call_channel != account_channel:
+		frappe.throw("Call does not belong to the selected WhatsApp account", frappe.PermissionError)
+
+
+def _record_call_action(call_id, action):
+	"""Project a successful browser action without overtaking a newer webhook state."""
+	row = frappe.db.get_value(
+		"WhatsApp Core Call",
+		{"call_id": str(call_id or "").strip()},
+		["name", "status"],
+		as_dict=True,
+	)
+	if not row or str(row.status or "").lower() not in CALL_ACTION_SOURCE_STATES[action]:
+		return
+	frappe.db.set_value("WhatsApp Core Call", row.name, "status", action, update_modified=False)
+	from frappe_whatsapp_core.realtime import publish_call_changes
+
+	publish_call_changes([row.name])
+
+
+@frappe.whitelist()
+@require_core_access()
 def get_call_permission(account_name, user_wa_id=None, recipient=None, identity=None):
 	user_wa_id, recipient = _contact_target(
 		identity, user_wa_id, recipient, "get_call_permission", account_name
@@ -184,7 +393,7 @@ def get_call_permission(account_name, user_wa_id=None, recipient=None, identity=
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_core_access()
 def request_call_permission(
 	account_name,
 	body_text,
@@ -216,7 +425,7 @@ def request_call_permission(
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_core_access()
 def send_call_button(
 	account_name,
 	body_text,
@@ -261,7 +470,7 @@ def send_call_button(
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_core_access()
 def send_call_button_template(
 	account_name,
 	template_name,
@@ -311,7 +520,7 @@ def send_call_button_template(
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_core_access()
 def build_call_deep_link(account_name, biz_payload=None):
 	return _call("calling", "build_call_deep_link", {
 		"account_name": _resolve_account_name(account_name),
@@ -344,19 +553,8 @@ def upload_voicemail_announcement(account_name, file_url, description=None):
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_core_access()
 def get_call_artifact(account_name, media_id, download=0):
-	account_name = _resolve_account_name(account_name)
-	result = (
-		download_media(account_name, media_id)
-		if int(download or 0)
-		else get_media_url(account_name, media_id)
-	)
-	if not int(download or 0) or not result.get("success"):
-		return result
-	content = result.get("content")
-	if not content:
-		frappe.throw("Integration returned an empty call artifact", frappe.ValidationError)
 	call = frappe.db.get_value(
 		"WhatsApp Core Call",
 		{"recording_media_id": media_id},
@@ -374,6 +572,19 @@ def get_call_artifact(account_name, media_id, download=0):
 		kind = "transcript"
 	if not call:
 		frappe.throw("Call artifact is not linked to a Core call", frappe.DoesNotExistError)
+	assert_call_access(call.call_id)
+	account_name = _resolve_account_name(account_name)
+	_assert_call_account(call.call_id, account_name)
+	result = (
+		download_media(account_name, media_id)
+		if int(download or 0)
+		else get_media_url(account_name, media_id)
+	)
+	if not int(download or 0) or not result.get("success"):
+		return result
+	content = result.get("content")
+	if not content:
+		frappe.throw("Integration returned an empty call artifact", frappe.ValidationError)
 	mime_type = str(result.get("mime_type") or "application/octet-stream").split(";", 1)[0]
 	extension = mimetypes.guess_extension(mime_type) or (".ogg" if kind == "recording" else ".json")
 	filename = f"whatsapp-call-{call.call_id}-{kind}{Path(extension).suffix}"
@@ -402,7 +613,7 @@ def get_call_artifact(account_name, media_id, download=0):
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_core_access()
 def call_action(
 	account_name,
 	action,
@@ -416,8 +627,9 @@ def call_action(
 	recording=None,
 	transcription=None,
 ):
+	resolved_account = _resolve_account_name(account_name)
 	to_number, recipient = _contact_target(
-		identity, to_number, recipient, "call_action", account_name
+		identity, to_number, recipient, "call_action", resolved_account
 	)
 	action = str(action or "").lower()
 	if action not in {"connect", "pre_accept", "accept", "reject", "terminate"}:
@@ -428,6 +640,10 @@ def call_action(
 	else:
 		if not call_id:
 			frappe.throw("call_id is required", frappe.ValidationError)
+		assert_call_access(call_id)
+		_assert_call_account(call_id, resolved_account)
+		if action in {"pre_accept", "accept"}:
+			_claim_call(call_id)
 		payload["call_id"] = call_id
 	if action in {"connect", "pre_accept", "accept"}:
 		if sdp_type not in {"offer", "answer"} or not sdp:
@@ -442,4 +658,21 @@ def call_action(
 			payload["recording"] = _consent_option(recording, "recording")
 		if transcription is not None:
 			payload["transcription"] = _consent_option(transcription, "transcription")
-	return relay_call_action(_resolve_account_name(account_name), payload)
+	result = relay_call_action(resolved_account, payload)
+	# Meta has already accepted the action at this point. A local projection race
+	# must not turn that successful operation into an error popup or a retry that
+	# performs the action twice. The authoritative webhook repairs the projection.
+	savepoint = "whatsapp_core_call_action_projection"
+	frappe.db.savepoint(savepoint)
+	try:
+		if action == "connect":
+			_record_outgoing_call(resolved_account, identity, payload, result)
+		else:
+			_record_call_action(call_id, action)
+	except Exception:
+		frappe.db.rollback(save_point=savepoint)
+		frappe.log_error(
+			title="WhatsApp call action projection failed",
+			message=frappe.get_traceback(),
+		)
+	return result

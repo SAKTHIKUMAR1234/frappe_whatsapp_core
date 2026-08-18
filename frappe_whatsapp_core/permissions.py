@@ -232,6 +232,12 @@ def message_read_permission_query(user: str | None = None, **_kwargs) -> str:
 	)
 
 
+def call_permission_query(user: str | None = None, **_kwargs) -> str:
+	return _linked_conversation_permission_query(
+		"WhatsApp Core Call", "conversation", user
+	)
+
+
 def _has_conversation_scope(conversation: str | None, user: str | None = None) -> bool:
 	user = _permission_user(user)
 	if not conversation:
@@ -264,6 +270,20 @@ def has_scoped_conversation_read_permission(doc, ptype="read", user=None, **_kwa
 
 def has_scoped_message_read_permission(doc, ptype="read", user=None, **_kwargs):
 	return _has_conversation_scope(doc.get("conversation"), user)
+
+
+def has_scoped_call_permission(doc, ptype="read", user=None, **_kwargs):
+	return _has_conversation_scope(doc.get("conversation"), user)
+
+
+def assert_call_access(call_id: str) -> None:
+	"""Apply the inbox assignment boundary to one provider call."""
+	conversation = frappe.db.get_value(
+		"WhatsApp Core Call", {"call_id": str(call_id or "").strip()}, "conversation"
+	)
+	if not conversation:
+		frappe.throw("Call not found or outside your access scope", frappe.PermissionError)
+	assert_conversation_access(conversation)
 
 
 def require_core_access(*, manage: bool = False):

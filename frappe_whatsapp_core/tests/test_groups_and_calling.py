@@ -5,6 +5,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from frappe_whatsapp_core.calling import (
+	call_action as core_call_action,
 	calling_workspace,
 	get_call_permission,
 	send_call_button,
@@ -72,10 +73,10 @@ class TestGroupsAndCalling(FrappeTestCase):
 
 	@patch("frappe_whatsapp_core.calling._workspace_failure")
 	@patch("frappe_whatsapp_core.calling._accounts", side_effect=frappe.ValidationError("Hub unavailable"))
-	@patch("frappe_whatsapp_core.calling.frappe.get_all", return_value=[{"call_id": "CALL-LOCAL"}])
+	@patch("frappe_whatsapp_core.calling._call_rows", return_value=[{"call_id": "CALL-LOCAL"}])
 	@patch("frappe_whatsapp_core.calling.contact_options", return_value=[{"identity": "CONTACT-1"}])
 	def test_calling_workspace_keeps_local_history_without_hub(
-		self, contacts, get_all, accounts, failure
+		self, contacts, call_rows, accounts, failure
 	):
 		failure.return_value = {
 			"available": False,
@@ -87,6 +88,7 @@ class TestGroupsAndCalling(FrappeTestCase):
 		self.assertFalse(result["available"])
 		self.assertEqual(result["calls"][0]["call_id"], "CALL-LOCAL")
 		self.assertEqual(result["contacts"][0]["identity"], "CONTACT-1")
+		call_rows.assert_called_once_with()
 
 	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
 	@patch("frappe_whatsapp_core.calling._call", return_value={"success": True})
@@ -249,6 +251,159 @@ class TestGroupsAndCalling(FrappeTestCase):
 			frappe.db.get_value("WhatsApp Core Call", created["name"], "status"),
 			"connect",
 		)
+		call_scope = frappe.db.get_value(
+			"WhatsApp Core Call",
+			created["name"],
+			["remote_identity", "conversation"],
+			as_dict=True,
+		)
+		self.assertTrue(call_scope.remote_identity)
+		self.assertTrue(call_scope.conversation)
+
+	@patch("frappe_whatsapp_core.calling.relay_call_action")
+	@patch("frappe_whatsapp_core.calling.resolve_recipient_phone", return_value="919876543210")
+	def test_outgoing_call_is_scoped_before_webhook_arrives(self, resolve_phone, relay):
+		channel = get_or_create_channel("OUTBOUND-CALL-PHONE", "OUTBOUND-CALL-WABA")
+		identity = get_or_create_identity("919876543210", resolve=False)
+		settings = frappe.get_single("WhatsApp Core Settings")
+		settings.set("accounts", [{
+			"channel": channel.name,
+			"account_name": "Outbound Call Account",
+			"is_default": 1,
+		}])
+		settings.save(ignore_permissions=True)
+		relay.return_value = {"data": {"calls": [{"id": "CALL-OUTBOUND-1"}]}}
+
+		core_call_action(
+			"Outbound Call Account",
+			"connect",
+			identity=identity.name,
+			sdp_type="offer",
+			sdp="v=0\r\n",
+		)
+
+		row = frappe.db.get_value(
+			"WhatsApp Core Call",
+			{"call_id": "CALL-OUTBOUND-1"},
+			["remote_identity", "conversation", "direction", "status"],
+			as_dict=True,
+		)
+		self.assertEqual(row.remote_identity, identity.name)
+		self.assertTrue(row.conversation)
+		self.assertEqual(row.direction, "Outbound")
+		self.assertEqual(row.status, "connect")
+
+	@patch("frappe_whatsapp_core.calling.frappe.log_error")
+	@patch(
+		"frappe_whatsapp_core.calling._record_outgoing_call",
+		side_effect=frappe.DuplicateEntryError("webhook won the race"),
+	)
+	@patch(
+		"frappe_whatsapp_core.calling.relay_call_action",
+		return_value={"data": {"calls": [{"id": "CALL-RACED"}]}},
+	)
+	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
+	def test_successful_meta_call_survives_local_projection_race(
+		self, _resolve, _relay, _record, log_error
+	):
+		result = core_call_action(
+			"Hub Account",
+			"connect",
+			to_number="919876543210",
+			sdp_type="offer",
+			sdp="v=0\r\n",
+		)
+
+		self.assertEqual(result["data"]["calls"][0]["id"], "CALL-RACED")
+		log_error.assert_called_once()
+
+	@patch("frappe_whatsapp_core.calling.relay_call_action")
+	def test_existing_call_rejects_an_account_from_another_channel(self, relay):
+		channel = get_or_create_channel("CALL-ACCOUNT-A", "CALL-WABA-A")
+		other_channel = get_or_create_channel("CALL-ACCOUNT-B", "CALL-WABA-B")
+		identity = get_or_create_identity("919876543211", resolve=False)
+		conversation = frappe.get_doc({
+			"doctype": "WhatsApp Core Conversation",
+			"conversation_key": "CALL-ACCOUNT-CONVERSATION",
+			"channel": channel.name,
+			"remote_identity": identity.name,
+			"status": "Open",
+			"last_message_at": frappe.utils.now_datetime(),
+		}).insert(ignore_permissions=True)
+		frappe.get_doc({
+			"doctype": "WhatsApp Core Call",
+			"call_id": "CALL-ACCOUNT-SCOPE",
+			"channel": channel.name,
+			"conversation": conversation.name,
+			"remote_identity": identity.name,
+			"direction": "Inbound",
+			"status": "connect",
+			"session": {"sdp_type": "offer", "sdp": "v=0"},
+			"last_event": {"event": "connect"},
+		}).insert(ignore_permissions=True)
+		settings = frappe.get_single("WhatsApp Core Settings")
+		settings.set("accounts", [
+			{"channel": channel.name, "account_name": "Call Account A", "is_default": 1},
+			{"channel": other_channel.name, "account_name": "Call Account B"},
+		])
+		settings.save(ignore_permissions=True)
+
+		with self.assertRaises(frappe.PermissionError):
+			core_call_action(
+				"Call Account B",
+				"reject",
+				call_id="CALL-ACCOUNT-SCOPE",
+			)
+		relay.assert_not_called()
+
+	@patch(
+		"frappe_whatsapp_core.calling.relay_call_action",
+		return_value={"success": True},
+	)
+	def test_successful_call_action_projects_one_realtime_delta(self, relay):
+		channel = get_or_create_channel("CALL-ACTION-PHONE", "CALL-ACTION-WABA")
+		identity = get_or_create_identity("919876543212", resolve=False)
+		conversation = frappe.get_doc({
+			"doctype": "WhatsApp Core Conversation",
+			"conversation_key": "CALL-ACTION-CONVERSATION",
+			"channel": channel.name,
+			"remote_identity": identity.name,
+			"status": "Open",
+			"last_message_at": frappe.utils.now_datetime(),
+		}).insert(ignore_permissions=True)
+		call = frappe.get_doc({
+			"doctype": "WhatsApp Core Call",
+			"call_id": "CALL-ACTION-SCOPE",
+			"channel": channel.name,
+			"conversation": conversation.name,
+			"remote_identity": identity.name,
+			"direction": "Inbound",
+			"status": "connect",
+			"session": {"sdp_type": "offer", "sdp": "v=0"},
+			"last_event": {"event": "connect"},
+		}).insert(ignore_permissions=True)
+		settings = frappe.get_single("WhatsApp Core Settings")
+		settings.set("accounts", [{
+			"channel": channel.name,
+			"account_name": "Call Action Account",
+			"is_default": 1,
+		}])
+		settings.save(ignore_permissions=True)
+
+		with patch("frappe_whatsapp_core.realtime.publish_call_changes") as publish:
+			result = core_call_action(
+				"Call Action Account",
+				"reject",
+				call_id="CALL-ACTION-SCOPE",
+			)
+
+		self.assertTrue(result["success"])
+		self.assertEqual(
+			frappe.db.get_value("WhatsApp Core Call", call.name, "status"),
+			"reject",
+		)
+		publish.assert_called_once_with([call.name])
+		relay.assert_called_once()
 
 	def test_group_webhooks_project_members_and_participant_receipts(self):
 		channel = get_or_create_channel("GROUP-PHONE", "GROUP-WABA")

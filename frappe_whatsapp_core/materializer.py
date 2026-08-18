@@ -769,8 +769,9 @@ def materialize_call(event, channel, provider_call, contact=None):
 	remote_user_id = provider_call.get("from_user_id") or provider_call.get("to_user_id")
 	remote_parent_user_id = provider_call.get("from_parent_user_id") or provider_call.get("to_parent_user_id")
 	remote_number = provider_call.get("from") or provider_call.get("to") or provider_call.get("recipient")
+	identity = None
 	if remote_user_id or remote_parent_user_id or remote_number:
-		get_or_create_identity(
+		identity = get_or_create_identity(
 			remote_user_id or remote_parent_user_id or remote_number,
 			scope=channel.name if remote_user_id or remote_parent_user_id else None,
 			aliases=_identity_aliases(
@@ -780,6 +781,11 @@ def materialize_call(event, channel, provider_call, contact=None):
 				parent_user_id=remote_parent_user_id,
 			),
 		)
+		conversation = get_or_create_conversation(channel, identity)
+		values.update({
+			"remote_identity": identity.name,
+			"conversation": conversation.name,
+		})
 	direction = provider_call.get("direction")
 	if direction or not existing:
 		direction = str(

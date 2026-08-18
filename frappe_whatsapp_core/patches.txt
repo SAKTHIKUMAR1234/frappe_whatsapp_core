@@ -14,3 +14,4 @@ frappe_whatsapp_core.patches.v1_0.bind_template_service_accounts
 frappe_whatsapp_core.patches.v1_0.shorten_business_key_names
 frappe_whatsapp_core.patches.v1_0.add_event_projection_indexes
 frappe_whatsapp_core.patches.v1_0.remove_redundant_query_indexes
+frappe_whatsapp_core.patches.v1_0.backfill_call_scope

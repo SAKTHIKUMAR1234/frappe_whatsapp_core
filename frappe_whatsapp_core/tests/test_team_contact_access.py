@@ -6,8 +6,12 @@ from frappe.utils import now_datetime
 
 from frappe_whatsapp_core.identity import contact_options
 from frappe_whatsapp_core.inbox import conversation_page, conversations
-from frappe_whatsapp_core.permissions import assert_conversation_access
-from frappe_whatsapp_core.realtime import conversation_recipients, publish_message_changes
+from frappe_whatsapp_core.permissions import assert_call_access, assert_conversation_access
+from frappe_whatsapp_core.realtime import (
+	conversation_recipients,
+	publish_call_changes,
+	publish_message_changes,
+)
 from frappe_whatsapp_core.workspace_api import upsert_team
 from frappe_whatsapp_core.template_catalog import sync_template_projection
 
@@ -217,6 +221,41 @@ class TestTeamContactAccess(FrappeTestCase):
 			set(member_payload["message_changes"][0]["message"]),
 			{"name", "conversation", "provider_message_id", "delivery_status", "failure"},
 		)
+
+	def test_call_rows_and_realtime_follow_the_same_team_scope(self):
+		frappe.set_user("Administrator")
+		call = frappe.get_doc({
+			"doctype": "WhatsApp Core Call",
+			"call_id": f"team-call-{frappe.generate_hash(length=10).lower()}",
+			"channel": self.conversation.channel,
+			"conversation": self.conversation.name,
+			"remote_identity": self.identity.name,
+			"direction": "Inbound",
+			"status": "connect",
+			"session": {"sdp_type": "offer", "sdp": "v=0"},
+			"last_event": {"event": "connect"},
+		}).insert(ignore_permissions=True)
+
+		frappe.set_user(self.member)
+		assert_call_access(call.call_id)
+		self.assertTrue(frappe.has_permission("WhatsApp Core Call", "read", doc=call))
+
+		frappe.set_user(self.outsider)
+		with self.assertRaises(frappe.PermissionError):
+			assert_call_access(call.call_id)
+		self.assertFalse(frappe.has_permission("WhatsApp Core Call", "read", doc=call))
+
+		frappe.set_user("Administrator")
+		with patch("frappe_whatsapp_core.realtime.frappe.publish_realtime") as publish:
+			publish_call_changes([call.name])
+		users = {item.kwargs.get("user") for item in publish.call_args_list}
+		self.assertIn(self.member, users)
+		self.assertNotIn(self.outsider, users)
+		payload = next(
+			item.args[1] for item in publish.call_args_list
+			if item.kwargs.get("user") == self.member
+		)
+		self.assertEqual(payload["call"]["call_id"], call.call_id)
 
 	def _user(self, email):
 		user = frappe.get_doc({

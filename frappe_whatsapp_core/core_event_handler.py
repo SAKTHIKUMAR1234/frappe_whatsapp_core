@@ -20,7 +20,11 @@ from frappe_whatsapp_core.outbound import (
 	queue_template_internal,
 	queue_text_internal,
 )
-from frappe_whatsapp_core.realtime import publish_invalidation, publish_message_changes
+from frappe_whatsapp_core.realtime import (
+	publish_call_changes,
+	publish_invalidation,
+	publish_message_changes,
+)
 
 
 def handle_core_event(payload, event) -> dict:
@@ -55,9 +59,8 @@ def handle_core_event(payload, event) -> dict:
 		order_by="modified asc",
 		limit_page_length=100,
 	)
-	for call in calls:
-		if not frappe.flags.whatsapp_core_batch_processing:
-			publish_invalidation("whatsapp_core_call")
+	if calls and not frappe.flags.whatsapp_core_batch_processing:
+		publish_call_changes([call.name for call in calls])
 	groups = frappe.get_all(
 		"WhatsApp Core Group",
 		filters={"relay_event": event.name},

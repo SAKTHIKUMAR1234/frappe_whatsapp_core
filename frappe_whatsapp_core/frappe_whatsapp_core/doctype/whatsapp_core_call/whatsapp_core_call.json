@@ -11,12 +11,15 @@
 		"call_id",
 		"relay_event",
 		"channel",
+		"conversation",
+		"remote_identity",
 		"direction",
 		"status",
 		"remote_number",
 		"remote_user_id",
 		"remote_parent_user_id",
 		"remote_username",
+		"handled_by",
 		"started_at",
 		"ended_at",
 		"callback_data",
@@ -57,6 +60,22 @@
 			"reqd": 1
 		},
 		{
+			"fieldname": "conversation",
+			"fieldtype": "Link",
+			"options": "WhatsApp Core Conversation",
+			"label": "Conversation",
+			"read_only": 1,
+			"search_index": 1
+		},
+		{
+			"fieldname": "remote_identity",
+			"fieldtype": "Link",
+			"options": "WhatsApp Core Identity",
+			"label": "Contact",
+			"read_only": 1,
+			"search_index": 1
+		},
+		{
 			"fieldname": "direction",
 			"fieldtype": "Select",
 			"options": "Inbound\nOutbound",
@@ -90,6 +109,13 @@
 			"fieldname": "remote_username",
 			"fieldtype": "Data",
 			"label": "Remote Username"
+		},
+		{
+			"fieldname": "handled_by",
+			"fieldtype": "Link",
+			"options": "User",
+			"label": "Handled By",
+			"read_only": 1
 		},
 		{
 			"fieldname": "started_at",
@@ -181,6 +207,10 @@
 			"role": "WhatsApp Manager",
 			"read": 1,
 			"export": 1
+		},
+		{
+			"role": "WhatsApp User",
+			"read": 1
 		}
 	],
 	"sort_field": "modified",

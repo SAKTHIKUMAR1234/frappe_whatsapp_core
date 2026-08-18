@@ -71,7 +71,7 @@ def bootstrap():
 		]
 	else:
 		if can_use_inbox:
-			modules.append("inbox")
+			modules.extend(["inbox", "calling"])
 	return {
 		"authenticated": True,
 		"authorized": authorized,

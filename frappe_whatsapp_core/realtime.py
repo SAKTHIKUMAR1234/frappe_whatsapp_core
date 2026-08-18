@@ -306,6 +306,52 @@ def publish_conversation_read(read_state: dict, *, after_commit: bool = True) ->
 	return published
 
 
+def publish_call_changes(call_names, *, after_commit: bool = True) -> int:
+	"""Send complete call lifecycle deltas only to users in the call's inbox scope."""
+	names = _unique_strings(call_names)
+	if not names:
+		return 0
+	rows = frappe.get_all(
+		"WhatsApp Core Call",
+		filters={"name": ["in", names]},
+		fields=[
+			"name", "call_id", "channel", "conversation", "remote_identity",
+			"direction", "status", "remote_number", "remote_user_id",
+			"remote_username", "handled_by", "started_at", "ended_at", "session",
+			"recording_media_id", "transcript_media_id", "modified",
+		],
+		limit_page_length=len(names),
+	)
+	from frappe_whatsapp_core.contact_presentation import present_identity_names
+
+	presentations = present_identity_names(
+		[row.remote_identity for row in rows if row.remote_identity],
+		context={"surface": "calling_realtime"},
+	)
+	recipients = conversation_recipients(
+		[row.conversation for row in rows if row.conversation]
+	)
+	published = 0
+	for row in rows:
+		presentation = presentations.get(row.remote_identity) or {}
+		row["display_name"] = (
+			presentation.get("display_name")
+			or row.remote_username
+			or row.remote_number
+			or "WhatsApp contact"
+		)
+		row["presentation"] = presentation
+		for user in recipients.get(row.conversation, set()):
+			frappe.publish_realtime(
+				"whatsapp_core_call",
+				{"call": dict(row)},
+				user=user,
+				after_commit=after_commit,
+			)
+			published += 1
+	return published
+
+
 def publish_batch_notice(kinds, *, after_commit: bool = True) -> None:
 	"""Publish a payload-free, typed notice for non-inbox batch projections."""
 	safe_kinds = [kind for kind in _unique_strings(kinds) if kind not in MESSAGE_CHANGE_KINDS]
