@@ -29,6 +29,28 @@ from frappe_whatsapp_core.workspace_api import (
 
 
 class TestCoreRoleBoundary(FrappeTestCase):
+	def test_app_screen_uses_the_same_core_role_boundary(self):
+		from frappe_whatsapp_core import frontend_api
+
+		with (
+			patch.object(
+				frontend_api.frappe,
+				"session",
+				SimpleNamespace(user="agent@example.test"),
+			),
+			patch.object(frontend_api.frappe, "get_roles", return_value=["WhatsApp User"]),
+		):
+			self.assertTrue(frontend_api.has_app_permission())
+		with (
+			patch.object(
+				frontend_api.frappe,
+				"session",
+				SimpleNamespace(user="agent@example.test"),
+			),
+			patch.object(frontend_api.frappe, "get_roles", return_value=["Desk User"]),
+		):
+			self.assertFalse(frontend_api.has_app_permission())
+
 	def test_user_bootstrap_exposes_inbox_only(self):
 		from frappe_whatsapp_core import frontend_api
 
@@ -36,7 +58,7 @@ class TestCoreRoleBoundary(FrappeTestCase):
 			boot = frontend_api.bootstrap()
 		self.assertFalse(boot["can_manage"])
 		self.assertEqual(boot["default_module"], "inbox")
-		self.assertEqual(boot["modules"], ["inbox"])
+		self.assertEqual(boot["modules"], ["inbox", "calling"])
 
 	def test_manager_bootstrap_exposes_management_modules(self):
 		from frappe_whatsapp_core import frontend_api

@@ -11,6 +11,9 @@ release acceptance gates, read
 canonical Core-side setup guide; do not copy settings into Supervisor or Nginx
 by hand.
 
+For the shortest role-based installation and daily-use path, start with
+[Getting started](docs/getting-started.md).
+
 Open `/whatsapp` for the Core application. The legacy `/whatsapp_core` entry
 remains supported, and each entry keeps its own browser-history base so inbox
 deep links and back navigation do not jump between aliases.

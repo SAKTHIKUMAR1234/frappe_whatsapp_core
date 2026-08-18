@@ -179,7 +179,10 @@
 		background: var(--wa-surface);
 		cursor: pointer;
 		contain: strict;
-		transition: background-color 140ms ease;
+		will-change: transform;
+		transition:
+			transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+			background-color 140ms ease;
 	}
 	.conversation-row:hover,
 	.conversation-row.selected {

@@ -10,9 +10,11 @@
 		ChevronDown,
 		Menu as MenuIcon,
 		Search,
-		Sparkles,
+		MessageCircleMore,
 		ArrowRight,
 		Moon,
+		PanelLeftClose,
+		PanelLeftOpen,
 		Sun,
 	} from 'lucide-vue-next'
 	import { navigation } from '@/config/navigation'
@@ -29,6 +31,7 @@
 	const profileMenu = ref()
 	const mobileOpen = ref(false)
 	const sidebarExpanded = ref(false)
+	const sidebarPinned = ref(localStorage.getItem('whatsapp:sidebar-pinned') !== 'false')
 	const commandOpen = ref(false)
 	const commandQuery = ref('')
 	const commandInput = ref()
@@ -123,11 +126,18 @@
 	}
 
 	function collapseSidebarSoon() {
+		if (sidebarPinned.value) return
 		window.clearTimeout(sidebarCollapseTimer)
 		sidebarCollapseTimer = window.setTimeout(() => {
 			sidebarCollapseTimer = null
 			sidebarExpanded.value = false
 		}, 120)
+	}
+
+	function toggleSidebarPin() {
+		sidebarPinned.value = !sidebarPinned.value
+		localStorage.setItem('whatsapp:sidebar-pinned', sidebarPinned.value ? 'true' : 'false')
+		if (!sidebarPinned.value) sidebarExpanded.value = false
 	}
 
 	function handleSidebarFocusOut(event) {
@@ -197,18 +207,36 @@
 		/>
 		<aside
 			id="workspace-navigation"
-			:class="['sidebar', { open: mobileOpen, expanded: sidebarExpanded || mobileOpen }]"
+			:class="[
+				'sidebar',
+				{
+					open: mobileOpen,
+					expanded: sidebarPinned || sidebarExpanded || mobileOpen,
+					pinned: sidebarPinned,
+				},
+			]"
 			@mouseenter="expandSidebar"
 			@mouseleave="collapseSidebarSoon"
 			@focusin="expandSidebar"
 			@focusout="handleSidebarFocusOut"
 		>
 			<div class="brand">
-				<div class="brand-mark"><Sparkles :size="19" /></div>
+				<div class="brand-mark"><MessageCircleMore :size="20" /></div>
 				<div>
-					<strong>WhatsApp Core</strong>
-					<span>Messaging workspace</span>
+					<strong>WhatsApp</strong>
+					<span>Business workspace</span>
 				</div>
+				<Button
+					unstyled
+					class="sidebar-pin"
+					type="button"
+					:aria-label="sidebarPinned ? 'Collapse navigation' : 'Keep navigation open'"
+					:title="sidebarPinned ? 'Collapse navigation' : 'Keep navigation open'"
+					@click.stop="toggleSidebarPin"
+				>
+					<PanelLeftClose v-if="sidebarPinned" :size="16" />
+					<PanelLeftOpen v-else :size="16" />
+				</Button>
 			</div>
 
 			<nav>
@@ -238,7 +266,9 @@
 			</div>
 		</aside>
 
-		<div :class="['main-shell', { 'inbox-shell': inboxRoute }]">
+		<div
+			:class="['main-shell', { 'inbox-shell': inboxRoute, 'sidebar-pinned': sidebarPinned }]"
+		>
 			<header class="topbar">
 				<Button
 					class="mobile-menu"
@@ -303,7 +333,13 @@
 				</div>
 			</header>
 
-			<main :class="['content', { flush: flushContent }]"><RouterView /></main>
+			<main :class="['content', { flush: flushContent }]">
+				<RouterView v-slot="{ Component, route: activeRoute }">
+					<Transition name="workspace-view" mode="out-in">
+						<component :is="Component" :key="activeRoute.name" />
+					</Transition>
+				</RouterView>
+			</main>
 		</div>
 		<AppDialog
 			v-model:visible="commandOpen"
@@ -381,6 +417,35 @@
 		align-items: center;
 		gap: 11px;
 		padding: 0 5px 14px;
+	}
+	.sidebar-pin {
+		width: 30px;
+		height: 30px;
+		margin-left: auto;
+		display: grid;
+		place-items: center;
+		flex: 0 0 30px;
+		border: 0;
+		border-radius: 7px;
+		color: var(--wa-muted);
+		background: transparent;
+		cursor: pointer;
+		opacity: 0;
+		pointer-events: none;
+		transition:
+			opacity 160ms ease,
+			background-color 160ms ease,
+			color 160ms ease;
+	}
+	.sidebar.expanded .sidebar-pin {
+		opacity: 1;
+		pointer-events: auto;
+	}
+	.sidebar-pin:hover,
+	.sidebar-pin:focus-visible {
+		color: var(--wa-text);
+		background: var(--wa-surface-muted);
+		outline: 0;
 	}
 	.brand-mark {
 		display: grid;
@@ -545,6 +610,13 @@
 		height: 100dvh;
 		margin-left: 64px;
 		overflow: hidden;
+		transition:
+			width 280ms cubic-bezier(0.22, 1, 0.36, 1),
+			margin-left 280ms cubic-bezier(0.22, 1, 0.36, 1);
+	}
+	.main-shell.sidebar-pinned {
+		width: calc(100vw - 236px);
+		margin-left: 236px;
 	}
 	.topbar {
 		position: sticky;
@@ -701,6 +773,20 @@
 	.content.flush {
 		padding: 0;
 	}
+	.workspace-view-enter-active,
+	.workspace-view-leave-active {
+		transition:
+			opacity 150ms ease,
+			transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+	}
+	.workspace-view-enter-from {
+		opacity: 0;
+		transform: translateY(5px);
+	}
+	.workspace-view-leave-to {
+		opacity: 0;
+		transform: translateY(-3px);
+	}
 	@media (min-width: 901px) {
 		.inbox-shell .topbar {
 			display: none;
@@ -744,6 +830,10 @@
 			z-index: 29;
 		}
 		.main-shell {
+			width: 100vw;
+			margin-left: 0;
+		}
+		.main-shell.sidebar-pinned {
 			width: 100vw;
 			margin-left: 0;
 		}

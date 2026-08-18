@@ -45,6 +45,15 @@ from frappe_whatsapp_core.realtime import publish_invalidation
 from frappe_whatsapp_core.topics import unclassified_messages, upsert_topic
 
 
+def has_app_permission():
+	"""Return whether the current Desk user may open the WhatsApp product."""
+	if frappe.session.user == "Administrator":
+		return True
+	if not frappe.session.user or frappe.session.user == "Guest":
+		return False
+	return bool(set(frappe.get_roles()) & CORE_APP_ROLES)
+
+
 @frappe.whitelist(allow_guest=True)
 def bootstrap():
 	user = frappe.session.user

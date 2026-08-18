@@ -85,16 +85,19 @@ scheduler_events = {
 
 # required_apps = []
 
-# Each item in the list will be shown as an app in the apps page
-# add_to_apps_screen = [
-# 	{
-# 		"name": "frappe_whatsapp_core",
-# 		"logo": "/assets/frappe_whatsapp_core/logo.png",
-# 		"title": "Frappe WhatsApp Core",
-# 		"route": "/frappe_whatsapp_core",
-# 		"has_permission": "frappe_whatsapp_core.api.permission.has_app_permission"
-# 	}
-# ]
+# Show WhatsApp beside first-class products such as CRM and Helpdesk. The
+# permission method deliberately reuses the same role boundary as the SPA
+# bootstrap, so the Apps page cannot advertise a destination the user cannot
+# open.
+add_to_apps_screen = [
+	{
+		"name": "frappe_whatsapp_core",
+		"logo": "/assets/frappe_whatsapp_core/core_ui/favicon.svg",
+		"title": "WhatsApp",
+		"route": "/whatsapp",
+		"has_permission": "frappe_whatsapp_core.frontend_api.has_app_permission",
+	}
+]
 
 # Includes in <head>
 # ------------------
