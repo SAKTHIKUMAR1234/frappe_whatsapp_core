@@ -2,12 +2,14 @@
 	import { computed, reactive, ref, watch } from 'vue'
 
 	import AppDialog from '@/components/AppDialog.vue'
-	import Select from 'primevue/select'
+	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
 	import { call, errorMessage } from '@/services/frappe'
 	import {
-		formatTemplateComponents,
+		TEMPLATE_BUTTON_TYPES,
+		addTemplateButton,
 		templateForm,
 		templateRequest,
+		templateSampleFields,
 	} from '@/features/templates/templateAuthoring'
 
 	const props = defineProps({
@@ -23,6 +25,8 @@
 		() => !editing.value || props.template?.approval_status === 'DRAFT',
 	)
 	const form = reactive(templateForm())
+	const sampleFields = computed(() => templateSampleFields(form))
+	const mediaHeader = computed(() => ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(form.header_type))
 
 	function reset() {
 		try {
@@ -33,13 +37,12 @@
 		}
 	}
 
-	function formatComponents() {
-		try {
-			form.components_json = formatTemplateComponents(form.components_json)
-			submitError.value = ''
-		} catch (error) {
-			submitError.value = error.message
-		}
+	function addButton() {
+		addTemplateButton(form)
+	}
+
+	function removeButton(index) {
+		form.buttons.splice(index, 1)
 	}
 
 	async function save(submit) {
@@ -92,100 +95,296 @@
 <template>
 	<AppDialog
 		:model-value="modelValue"
-		:header="editing ? 'Edit complete template' : 'Create complete template'"
+		:header="editing ? 'Edit WhatsApp template' : 'Create WhatsApp template'"
+		width="820px"
 		@update:model-value="emit('update:modelValue', $event)"
 	>
 		<form class="template-editor" @submit.prevent="save(true)">
 			<div v-if="editing" class="status-panel">
 				<div>
 					<strong>{{ template.approval_status }}</strong>
-					<span>Current Integration / Meta status</span>
+					<span>Current Hub / Meta status</span>
 				</div>
 				<p v-if="template.status_reason">{{ template.status_reason }}</p>
 				<p v-if="template.correct_category">
 					Meta suggested category: {{ template.correct_category }}
 				</p>
 			</div>
-			<div class="field-grid">
+
+			<section class="editor-section">
+				<div class="section-heading">
+					<div>
+						<strong>Template details</strong><small>Identity and delivery rules</small>
+					</div>
+				</div>
+				<div class="field-grid">
+					<label>
+						<span>WhatsApp account</span>
+						<ChannelSelect
+							v-model="form.account_name"
+							:options="accounts"
+							:disabled="editing"
+							placeholder="Select an account"
+						/>
+					</label>
+					<label>
+						<span>Template name</span>
+						<input
+							v-model="form.template_name"
+							type="text"
+							maxlength="512"
+							pattern="[a-z0-9_]+"
+							placeholder="order_update"
+							:disabled="editing"
+							required
+						/>
+					</label>
+					<label>
+						<span>Language</span>
+						<input
+							v-model="form.language_code"
+							type="text"
+							maxlength="32"
+							placeholder="en_US"
+							:disabled="editing"
+							required
+						/>
+					</label>
+					<label>
+						<span>Category</span>
+						<select v-model="form.category">
+							<option value="UTILITY">Utility</option>
+							<option value="MARKETING">Marketing</option>
+							<option value="AUTHENTICATION">Authentication</option>
+						</select>
+					</label>
+					<label>
+						<span>Parameter format</span>
+						<select v-model="form.parameter_format">
+							<option value="POSITIONAL">
+								Positional — &#123;&#123;1&#125;&#125;
+							</option>
+							<option value="NAMED">
+								Named — &#123;&#123;customer_name&#125;&#125;
+							</option>
+						</select>
+					</label>
+					<label>
+						<span>Message send TTL (optional seconds)</span>
+						<input
+							v-model="form.message_send_ttl_seconds"
+							type="number"
+							min="1"
+							step="1"
+							placeholder="Meta default"
+						/>
+					</label>
+				</div>
+			</section>
+
+			<section class="editor-section">
+				<div class="section-heading">
+					<div><strong>Header</strong><small>Optional heading or media</small></div>
+				</div>
+				<div class="field-grid">
+					<label>
+						<span>Header type</span>
+						<select v-model="form.header_type">
+							<option value="NONE">No header</option>
+							<option value="TEXT">Text</option>
+							<option value="IMAGE">Image</option>
+							<option value="VIDEO">Video</option>
+							<option value="DOCUMENT">Document</option>
+							<option value="LOCATION">Location</option>
+						</select>
+					</label>
+					<label v-if="form.header_type === 'TEXT'">
+						<span>Header text</span>
+						<input
+							v-model="form.header_text"
+							type="text"
+							maxlength="1024"
+							placeholder="Order {{1}}"
+						/>
+					</label>
+					<label v-if="mediaHeader" class="wide-field">
+						<span>Media sample handle or public URL</span>
+						<input
+							v-model="form.header_media_example"
+							type="text"
+							placeholder="Upload handle returned by Meta, or a valid sample URL"
+						/>
+					</label>
+				</div>
+			</section>
+
+			<section class="editor-section">
+				<div class="section-heading">
+					<div>
+						<strong>Message</strong><small>The body customers will receive</small>
+					</div>
+				</div>
 				<label>
-					<span>WhatsApp account</span>
-					<Select
-						v-model="form.account_name"
-						:options="accounts"
-						option-label="display_name"
-						option-value="account_name"
-						:disabled="editing"
-						placeholder="Select an account"
+					<span>Body text</span>
+					<textarea
+						v-model="form.body_text"
+						rows="5"
+						placeholder="Hello {{1}}, your order is ready."
 					/>
 				</label>
-				<label>
-					<span>Template name</span>
-					<input
-						v-model="form.template_name"
-						type="text"
-						maxlength="512"
-						pattern="[a-z0-9_]+"
-						placeholder="order_update"
-						:disabled="editing"
-						required
-					/>
+				<label v-if="form.category === 'AUTHENTICATION'" class="checkbox-field">
+					<input v-model="form.add_security_recommendation" type="checkbox" />
+					<span>Add Meta's security recommendation</span>
 				</label>
-				<label>
-					<span>Language</span>
-					<input
-						v-model="form.language_code"
-						type="text"
-						maxlength="32"
-						placeholder="en"
-						:disabled="editing"
-						required
-					/>
-				</label>
-				<label>
-					<span>Category</span>
-					<select v-model="form.category">
-						<option value="UTILITY">Utility</option>
-						<option value="MARKETING">Marketing</option>
-						<option value="AUTHENTICATION">Authentication</option>
-					</select>
-				</label>
-				<label>
-					<span>Message send TTL (optional seconds)</span>
-					<input
-						v-model="form.message_send_ttl_seconds"
-						type="number"
-						min="1"
-						step="1"
-						placeholder="Meta default"
-					/>
-				</label>
-				<label>
-					<span>Parameter format</span>
-					<select v-model="form.parameter_format">
-						<option value="POSITIONAL">Positional variables</option>
-						<option value="NAMED">Named variables</option>
-					</select>
-				</label>
-			</div>
-			<label class="components-field">
-				<span>Complete Meta components document</span>
-				<textarea
-					v-model="form.components_json"
-					rows="18"
-					spellcheck="false"
-					placeholder='[{"type":"BODY","text":"Your order {{1}} is ready"}]'
-					required
-				/>
-				<small>
-					This canonical array is preserved end-to-end. It supports text/media headers,
-					examples, quick replies, URL/phone/OTP/Flow/catalog buttons, authentication,
-					carousel cards and forward-compatible Meta component fields.
-				</small>
-			</label>
-			<div class="component-actions">
-				<button type="button" class="secondary compact" @click="formatComponents">
-					Validate and format JSON
-				</button>
+				<div v-if="sampleFields.length" class="sample-panel">
+					<div class="section-heading compact-heading">
+						<div>
+							<strong>Variable samples</strong
+							><small>Required by Meta on submission</small>
+						</div>
+					</div>
+					<div class="field-grid">
+						<label v-for="field in sampleFields" :key="field.key">
+							<span>{{ field.label }}</span>
+							<input
+								v-model="form.sample_values[field.scope][field.name]"
+								type="text"
+								placeholder="Example value"
+							/>
+						</label>
+					</div>
+				</div>
+				<div class="field-grid">
+					<label>
+						<span>Footer (optional)</span>
+						<input v-model="form.footer_text" type="text" maxlength="1024" />
+					</label>
+					<label v-if="form.category === 'AUTHENTICATION'">
+						<span>Code expiration (minutes)</span>
+						<input
+							v-model="form.code_expiration_minutes"
+							type="number"
+							min="1"
+							step="1"
+						/>
+					</label>
+				</div>
+			</section>
+
+			<section class="editor-section">
+				<div class="section-heading">
+					<div><strong>Buttons</strong><small>Optional customer actions</small></div>
+					<button type="button" class="secondary compact" @click="addButton">
+						Add button
+					</button>
+				</div>
+				<p v-if="!form.buttons.length" class="empty-note">No buttons configured.</p>
+				<article
+					v-for="(button, index) in form.buttons"
+					:key="button._client_key"
+					class="button-card"
+				>
+					<div class="button-card-heading">
+						<strong>Button {{ index + 1 }}</strong>
+						<button type="button" class="danger-link" @click="removeButton(index)">
+							Remove
+						</button>
+					</div>
+					<div class="field-grid">
+						<label>
+							<span>Action</span>
+							<select v-model="button.type">
+								<option
+									v-for="option in TEMPLATE_BUTTON_TYPES"
+									:key="option.value"
+									:value="option.value"
+								>
+									{{ option.label }}
+								</option>
+							</select>
+						</label>
+						<label v-if="button.type !== 'CATALOG'">
+							<span>Button text</span>
+							<input v-model="button.text" type="text" maxlength="80" />
+						</label>
+						<label v-if="button.type === 'URL'" class="wide-field">
+							<span>Website URL</span>
+							<input
+								v-model="button.url"
+								type="url"
+								placeholder="https://example.com/{{1}}"
+							/>
+						</label>
+						<label v-if="['URL', 'COPY_CODE'].includes(button.type)">
+							<span>Example value</span>
+							<input v-model="button.example_value" type="text" />
+						</label>
+						<label v-if="button.type === 'PHONE_NUMBER'">
+							<span>Phone number</span>
+							<input
+								v-model="button.phone_number"
+								type="tel"
+								placeholder="+919876543210"
+							/>
+						</label>
+						<label v-if="button.type === 'OTP'">
+							<span>OTP action</span>
+							<select v-model="button.otp_type">
+								<option value="COPY_CODE">Copy code</option>
+								<option value="ONE_TAP">One tap</option>
+								<option value="ZERO_TAP">Zero tap</option>
+							</select>
+						</label>
+						<label v-if="button.type === 'OTP' && button.otp_type !== 'COPY_CODE'">
+							<span>Autofill text</span>
+							<input v-model="button.autofill_text" type="text" />
+						</label>
+						<label v-if="button.type === 'OTP' && button.otp_type === 'ZERO_TAP'">
+							<span>Android package name</span>
+							<input v-model="button.package_name" type="text" />
+						</label>
+						<label v-if="button.type === 'OTP' && button.otp_type === 'ZERO_TAP'">
+							<span>App signature hash</span>
+							<input v-model="button.signature_hash" type="text" />
+						</label>
+						<label v-if="button.type === 'FLOW'">
+							<span>Flow ID</span>
+							<input v-model="button.flow_id" type="text" />
+						</label>
+						<label v-if="button.type === 'FLOW'">
+							<span>Flow action</span>
+							<select v-model="button.flow_action">
+								<option value="navigate">Navigate</option>
+								<option value="data_exchange">Data exchange</option>
+							</select>
+						</label>
+						<label v-if="button.type === 'FLOW' && button.flow_action === 'navigate'">
+							<span>Initial screen</span>
+							<input v-model="button.navigate_screen" type="text" />
+						</label>
+						<label v-if="button.type === 'CATALOG'">
+							<span>Thumbnail product retailer ID (optional)</span>
+							<input v-model="button.thumbnail_product_retailer_id" type="text" />
+						</label>
+						<label v-if="button.type === 'VOICE_CALL'">
+							<span>Call availability (minutes)</span>
+							<input
+								v-model="button.ttl_minutes"
+								type="number"
+								min="1440"
+								max="43200"
+							/>
+						</label>
+					</div>
+				</article>
+			</section>
+
+			<div v-if="form.advanced_component_count" class="preserved-note">
+				<strong>Advanced Meta content preserved</strong>
+				<span>
+					{{ form.advanced_component_count }} advanced component(s), such as carousel or
+					limited-time content, will be retained unchanged while these fields are edited.
+				</span>
 			</div>
 			<p v-if="submitError" class="form-error" role="alert">{{ submitError }}</p>
 		</form>
@@ -232,14 +431,59 @@
 		gap: 16px;
 	}
 
+	.editor-section,
+	.button-card,
+	.sample-panel {
+		display: grid;
+		gap: 14px;
+		padding: 16px;
+		border: 1px solid var(--wa-border);
+		border-radius: 12px;
+		background: var(--wa-surface);
+	}
+
+	.sample-panel,
+	.button-card {
+		padding: 14px;
+		background: var(--wa-surface-soft);
+	}
+
+	.section-heading,
+	.button-card-heading {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+	}
+
+	.section-heading strong,
+	.section-heading small {
+		display: block;
+	}
+
+	.section-heading small {
+		margin-top: 3px;
+		color: var(--wa-muted);
+		font-size: 12px;
+	}
+
+	.compact-heading {
+		align-items: flex-start;
+	}
+
 	.field-grid {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 14px;
 	}
 
+	.wide-field {
+		grid-column: 1 / -1;
+	}
+
 	label span,
-	.status-panel span {
+	.status-panel span,
+	.preserved-note span {
 		color: var(--wa-muted);
 		font-size: 12px;
 		font-weight: 650;
@@ -260,11 +504,9 @@
 	}
 
 	textarea {
-		min-height: 270px;
+		min-height: 120px;
 		resize: vertical;
-		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-		font-size: 12px;
-		line-height: 1.55;
+		line-height: 1.5;
 	}
 
 	input:focus,
@@ -280,7 +522,21 @@
 		background: var(--wa-surface-soft);
 	}
 
-	.status-panel {
+	.checkbox-field {
+		display: flex !important;
+		grid-template-columns: auto 1fr;
+		align-items: center;
+		justify-content: flex-start;
+		gap: 9px !important;
+	}
+
+	.checkbox-field input {
+		width: 18px;
+		min-height: 18px;
+	}
+
+	.status-panel,
+	.preserved-note {
 		display: grid;
 		gap: 7px;
 		padding: 12px;
@@ -290,12 +546,14 @@
 	}
 
 	.status-panel strong,
-	.status-panel span {
+	.status-panel span,
+	.preserved-note strong,
+	.preserved-note span {
 		display: block;
 	}
 
 	.status-panel p,
-	.components-field small {
+	.empty-note {
 		margin: 0;
 		color: var(--wa-muted);
 		font-size: 12px;
@@ -310,7 +568,6 @@
 		font-size: 12px;
 	}
 
-	.component-actions,
 	.dialog-actions {
 		display: flex;
 		justify-content: flex-end;
@@ -318,7 +575,8 @@
 	}
 
 	.dialog-actions button,
-	.component-actions button {
+	.editor-section button,
+	.button-card button {
 		min-height: 44px;
 		padding: 0 16px;
 		border: 1px solid var(--wa-border);
@@ -328,8 +586,8 @@
 		cursor: pointer;
 	}
 
-	.component-actions .compact {
-		min-height: 36px;
+	.compact {
+		min-height: 36px !important;
 	}
 
 	.secondary {
@@ -338,9 +596,17 @@
 	}
 
 	.primary {
-		border-color: var(--wa-success);
+		border-color: var(--wa-success) !important;
 		color: white;
 		background: var(--wa-success);
+	}
+
+	.danger-link {
+		min-height: auto !important;
+		padding: 3px 0 !important;
+		border: 0 !important;
+		color: var(--wa-danger);
+		background: transparent;
 	}
 
 	button:disabled {
@@ -351,6 +617,10 @@
 	@media (max-width: 620px) {
 		.field-grid {
 			grid-template-columns: 1fr;
+		}
+
+		.wide-field {
+			grid-column: auto;
 		}
 	}
 </style>

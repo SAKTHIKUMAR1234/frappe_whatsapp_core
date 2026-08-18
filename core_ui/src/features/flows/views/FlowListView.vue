@@ -9,6 +9,7 @@
 	import InputText from 'primevue/inputtext'
 	import Message from 'primevue/message'
 	import MultiLinkField from '@/components/form/MultiLinkField.vue'
+	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
 	import Select from 'primevue/select'
 	import Skeleton from 'primevue/skeleton'
 	import Tag from 'primevue/tag'
@@ -311,13 +312,11 @@
 					placeholder="Search Meta Flows…"
 				/>
 			</div>
-			<Select
+			<ChannelSelect
 				v-model="selectedAccount"
 				:options="workspace.accounts"
-				option-label="display_name"
-				option-value="account_name"
 				placeholder="WhatsApp account"
-				@change="load($event.value)"
+				@update:model-value="load($event)"
 			/>
 			<span>{{ filteredFlows.length }} flows</span>
 		</div>

@@ -4,10 +4,10 @@
 	import Button from 'primevue/button'
 	import Column from 'primevue/column'
 	import DataTable from 'primevue/datatable'
-	import Select from 'primevue/select'
 	import Tag from 'primevue/tag'
 	import { GitBranch, MessageCircleQuestion } from 'lucide-vue-next'
 	import AsyncState from '@/components/AsyncState.vue'
+	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
 	import FlowResponseCard from '@/features/flows/components/FlowResponseCard.vue'
 	import { flowWorkspace } from '@/features/flows/services/flowService'
 	import { call, errorMessage } from '@/services/frappe'
@@ -71,12 +71,10 @@
 	<AsyncState v-if="loadError" :error="loadError" @retry="() => load(selectedAccount)" />
 	<template v-else>
 		<div class="flow-filter">
-			<Select
+			<ChannelSelect
 				v-model="selectedAccount"
 				:options="workspace.accounts"
-				option-label="display_name"
-				option-value="account_name"
-				@change="load($event.value)"
+				@update:model-value="load($event)"
 			/>
 		</div>
 		<section class="surface-card poll-table">

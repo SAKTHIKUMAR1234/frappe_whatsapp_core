@@ -3,8 +3,8 @@
 	import Button from 'primevue/button'
 	import AppDialog from '@/components/AppDialog.vue'
 	import InputText from 'primevue/inputtext'
-	import Select from 'primevue/select'
 	import { Send } from 'lucide-vue-next'
+	import TemplateSelect from '@/features/templates/components/TemplateSelect.vue'
 
 	import {
 		buildTemplateComponents,
@@ -76,13 +76,7 @@
 		<div class="template-form">
 			<label>
 				<span>Template</span>
-				<Select
-					v-model="selected"
-					:options="availableTemplates"
-					option-label="template_name"
-					option-value="name"
-					fluid
-				/>
+				<TemplateSelect v-model="selected" :options="availableTemplates" />
 			</label>
 			<label v-for="descriptor in descriptors" :key="descriptor.key">
 				<span>{{ descriptor.label }}</span>

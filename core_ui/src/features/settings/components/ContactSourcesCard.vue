@@ -5,13 +5,13 @@
 	import InputNumber from 'primevue/inputnumber'
 	import InputText from 'primevue/inputtext'
 	import Message from 'primevue/message'
-	import Select from 'primevue/select'
 	import Textarea from 'primevue/textarea'
 	import ToggleSwitch from 'primevue/toggleswitch'
 	import { useToast } from 'primevue/usetoast'
 	import { ContactRound, Pencil, Plus } from 'lucide-vue-next'
 
 	import AsyncState from '@/components/AsyncState.vue'
+	import LinkField from '@/components/form/LinkField.vue'
 	import { call, errorMessage } from '@/services/frappe'
 	import { focusDialogControl } from '@/utils/focus'
 
@@ -189,14 +189,12 @@
 				}}</Message>
 				<label>
 					<span>Source DocType *</span>
-					<Select
+					<LinkField
 						v-model="form.source_doctype"
 						aria-label="Source DocType"
 						:options="doctypes"
 						option-label="name"
 						option-value="name"
-						filter
-						fluid
 						:disabled="Boolean(form.name) || loadingOptions"
 						placeholder="Choose a Frappe DocType"
 						@change="changeDoctype"
@@ -208,40 +206,34 @@
 				</label>
 				<label>
 					<span>Phone field *</span>
-					<Select
+					<LinkField
 						v-model="form.phone_field"
 						:options="fieldOptions.phone_fields"
 						option-label="label"
 						option-value="value"
-						filter
-						fluid
-						:loading="loadingOptions"
+						:disabled="loadingOptions"
 						placeholder="Field that contains the WhatsApp number"
 					/>
 				</label>
 				<label>
 					<span>Display name field</span>
-					<Select
+					<LinkField
 						v-model="form.display_name_field"
 						:options="fieldOptions.fields"
 						option-label="label"
 						option-value="value"
-						show-clear
-						filter
-						fluid
+						:show-clear="true"
 						placeholder="Use document name"
 					/>
 				</label>
 				<label>
 					<span>Contact type field</span>
-					<Select
+					<LinkField
 						v-model="form.entity_type_field"
 						:options="fieldOptions.fields"
 						option-label="label"
 						option-value="value"
-						show-clear
-						filter
-						fluid
+						:show-clear="true"
 						placeholder="Optional"
 					/>
 				</label>

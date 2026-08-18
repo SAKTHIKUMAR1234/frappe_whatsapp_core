@@ -26,7 +26,9 @@
 
 	import AsyncState from '@/components/AsyncState.vue'
 	import CampaignRecipientLedger from '@/features/campaigns/components/CampaignRecipientLedger.vue'
+	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
 	import ContactMultiSelect from '@/features/contacts/components/ContactMultiSelect.vue'
+	import TemplateSelect from '@/features/templates/components/TemplateSelect.vue'
 	import { call, errorMessage } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
@@ -88,11 +90,14 @@
 
 	const approvedTemplates = computed(() =>
 		workspace.value.templates
-			.filter((template) => template.channel === form.value.channel)
+			.filter(
+				(template) =>
+					template.channel === form.value.channel &&
+					template.approval_status === 'APPROVED',
+			)
 			.map((template) => ({
 				...template,
 				label: `${template.template_name} · ${template.language_code}`,
-				disabled: template.approval_status !== 'APPROVED',
 			})),
 	)
 	const expectedAuthorization = computed(() =>
@@ -586,14 +591,12 @@
 				placeholder="campaign.august_follow_up"
 			/>
 			<label id="campaign-channel-label">Channel</label>
-			<Select
+			<ChannelSelect
 				v-model="form.channel"
 				aria-labelledby="campaign-channel-label"
 				:options="channelOptions"
-				option-label="label"
 				option-value="name"
 				placeholder="Select assigned number"
-				fluid
 			/>
 			<label id="campaign-content-type-label">Message type</label>
 			<Select
@@ -607,16 +610,12 @@
 			<label v-if="form.content_type === 'Template'" id="campaign-template-label"
 				>Template</label
 			>
-			<Select
+			<TemplateSelect
 				v-if="form.content_type === 'Template'"
 				v-model="form.template"
 				aria-labelledby="campaign-template-label"
 				:options="approvedTemplates"
-				option-label="label"
-				option-value="name"
-				option-disabled="disabled"
 				placeholder="Select an approved template"
-				fluid
 			/>
 			<label v-else for="campaign-message-text">Message</label>
 			<Textarea

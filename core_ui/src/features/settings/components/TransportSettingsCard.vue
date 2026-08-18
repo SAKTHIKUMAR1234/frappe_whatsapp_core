@@ -4,11 +4,11 @@
 	import InputNumber from 'primevue/inputnumber'
 	import InputText from 'primevue/inputtext'
 	import Password from 'primevue/password'
-	import Select from 'primevue/select'
 	import ToggleSwitch from 'primevue/toggleswitch'
 	import { useToast } from 'primevue/usetoast'
 	import { KeyRound, Plus, RefreshCw, Save, Trash2 } from 'lucide-vue-next'
 
+	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
 	import { call, errorMessage } from '@/services/frappe'
 
 	const props = defineProps({
@@ -279,20 +279,17 @@
 			</div>
 			<div class="account-list">
 				<div v-for="(account, index) in form.accounts" :key="index" class="account-row">
-					<Select
+					<ChannelSelect
 						v-model="account.channel"
 						:options="workspace.channels"
-						option-label="display_name"
 						option-value="name"
 						:disabled="!canManage"
 						placeholder="Local channel"
 					/>
-					<Select
+					<ChannelSelect
 						v-model="account.account_name"
 						:options="hubAccountOptions"
-						option-label="label"
 						option-value="name"
-						filter
 						:disabled="!canManage"
 						placeholder="Hub account"
 					/>

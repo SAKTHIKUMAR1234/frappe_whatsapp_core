@@ -28,7 +28,7 @@ MEDIA_METHOD = "frappe_whatsapp_core.message_media.download_message_media"
 def add_media_url(message) -> None:
 	"""Add a same-origin media URL without resolving Meta media during list reads."""
 	descriptor = media_descriptor(message.get("message_type"), message.get("content"))
-	if not descriptor.get("id"):
+	if not descriptor:
 		return
 	message["media_url"] = (
 		f"/api/method/{MEDIA_METHOD}?message={quote(str(message.get('name') or ''))}"
@@ -48,10 +48,12 @@ def media_descriptor(message_type: str | None, content) -> dict:
 	if not isinstance(candidate, dict):
 		return {}
 	media_id = str(candidate.get("id") or "").strip()
-	if not media_id:
+	local_file_url = _safe_local_file_url(candidate.get("local_file_url"))
+	if not media_id and not local_file_url:
 		return {}
 	return {
 		"id": media_id,
+		"local_file_url": local_file_url,
 		"filename": str(candidate.get("filename") or "").strip(),
 		"mime_type": str(candidate.get("mime_type") or "").strip(),
 	}
@@ -138,6 +140,14 @@ def cache_message_media(message: str):
 				"This message does not contain downloadable media",
 				frappe.ValidationError,
 			)
+		local_file = _referenced_local_file(doc, descriptor)
+		if local_file:
+			return local_file
+		if not descriptor.get("id"):
+			frappe.throw(
+				"The archived media file is no longer available on this site",
+				frappe.DoesNotExistError,
+			)
 		settings = get_settings()
 		result = download_media(
 			settings.get_account_name(doc.channel),
@@ -171,6 +181,45 @@ def _cached_file(message: str):
 		order_by="creation desc",
 	)
 	return frappe.get_doc("File", name) if name else None
+
+
+def _referenced_local_file(message, descriptor: dict):
+	"""Resolve a trusted site-local File retained by the legacy migration.
+
+	The media endpoint already enforces conversation access. We additionally
+	require the File to be attached to this Core message, or the message to carry
+	the migration marker, so arbitrary message JSON cannot expose another local
+	File by guessing its URL.
+	"""
+	file_url = _safe_local_file_url(descriptor.get("local_file_url"))
+	if not file_url:
+		return None
+	content = _json_dict(message.content)
+	filters = {"file_url": file_url, "is_folder": 0}
+	file_rows = frappe.get_all(
+		"File",
+		filters=filters,
+		fields=["name", "attached_to_doctype", "attached_to_name"],
+		order_by="creation desc",
+		limit_page_length=1,
+	)
+	if not file_rows:
+		return None
+	row = file_rows[0]
+	attached_to_message = (
+		row.attached_to_doctype == "WhatsApp Core Message"
+		and row.attached_to_name == message.name
+	)
+	if not attached_to_message and not content.get("legacy_source"):
+		return None
+	return frappe.get_doc("File", row.name)
+
+
+def _safe_local_file_url(value) -> str:
+	value = str(value or "").strip().split("?", 1)[0].split("#", 1)[0]
+	if value.startswith(("/files/", "/private/files/")) and "\\" not in value:
+		return value
+	return ""
 
 
 def _filename(message: str, descriptor: dict) -> str:

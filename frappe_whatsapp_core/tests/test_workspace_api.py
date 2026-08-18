@@ -9,9 +9,12 @@ from frappe.utils import now_datetime
 from frappe_whatsapp_core.conversation_reads import mark_messages_read
 from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS, manifest
 from frappe_whatsapp_core.message_media import (
+	add_media_url,
+	cache_message_media,
 	cache_message_media_batch,
 	download_message_media,
 	enqueue_message_media_cache,
+	media_descriptor,
 )
 from frappe_whatsapp_core.workspace_api import (
 	_outbound_handler,
@@ -423,6 +426,53 @@ class TestWorkspaceAPI(FrappeTestCase):
 		row = next(item for item in page["rows"] if item.name == media.name)
 		self.assertIn("message_media.download_message_media", row.media_url)
 		self.assertIn(media.name, row.media_url)
+
+	def test_archived_local_media_is_exposed_without_a_meta_id(self):
+		message = {
+			"name": "ARCHIVED-MEDIA",
+			"message_type": "image",
+			"content": json.dumps({
+				"legacy_source": "essdee_partners_api",
+				"payload": {"local_file_url": "/private/files/archive.jpg"},
+			}),
+		}
+		add_media_url(message)
+		self.assertIn("message_media.download_message_media", message["media_url"])
+		self.assertEqual(
+			media_descriptor(message["message_type"], message["content"])["local_file_url"],
+			"/private/files/archive.jpg",
+		)
+
+	@patch("frappe_whatsapp_core.message_media.frappe.get_doc")
+	@patch("frappe_whatsapp_core.message_media.frappe.get_all")
+	@patch("frappe_whatsapp_core.message_media._cached_file", return_value=None)
+	@patch("frappe_whatsapp_core.message_media.frappe.db.exists", return_value=True)
+	def test_archived_local_media_reuses_legacy_file_without_calling_meta(
+		self, _exists, _cached_file, get_all, get_doc
+	):
+		message = SimpleNamespace(
+			name="ARCHIVED-MEDIA",
+			message_type="image",
+			content=json.dumps({
+				"legacy_source": "essdee_partners_api",
+				"payload": {"local_file_url": "/private/files/archive.jpg"},
+			}),
+		)
+		file_doc = SimpleNamespace(name="FILE-ARCHIVE")
+		get_doc.side_effect = lambda doctype, name: (
+			message if doctype == "WhatsApp Core Message" else file_doc
+		)
+		get_all.return_value = [
+			SimpleNamespace(
+				name="FILE-ARCHIVE",
+				attached_to_doctype="Legacy WhatsApp Message",
+				attached_to_name="OLD-MESSAGE",
+			)
+		]
+
+		with patch("frappe_whatsapp_core.message_media.download_media") as download_media:
+			self.assertIs(cache_message_media(message.name), file_doc)
+			download_media.assert_not_called()
 
 	@patch("frappe_whatsapp_core.message_media.save_file")
 	@patch("frappe_whatsapp_core.message_media.download_media")

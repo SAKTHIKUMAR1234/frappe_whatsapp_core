@@ -17,6 +17,7 @@
 		ShieldCheck,
 	} from 'lucide-vue-next'
 	import AppDialog from '@/components/AppDialog.vue'
+	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
 	import ContactSelect from '@/features/contacts/components/ContactSelect.vue'
 	import { call, errorMessage } from '@/services/frappe'
 	import { useCallingStore } from '@/stores/calling'
@@ -188,11 +189,9 @@
 				<p>Secure browser audio with the same team access rules as the shared inbox.</p>
 			</div>
 			<div class="heading-actions">
-				<Select
+				<ChannelSelect
 					:model-value="calling.selectedAccount"
 					:options="calling.accounts"
-					option-label="display_name"
-					option-value="account_name"
 					aria-label="WhatsApp account"
 					:disabled="calling.loading || calling.busy"
 					@update:model-value="calling.selectAccount($event)"

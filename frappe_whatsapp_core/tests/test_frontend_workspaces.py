@@ -223,6 +223,12 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		)[0]
 		self.assertIn("batch?.conversation_rows", batch_handler)
 		self.assertIn("upsertConversationRow(row)", batch_handler)
+		self.assertIn("openRealtimeServiceWindow(", batch_handler)
+		self.assertIn("detail.value.outbound.text_allowed = true", inbox)
+		self.assertIn(
+			"detail.value.outbound.text_ready = Boolean(detail.value.outbound.ready)",
+			inbox,
+		)
 		self.assertIn("allowAppend: isCreated", batch_handler)
 		self.assertIn("alreadyLoaded", batch_handler)
 		self.assertNotIn("hydrateConversationRow", batch_handler)
@@ -239,6 +245,52 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		self.assertIn("activeConsumers", realtime)
 		self.assertIn("socket.disconnect()", realtime)
 		self.assertIn("releaseConnection()", realtime)
+
+	def test_new_chat_does_not_require_or_auto_select_a_template(self):
+		inbox = (
+			Path(__file__).resolve().parents[2]
+			/ "core_ui"
+			/ "src"
+			/ "features"
+			/ "inbox"
+			/ "views"
+			/ "InboxView.vue"
+		).read_text()
+		self.assertIn("mode: 'message'", inbox)
+		self.assertIn("newChat.value.mode === 'template' ? newChat.value.template : ''", inbox)
+		self.assertIn("newChat.mode === 'template' && !newChat.template", inbox)
+		self.assertNotIn("Start and queue", inbox)
+
+	def test_reader_tooltip_uses_a_viewport_overlay_and_formatted_identity(self):
+		bubble = (
+			Path(__file__).resolve().parents[2]
+			/ "core_ui"
+			/ "src"
+			/ "features"
+			/ "inbox"
+			/ "components"
+			/ "MessageBubble.vue"
+		).read_text()
+		self.assertIn('<Teleport to="body">', bubble)
+		self.assertIn("formatDateTime(readAt, '')", bubble)
+		self.assertIn("reader-tooltip-overlay", bubble)
+		self.assertNotIn('data-tooltip="readerTooltip(reader)"', bubble)
+		self.assertNotIn(':title="readerTooltip(reader)"', bubble)
+
+	def test_document_references_use_shared_link_components(self):
+		ui_root = Path(__file__).resolve().parents[2] / "core_ui" / "src"
+		inbox = (ui_root / "features/inbox/views/InboxView.vue").read_text()
+		template_send = (
+			ui_root / "features/templates/components/TemplateSendDialog.vue"
+		).read_text()
+		contact_sources = (
+			ui_root / "features/settings/components/ContactSourcesCard.vue"
+		).read_text()
+		self.assertIn("<ChannelSelect", inbox)
+		self.assertIn("<TemplateSelect", inbox)
+		self.assertIn("<TemplateSelect", template_send)
+		self.assertIn("<LinkField", contact_sources)
+		self.assertIn("@/components/form/LinkField.vue", contact_sources)
 
 	def test_ai_summary_settings_require_a_frappe_tools_action(self):
 		with self.assertRaises(frappe.ValidationError):

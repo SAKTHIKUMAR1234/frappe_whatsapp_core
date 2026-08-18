@@ -10,6 +10,7 @@
 	import { MessageSquarePlus, ArrowDown, Search, ShieldAlert, X } from 'lucide-vue-next'
 
 	import ConversationHeader from '@/features/inbox/components/ConversationHeader.vue'
+	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
 	import ConversationContext from '@/features/inbox/components/ConversationContext.vue'
 	import ContactMessageEditor from '@/features/inbox/components/ContactMessageEditor.vue'
 	import ConversationList from '@/features/inbox/components/ConversationList.vue'
@@ -21,6 +22,7 @@
 	import MessageStreamViewport from '@/features/inbox/components/MessageStreamViewport.vue'
 	import ContactSelect from '@/features/contacts/components/ContactSelect.vue'
 	import TemplateSendDialog from '@/features/templates/components/TemplateSendDialog.vue'
+	import TemplateSelect from '@/features/templates/components/TemplateSelect.vue'
 	import { call, errorMessage, uploadFile } from '@/services/frappe'
 	import { subscribe, subscribeConnection } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
@@ -122,13 +124,26 @@
 	const selectedTemplate = ref('')
 	const settings = ref({ channels: [] })
 	const newChatContacts = ref([])
+	const newConversationModes = [
+		{ label: 'Open chat', value: 'message' },
+		{ label: 'Start with template', value: 'template' },
+	]
 	const newChat = ref({
 		channel: '',
 		identity: '',
 		phone_number: '',
 		display_name: '',
+		mode: 'message',
 		template: '',
 	})
+	const openingTemplates = computed(() =>
+		catalog.value.templates.filter(
+			(template) =>
+				template.channel === newChat.value.channel &&
+				template.enabled &&
+				template.approval_status === 'APPROVED',
+		),
+	)
 	const unsubscribers = []
 	let listRequest = 0
 	let detailRequest = 0
@@ -1247,7 +1262,7 @@
 	async function startConversation() {
 		starting.value = true
 		try {
-			const openingTemplate = newChat.value.template
+			const openingTemplate = newChat.value.mode === 'template' ? newChat.value.template : ''
 			const started = await call('frappe_whatsapp_core.outbound.start_conversation', {
 				channel: newChat.value.channel,
 				identity: newChat.value.identity || null,
@@ -1260,13 +1275,16 @@
 				identity: '',
 				phone_number: '',
 				display_name: '',
+				mode: 'message',
 				template: '',
 			}
 			await loadRows()
 			selectConversation(started.conversation)
-			await nextTick()
-			selectedTemplate.value = openingTemplate
-			templateDialog.value = true
+			if (openingTemplate) {
+				await nextTick()
+				selectedTemplate.value = openingTemplate
+				templateDialog.value = true
+			}
 		} catch (error) {
 			toast.add({
 				severity: 'error',
@@ -1289,7 +1307,8 @@
 			settings.value = { channels: options.channels || [] }
 			newChatContacts.value = options.contacts || []
 			newChat.value.channel = options.channels?.[0]?.name || ''
-			syncNewChatTemplate()
+			newChat.value.mode = 'message'
+			newChat.value.template = ''
 			newDialog.value = true
 		} catch (error) {
 			toast.add({
@@ -1302,13 +1321,26 @@
 	}
 
 	function syncNewChatTemplate() {
-		newChat.value.template =
-			catalog.value.templates.find(
-				(template) =>
-					template.channel === newChat.value.channel &&
-					template.enabled &&
-					template.approval_status === 'APPROVED',
-			)?.name || ''
+		if (!openingTemplates.value.some((template) => template.name === newChat.value.template))
+			newChat.value.template = ''
+	}
+
+	function openRealtimeServiceWindow(message, conversationRow = null) {
+		if (
+			message?.direction !== 'Inbound' ||
+			message?.conversation !== selectedName.value ||
+			!detail.value?.outbound
+		)
+			return
+		const inboundAt =
+			conversationRow?.last_inbound_at ||
+			message.provider_timestamp ||
+			message.creation ||
+			detail.value.conversation?.last_inbound_at
+		if (detail.value.conversation && inboundAt)
+			detail.value.conversation.last_inbound_at = inboundAt
+		detail.value.outbound.text_allowed = true
+		detail.value.outbound.text_ready = Boolean(detail.value.outbound.ready)
 	}
 
 	function appendMessage(event) {
@@ -1327,6 +1359,7 @@
 		if (event.conversation === selectedName.value && detail.value) {
 			const shouldStickToBottom = atMessageBottom.value
 			reconcileMessage(event.message)
+			openRealtimeServiceWindow(event.message, authoritativeRow)
 			if (shouldStickToBottom) scrollToBottom().then(queueVisibleMessages)
 			else if (event.message.direction === 'Inbound') hasUnseenMessages.value = true
 		}
@@ -1528,6 +1561,11 @@
 							mergeCommittedMessage(message, { allowAppend: isCreated })
 							selectedChanged = true
 						}
+						if (isCreated && message.direction === 'Inbound')
+							openRealtimeServiceWindow(
+								message,
+								conversationRowsByName.get(message.conversation),
+							)
 						if (isCreated && message.direction === 'Inbound')
 							latestSelectedInbound = message
 					}
@@ -2062,11 +2100,10 @@
 		>
 			<div class="dialog-form">
 				<label
-					>Channel<Select
+					>Channel<ChannelSelect
 						v-model="newChat.channel"
 						aria-label="WhatsApp channel"
 						:options="settings.channels.filter((item) => item.enabled)"
-						option-label="display_name"
 						option-value="name"
 						@change="syncNewChatTemplate"
 				/></label>
@@ -2086,29 +2123,32 @@
 					>Display name<InputText v-model="newChat.display_name" placeholder="Optional"
 				/></label>
 				<label
-					>Approved opening template<Select
-						v-model="newChat.template"
-						:options="
-							catalog.templates.filter(
-								(item) =>
-									item.channel === newChat.channel &&
-									item.enabled &&
-									item.approval_status === 'APPROVED',
-							)
-						"
-						option-label="template_name"
-						option-value="name"
+					>Start with<Select
+						v-model="newChat.mode"
+						aria-label="Conversation opening method"
+						:options="newConversationModes"
+						option-label="label"
+						option-value="value"
 				/></label>
+				<label v-if="newChat.mode === 'template'"
+					>Approved opening template<TemplateSelect
+						v-model="newChat.template"
+						:options="openingTemplates"
+				/></label>
+				<small v-else>
+					The chat opens directly. WhatsApp permits free-form messages while the 24-hour
+					customer service window is open.
+				</small>
 			</div>
 			<template #footer>
 				<Button label="Cancel" text @click="newDialog = false" />
 				<Button
-					label="Start and queue"
+					:label="newChat.mode === 'template' ? 'Start with template' : 'Open chat'"
 					:loading="starting"
 					:disabled="
 						!newChat.channel ||
 						(!newChat.identity && !newChat.phone_number.trim()) ||
-						!newChat.template
+						(newChat.mode === 'template' && !newChat.template)
 					"
 					@click="startConversation"
 				/>

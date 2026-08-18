@@ -1,5 +1,5 @@
 <script setup>
-	import { computed, onBeforeUnmount } from 'vue'
+	import { computed, onBeforeUnmount, ref } from 'vue'
 	import Button from 'primevue/button'
 	import {
 		Check,
@@ -13,7 +13,7 @@
 	import FlowResponseCard from '@/features/flows/components/FlowResponseCard.vue'
 	import TemplateMessageCard from '@/features/inbox/components/TemplateMessageCard.vue'
 	import { flowReplyFromContent } from '@/features/flows/utils/flowResponse'
-	import { formatTime } from '@/utils/datetime'
+	import { formatDateTime, formatTime } from '@/utils/datetime'
 
 	const props = defineProps({
 		message: { type: Object, required: true },
@@ -24,6 +24,7 @@
 	const emit = defineEmits(['reply', 'retry', 'menu', 'quote'])
 	let longPressTimer = null
 	let longPressOrigin = null
+	const readerOverlay = ref(null)
 
 	function openMenu(event) {
 		event.preventDefault()
@@ -187,7 +188,24 @@
 	function readerTooltip(reader) {
 		const label = String(reader.display_name || reader.full_name || 'Team member').trim()
 		const readAt = reader.last_read_at || reader.read_at
-		return `${label || 'Team member'} read up to this message${readAt ? ` at ${readAt}` : ''}`
+		const formatted = formatDateTime(readAt, '')
+		return `${label || 'Team member'} read through this message${formatted ? ` · ${formatted}` : ''}`
+	}
+
+	function showReaderTooltip(event, reader) {
+		const rect = event.currentTarget?.getBoundingClientRect?.()
+		if (!rect) return
+		const showAbove = rect.top > 76
+		readerOverlay.value = {
+			text: readerTooltip(reader),
+			left: Math.max(150, Math.min(window.innerWidth - 150, rect.left + rect.width / 2)),
+			top: showAbove ? rect.top - 8 : rect.bottom + 8,
+			showAbove,
+		}
+	}
+
+	function hideReaderTooltip() {
+		readerOverlay.value = null
 	}
 
 	function fitImage(event) {
@@ -381,16 +399,29 @@
 				v-for="reader in readers"
 				:key="reader.user"
 				class="reader-avatar"
-				:data-tooltip="readerTooltip(reader)"
 				:aria-label="readerTooltip(reader)"
-				:title="readerTooltip(reader)"
 				tabindex="0"
+				@mouseenter="showReaderTooltip($event, reader)"
+				@mouseleave="hideReaderTooltip"
+				@focus="showReaderTooltip($event, reader)"
+				@blur="hideReaderTooltip"
 			>
 				<img v-if="reader.user_image" :src="reader.user_image" alt="" />
 				<em v-else>{{ readerInitials(reader) }}</em>
 			</span>
 		</div>
 	</article>
+	<Teleport to="body">
+		<div
+			v-if="readerOverlay"
+			class="reader-tooltip-overlay"
+			role="tooltip"
+			:class="{ below: !readerOverlay.showAbove }"
+			:style="{ left: `${readerOverlay.left}px`, top: `${readerOverlay.top}px` }"
+		>
+			{{ readerOverlay.text }}
+		</div>
+	</Teleport>
 </template>
 
 <style scoped>
@@ -682,33 +713,26 @@
 		outline: 2px solid color-mix(in srgb, var(--wa-primary) 42%, transparent);
 		outline-offset: 2px;
 	}
-	.message-readers > span::after {
-		position: absolute;
-		right: -6px;
-		bottom: calc(100% + 8px);
+	.reader-tooltip-overlay {
+		position: fixed;
+		z-index: 10050;
 		width: max-content;
-		max-width: min(280px, 72vw);
+		max-width: min(300px, calc(100vw - 24px));
 		padding: 6px 8px;
 		border-radius: 6px;
 		background: var(--wa-text);
 		color: var(--wa-surface);
 		box-shadow: 0 3px 12px rgba(11, 20, 26, 0.22);
-		content: attr(data-tooltip);
 		font-size: 11px;
 		font-style: normal;
 		font-weight: 600;
 		line-height: 1.35;
-		opacity: 0;
 		pointer-events: none;
-		transform: translateY(3px);
-		transition:
-			opacity 120ms ease,
-			transform 120ms ease;
+		transform: translate(-50%, -100%);
+		white-space: normal;
 	}
-	.message-readers > span:hover::after,
-	.message-readers > span:focus-visible::after {
-		opacity: 1;
-		transform: translateY(0);
+	.reader-tooltip-overlay.below {
+		transform: translate(-50%, 0);
 	}
 	.message-readers img {
 		width: 100%;

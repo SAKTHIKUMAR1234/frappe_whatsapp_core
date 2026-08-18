@@ -167,6 +167,7 @@ def request_template_upsert(template=None, template_key=None, submit=True) -> di
 		"error": result.get("error") or "",
 		"action": "submitted" if submit else "saved_draft",
 		"template": projection,
+		"synced_sites": result.get("synced_sites") or [],
 		"approval_status": (remote_template or {}).get("status") or (
 			"IN_REVIEW" if submit else "DRAFT"
 		),

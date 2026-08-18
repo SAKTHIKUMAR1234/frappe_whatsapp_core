@@ -3,11 +3,13 @@
 	import Button from 'primevue/button'
 	import InputText from 'primevue/inputtext'
 	import InputNumber from 'primevue/inputnumber'
+	import LinkField from '@/components/form/LinkField.vue'
 	import MultiLinkField from '@/components/form/MultiLinkField.vue'
 	import Select from 'primevue/select'
 	import Textarea from 'primevue/textarea'
 	import ToggleSwitch from 'primevue/toggleswitch'
 	import { Settings2, Trash2 } from 'lucide-vue-next'
+	import TemplateSelect from '@/features/templates/components/TemplateSelect.vue'
 
 	const props = defineProps({
 		selectedNode: Object,
@@ -114,11 +116,10 @@
 
 			<template v-if="selectedNode.data.type === 'send_template'">
 				<label>Available template</label>
-				<Select
+				<TemplateSelect
 					v-model="selectedNode.data.config.template"
 					:options="templates"
 					placeholder="Select assigned template"
-					fluid
 				/>
 				<label>Language code</label>
 				<InputText v-model="selectedNode.data.config.language" placeholder="en" fluid />
@@ -126,14 +127,12 @@
 
 			<template v-if="selectedNode.data.type === 'send_flow'">
 				<label>Published Meta Flow</label>
-				<Select
+				<LinkField
 					v-model="selectedNode.data.config.flow_id"
 					:options="metaFlowOptions"
 					option-label="label"
 					option-value="value"
-					filter
 					placeholder="Select a Flow"
-					fluid
 				/>
 				<label>Message</label>
 				<Textarea v-model="selectedNode.data.config.message" rows="3" fluid />

@@ -13,6 +13,8 @@
 	import Textarea from 'primevue/textarea'
 	import { useConfirm } from 'primevue/useconfirm'
 	import ContactSelect from '@/features/contacts/components/ContactSelect.vue'
+	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
+	import TemplateSelect from '@/features/templates/components/TemplateSelect.vue'
 	import { MessageCircleMore, Settings2, ShieldCheck, UsersRound } from 'lucide-vue-next'
 	import { call, errorMessage, friendlyMessage, uploadFile } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
@@ -429,13 +431,11 @@
 	<div v-if="notice" class="banner success-banner">{{ notice }}</div>
 	<section class="surface-card panel">
 		<div class="toolbar">
-			<Select
+			<ChannelSelect
 				v-model="account"
 				:options="workspace.accounts"
-				option-label="display_name"
-				option-value="account_name"
 				aria-label="WhatsApp account"
-				@change="load($event.value)"
+				@update:model-value="load($event)"
 			/><Button
 				label="Reload"
 				icon="pi pi-refresh"
@@ -636,12 +636,10 @@
 						/>
 					</label>
 					<label
-						>Approved invite template<Select
+						>Approved invite template<TemplateSelect
 							v-model="invite.template_name"
 							:options="workspace.templates || []"
-							option-label="template_name"
 							option-value="template_name"
-							filter
 							placeholder="Select a synced Meta template"
 					/></label>
 					<label>Language<InputText v-model="invite.language_code" /></label>
@@ -704,12 +702,10 @@
 				/></label>
 				<template v-if="messageType === 'template'">
 					<label
-						>Approved template<Select
+						>Approved template<TemplateSelect
 							v-model="messageTemplate"
 							:options="workspace.templates || []"
-							option-label="template_name"
 							option-value="template_name"
-							filter
 							placeholder="Select a synced Meta template"
 					/></label>
 					<label>Language code<InputText v-model="messageLanguage" /></label>
