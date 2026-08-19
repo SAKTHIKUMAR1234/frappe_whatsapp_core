@@ -1,5 +1,5 @@
 <script setup>
-	import { computed } from 'vue'
+	import { computed, ref, watch } from 'vue'
 	import Button from 'primevue/button'
 	import { FileText, Image, Video } from 'lucide-vue-next'
 
@@ -10,6 +10,8 @@
 		mediaType: { type: String, default: '' },
 	})
 	const headerMedia = computed(() => props.mediaUrl || props.snapshot.header_media || '')
+	const mediaReady = ref(false)
+	const mediaFailed = ref(false)
 	const headerType = computed(() => {
 		const configured = String(props.snapshot.header_type || '').toUpperCase()
 		if (configured) return configured
@@ -28,22 +30,41 @@
 	function isSafeUrl(value) {
 		return /^(https?:\/\/|\/)/i.test(String(value || ''))
 	}
+
+	watch(
+		() => [headerMedia.value, headerType.value],
+		() => {
+			mediaReady.value = false
+			mediaFailed.value = false
+		},
+	)
 </script>
 
 <template>
 	<section class="template-message" aria-label="Template message">
-		<img
-			v-if="headerType === 'IMAGE' && isSafeUrl(headerMedia)"
-			:src="headerMedia"
-			alt="Template header"
-			class="template-media"
-		/>
-		<video
-			v-else-if="headerType === 'VIDEO' && isSafeUrl(headerMedia)"
-			:src="headerMedia"
-			class="template-media"
-			controls
-		/>
+		<div
+			v-if="['IMAGE', 'VIDEO'].includes(headerType) && isSafeUrl(headerMedia)"
+			:class="['template-media-frame', { ready: mediaReady }]"
+		>
+			<div v-if="!mediaReady && !mediaFailed" class="template-media-skeleton" />
+			<span v-if="mediaFailed">Media unavailable</span>
+			<img
+				v-if="headerType === 'IMAGE'"
+				:src="headerMedia"
+				alt="Template header"
+				class="template-media"
+				@load="mediaReady = true"
+				@error="mediaFailed = true"
+			/>
+			<video
+				v-else
+				:src="headerMedia"
+				class="template-media"
+				controls
+				@loadedmetadata="mediaReady = true"
+				@error="mediaFailed = true"
+			/>
+		</div>
 		<a
 			v-else-if="headerType === 'DOCUMENT' && isSafeUrl(headerMedia)"
 			:href="headerMedia"
@@ -90,14 +111,50 @@
 		min-width: min(270px, 62vw);
 		max-width: 420px;
 	}
-	.template-media {
-		display: block;
+	.template-media-frame {
+		position: relative;
+		display: grid;
 		width: calc(100% + 18px);
-		max-height: 260px;
+		aspect-ratio: 16 / 9;
 		margin: -7px -9px 8px;
 		border-radius: 8px 8px 0 0;
-		object-fit: cover;
+		overflow: hidden;
 		background: var(--wa-media-bg);
+	}
+	.template-media {
+		grid-area: 1 / 1;
+		display: block;
+		width: 100%;
+		height: 100%;
+		object-fit: contain;
+		opacity: 0;
+		transition: opacity 140ms ease;
+	}
+	.template-media-frame.ready .template-media {
+		opacity: 1;
+	}
+	.template-media-frame > span {
+		grid-area: 1 / 1;
+		align-self: center;
+		justify-self: center;
+		color: var(--wa-muted);
+		font-size: 12px;
+	}
+	.template-media-skeleton {
+		grid-area: 1 / 1;
+		background: linear-gradient(
+			100deg,
+			color-mix(in srgb, var(--wa-surface) 78%, transparent) 25%,
+			color-mix(in srgb, var(--wa-border) 72%, transparent) 45%,
+			color-mix(in srgb, var(--wa-surface) 78%, transparent) 65%
+		);
+		background-size: 220% 100%;
+		animation: template-media-loading 1.15s ease-in-out infinite;
+	}
+	@keyframes template-media-loading {
+		to {
+			background-position-x: -220%;
+		}
 	}
 	.template-media-placeholder {
 		min-height: 58px;

@@ -1,5 +1,5 @@
 <script setup>
-	import { computed, onBeforeUnmount, ref } from 'vue'
+	import { computed, onBeforeUnmount, ref, watch } from 'vue'
 	import Button from 'primevue/button'
 	import {
 		Check,
@@ -25,6 +25,8 @@
 	let longPressTimer = null
 	let longPressOrigin = null
 	const readerOverlay = ref(null)
+	const mediaReady = ref(false)
+	const mediaFailed = ref(false)
 
 	function openMenu(event) {
 		event.preventDefault()
@@ -98,7 +100,16 @@
 		return /^(https?:\/\/|\/)/i.test(value) ? value : ''
 	})
 	const hasVisualMedia = computed(
-		() => ['image', 'sticker'].includes(props.message.message_type) && Boolean(mediaUrl.value),
+		() =>
+			['image', 'sticker', 'video'].includes(props.message.message_type) &&
+			Boolean(mediaUrl.value),
+	)
+	watch(
+		() => [props.message.name, props.message.message_type, mediaUrl.value],
+		() => {
+			mediaReady.value = false
+			mediaFailed.value = false
+		},
 	)
 	const quotedMessageId = computed(
 		() =>
@@ -208,21 +219,14 @@
 		readerOverlay.value = null
 	}
 
-	function fitImage(event) {
-		const image = event.currentTarget
-		const naturalWidth = Number(image?.naturalWidth || 0)
-		const naturalHeight = Number(image?.naturalHeight || 0)
-		if (!naturalWidth || !naturalHeight) return
-		const mobile = window.matchMedia('(max-width: 760px)').matches
-		const maxWidth = Math.min(360, mobile ? window.innerWidth * 0.82 : 360)
-		const maxHeight = mobile
-			? window.innerHeight * 0.42
-			: Math.min(520, window.innerHeight * 0.6)
-		const scale = Math.min(1, maxWidth / naturalWidth, maxHeight / naturalHeight)
-		image.style.setProperty(
-			'--wa-image-width',
-			`${Math.max(1, Math.round(naturalWidth * scale))}px`,
-		)
+	function markMediaReady() {
+		mediaReady.value = true
+		mediaFailed.value = false
+	}
+
+	function markMediaFailed() {
+		mediaReady.value = false
+		mediaFailed.value = true
 	}
 </script>
 
@@ -276,19 +280,29 @@
 		>
 			{{ message.message_type?.replaceAll('_', ' ') }}
 		</small>
-		<img
-			v-if="['image', 'sticker'].includes(message.message_type) && mediaUrl"
-			:src="mediaUrl"
-			:alt="message.body || message.message_type"
-			class="message-media image"
-			@load="fitImage"
-		/>
-		<video
-			v-else-if="message.message_type === 'video' && mediaUrl"
-			:src="mediaUrl"
-			class="message-media"
-			controls
-		/>
+		<div
+			v-if="hasVisualMedia"
+			:class="['message-media-frame', message.message_type, { ready: mediaReady }]"
+		>
+			<div v-if="!mediaReady && !mediaFailed" class="media-skeleton" aria-hidden="true" />
+			<span v-if="mediaFailed" class="media-failed">Media unavailable</span>
+			<img
+				v-if="['image', 'sticker'].includes(message.message_type)"
+				:src="mediaUrl"
+				:alt="message.body || message.message_type"
+				class="message-media"
+				@load="markMediaReady"
+				@error="markMediaFailed"
+			/>
+			<video
+				v-else
+				:src="mediaUrl"
+				class="message-media"
+				controls
+				@loadedmetadata="markMediaReady"
+				@error="markMediaFailed"
+			/>
+		</div>
 		<audio
 			v-else-if="message.message_type === 'audio' && mediaUrl"
 			:src="mediaUrl"
@@ -583,20 +597,58 @@
 			box-shadow: 0 0 0 4px color-mix(in srgb, var(--wa-success) 30%, transparent);
 		}
 	}
-	.message-media {
-		display: block;
-		width: min(360px, 100%);
-		max-height: min(520px, 60vh);
+	.message-media-frame {
+		position: relative;
+		display: grid;
+		width: min(360px, 68vw);
+		aspect-ratio: 4 / 3;
 		margin-bottom: 7px;
 		border-radius: 9px;
-		object-fit: contain;
+		overflow: hidden;
 		background: var(--wa-media-bg);
 	}
-	.message-media.image {
-		width: min(var(--wa-image-width, 360px), 100%);
-		max-width: min(360px, 100%);
-		height: auto;
+	.message-media-frame.video {
+		aspect-ratio: 16 / 9;
+	}
+	.message-media-frame.sticker {
+		width: min(180px, 44vw);
+		aspect-ratio: 1;
+		background: transparent;
+	}
+	.message-media {
+		grid-area: 1 / 1;
+		display: block;
+		width: 100%;
+		height: 100%;
 		object-fit: contain;
+		opacity: 0;
+		transition: opacity 140ms ease;
+	}
+	.message-media-frame.ready .message-media {
+		opacity: 1;
+	}
+	.media-skeleton {
+		grid-area: 1 / 1;
+		background: linear-gradient(
+			100deg,
+			color-mix(in srgb, var(--wa-surface) 78%, transparent) 25%,
+			color-mix(in srgb, var(--wa-border) 72%, transparent) 45%,
+			color-mix(in srgb, var(--wa-surface) 78%, transparent) 65%
+		);
+		background-size: 220% 100%;
+		animation: media-loading 1.15s ease-in-out infinite;
+	}
+	.media-failed {
+		grid-area: 1 / 1;
+		align-self: center;
+		justify-self: center;
+		color: var(--wa-muted);
+		font-size: 12px;
+	}
+	@keyframes media-loading {
+		to {
+			background-position-x: -220%;
+		}
 	}
 	.message-audio {
 		display: block;
@@ -605,7 +657,9 @@
 	}
 	.message-link,
 	.contact-card {
-		display: block;
+		display: flex;
+		align-items: center;
+		min-height: 38px;
 		margin-bottom: 7px;
 		padding: 8px 9px;
 		border-radius: 8px;
@@ -779,14 +833,8 @@
 			max-width: 91%;
 			padding: 9px 38px 7px 11px;
 		}
-		.message-media {
-			width: 100%;
-			max-width: min(72vw, 360px);
-			max-height: 42vh;
-		}
-		.message-media.image {
-			width: auto;
-			max-width: min(82vw, 360px);
+		.message-media-frame {
+			width: min(82vw, 360px);
 		}
 		.message-audio {
 			width: min(68vw, 310px);
