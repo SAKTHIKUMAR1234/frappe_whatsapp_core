@@ -508,9 +508,14 @@ def _assert_template_account_access(account_name: str) -> None:
 	account_name = str(account_name or "").strip()
 	if not account_name:
 		frappe.throw("Hub account is required", frappe.ValidationError)
-	# Administrator is a local recovery principal; machine callers never receive
-	# this bypass and must match the account-bound service user exactly.
-	if frappe.session.user == "Administrator":
+	# Administrator is the local recovery principal. WhatsApp Manager is the
+	# documented unified transport identity and may project templates for every
+	# account mapped on this Core site. Dedicated template-service identities stay
+	# account-bound below so one machine credential cannot cross tenants.
+	if (
+		frappe.session.user == "Administrator"
+		or "WhatsApp Manager" in set(frappe.get_roles(frappe.session.user))
+	):
 		_account_channel(account_name)
 		return
 	bound = frappe.db.exists(

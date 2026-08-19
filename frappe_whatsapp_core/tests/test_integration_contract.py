@@ -106,6 +106,18 @@ class TestIntegrationCallbackContract(FrappeTestCase):
 					{"status": "applied"},
 				)
 			with patch.object(
+				template_catalog,
+				"sync_template_projection",
+				return_value={"account_name": self.account, "status": "updated"},
+			) as sync_projection:
+				template_result = template_catalog.receive_push(
+					template={
+						"account_name": self.account,
+						"name": "manager_transport_template",
+						"language": "en",
+					}
+				)
+			with patch.object(
 				frontend_api,
 				"_transport_status_payload",
 				return_value={"site": frappe.local.site},
@@ -113,6 +125,8 @@ class TestIntegrationCallbackContract(FrappeTestCase):
 				identity = frontend_api.transport_identity()
 		finally:
 			frappe.local.session.user = original_user
+		self.assertEqual(template_result["account_name"], self.account)
+		sync_projection.assert_called_once()
 		self.assertEqual(identity["capability"], "all")
 		self.assertEqual(identity["allowed_accounts"], [self.account])
 
