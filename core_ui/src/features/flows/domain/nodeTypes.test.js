@@ -49,3 +49,39 @@ test('saved operator positions and labels remain unchanged', () => {
 	assert.deepEqual(hydrated.nodes[0].position, { x: 321, y: 123 })
 	assert.equal(hydrated.nodes[0].data.config.label, 'My action')
 })
+
+test('published flow nodes with identical saved coordinates are laid out again', () => {
+	const graph = {
+		nodes: [
+			{ id: 'start', type: 'start', position: { x: 0, y: 0 }, config: {} },
+			{
+				id: 'collect_description',
+				type: 'ask_input',
+				position: { x: 0, y: 0 },
+				config: {},
+			},
+			{
+				id: 'create_ticket',
+				type: 'action',
+				position: { x: 0, y: 0 },
+				config: {},
+			},
+			{ id: 'end', type: 'end', position: { x: 0, y: 0 }, config: {} },
+		],
+		edges: [
+			{ id: 'e1', source: 'start', target: 'collect_description' },
+			{ id: 'e2', source: 'collect_description', target: 'create_ticket' },
+			{ id: 'e3', source: 'create_ticket', target: 'end' },
+		],
+		triggers: [],
+	}
+
+	const hydrated = hydrateFlowGraph(graph)
+	const coordinates = hydrated.nodes.map(({ position }) => `${position.x}:${position.y}`)
+
+	assert.equal(new Set(coordinates).size, graph.nodes.length)
+	assert.deepEqual(
+		hydrated.nodes.map(({ position }) => position.x),
+		[60, 310, 560, 810],
+	)
+})

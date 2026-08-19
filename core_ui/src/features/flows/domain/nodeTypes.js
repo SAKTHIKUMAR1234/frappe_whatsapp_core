@@ -110,7 +110,7 @@ export function hydrateFlowGraph(graph) {
 		nodes: graph.nodes.map((node) => ({
 			id: node.id,
 			type: 'core',
-			position: node.position || positions.get(node.id) || { x: 0, y: 0 },
+			position: positions.get(node.id) || node.position || { x: 0, y: 0 },
 			data: {
 				type: node.type,
 				config: {
@@ -135,7 +135,7 @@ export function hydrateFlowGraph(graph) {
 }
 
 function flowPositions(nodes, edges) {
-	if (!nodes.length || nodes.every((node) => validPosition(node.position))) {
+	if (!nodes.length || hasCompleteNonOverlappingLayout(nodes)) {
 		return new Map()
 	}
 
@@ -211,6 +211,17 @@ function flowPositions(nodes, edges) {
 		})
 	}
 	return positions
+}
+
+function hasCompleteNonOverlappingLayout(nodes) {
+	const coordinates = new Set()
+	for (const node of nodes) {
+		if (!validPosition(node.position)) return false
+		const coordinate = `${node.position.x}:${node.position.y}`
+		if (coordinates.has(coordinate)) return false
+		coordinates.add(coordinate)
+	}
+	return true
 }
 
 function validPosition(position) {
