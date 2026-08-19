@@ -30,6 +30,7 @@ test('pre-accepts, waits for media, then accepts without resending SDP', async (
 
 test('does not accept a call whose media path never connects', async () => {
 	const requests = []
+	let claimed = false
 	await assert.rejects(
 		acceptIncomingMedia({
 			invoke: async (request) => requests.push(request),
@@ -37,6 +38,9 @@ test('does not accept a call whose media path never connects', async () => {
 			accountName: 'Hub Account',
 			callId: 'CALL-2',
 			answer: { sdp_type: 'answer', sdp: 'v=0' },
+			onClaimed: () => {
+				claimed = true
+			},
 		}),
 		/UDP or TURN access/,
 	)
@@ -44,4 +48,25 @@ test('does not accept a call whose media path never connects', async () => {
 		requests.map((request) => request.action),
 		['pre_accept'],
 	)
+	assert.equal(claimed, true)
+})
+
+test('does not claim a call when another operator won pre-accept', async () => {
+	let claimed = false
+	await assert.rejects(
+		acceptIncomingMedia({
+			invoke: async () => {
+				throw new Error('This call is already being handled by another team member')
+			},
+			rtc: { waitUntilConnected: async () => true },
+			accountName: 'Hub Account',
+			callId: 'CALL-3',
+			answer: { sdp_type: 'answer', sdp: 'v=0' },
+			onClaimed: () => {
+				claimed = true
+			},
+		}),
+		/already being handled/,
+	)
+	assert.equal(claimed, false)
 })

@@ -5,6 +5,7 @@ import {
 	TERMINAL_CALL_STATES,
 	WhatsAppWebRTCSession,
 	isIncomingRinging,
+	nextIncomingCall,
 	normalizedCallStatus,
 	parseCallSession,
 } from './whatsappWebRTC.js'
@@ -40,6 +41,36 @@ test('identifies an actionable inbound offer', () => {
 		}),
 		false,
 	)
+	assert.equal(
+		isIncomingRinging({
+			direction: 'Inbound',
+			status: 'connect',
+			handled_by: 'operator@example.com',
+			session: { sdp_type: 'offer', sdp: 'v=0' },
+		}),
+		false,
+	)
+})
+
+test('exposes the next unclaimed call after a teammate answers another call', () => {
+	const offer = { sdp_type: 'offer', sdp: 'v=0' }
+	const calls = [
+		{
+			call_id: 'CALL-1',
+			direction: 'Inbound',
+			status: 'pre_accept',
+			handled_by: 'first.operator@example.com',
+			session: offer,
+		},
+		{
+			call_id: 'CALL-2',
+			direction: 'Inbound',
+			status: 'connect',
+			session: offer,
+		},
+	]
+
+	assert.equal(nextIncomingCall(calls)?.call_id, 'CALL-2')
 })
 
 test('binds the microphone to the audio transceiver created by the incoming offer', async (t) => {

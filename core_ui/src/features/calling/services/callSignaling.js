@@ -6,6 +6,7 @@ export async function acceptIncomingMedia({
 	answer,
 	timeout = 20000,
 	onPhase = () => {},
+	onClaimed = () => {},
 }) {
 	if (!answer?.sdp || answer.sdp_type !== 'answer') {
 		throw new Error('The secure audio answer could not be prepared.')
@@ -18,6 +19,7 @@ export async function acceptIncomingMedia({
 		sdp_type: answer.sdp_type,
 		sdp: answer.sdp,
 	})
+	onClaimed()
 	onPhase('connecting')
 	if (!(await rtc.waitUntilConnected(timeout))) {
 		throw new Error(

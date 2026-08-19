@@ -41,9 +41,16 @@ export function parseCallSession(value) {
 export function isIncomingRinging(call) {
 	const session = parseCallSession(call?.session)
 	return (
+		!String(call?.handled_by || '').trim() &&
 		String(call?.direction || '').toLowerCase() === 'inbound' &&
 		['connect', 'ringing', 'received'].includes(normalizedCallStatus(call?.status)) &&
 		session?.type === 'offer'
+	)
+}
+
+export function nextIncomingCall(calls, activeCallId = '') {
+	return (Array.isArray(calls) ? calls : []).find(
+		(call) => isIncomingRinging(call) && call.call_id !== activeCallId,
 	)
 }
 

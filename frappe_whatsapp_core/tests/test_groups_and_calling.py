@@ -6,6 +6,7 @@ from frappe.tests.utils import FrappeTestCase
 
 from frappe_whatsapp_core.calling import (
 	_rtc_configuration,
+	_claim_call,
 	call_action as core_call_action,
 	call_history,
 	calling_workspace,
@@ -506,8 +507,57 @@ class TestGroupsAndCalling(FrappeTestCase):
 			frappe.db.get_value("WhatsApp Core Call", call.name, "status"),
 			"reject",
 		)
+		self.assertEqual(
+			frappe.db.get_value("WhatsApp Core Call", call.name, "handled_by"),
+			"Administrator",
+		)
 		publish.assert_called_once_with([call.name])
 		relay.assert_called_once()
+
+	def test_call_claims_are_exclusive_per_call_not_global(self):
+		channel = get_or_create_channel("CALL-CLAIM-PHONE", "CALL-CLAIM-WABA")
+		identity = get_or_create_identity("919876543213", resolve=False)
+		conversation = frappe.get_doc({
+			"doctype": "WhatsApp Core Conversation",
+			"conversation_key": "CALL-CLAIM-CONVERSATION",
+			"channel": channel.name,
+			"remote_identity": identity.name,
+			"status": "Open",
+			"last_message_at": frappe.utils.now_datetime(),
+		}).insert(ignore_permissions=True)
+
+		def create_call(call_id):
+			return frappe.get_doc({
+				"doctype": "WhatsApp Core Call",
+				"call_id": call_id,
+				"channel": channel.name,
+				"conversation": conversation.name,
+				"remote_identity": identity.name,
+				"direction": "Inbound",
+				"status": "connect",
+				"session": {"sdp_type": "offer", "sdp": "v=0"},
+				"last_event": {"event": "connect"},
+			}).insert(ignore_permissions=True)
+
+		first = create_call("CALL-CLAIM-FIRST")
+		second = create_call("CALL-CLAIM-SECOND")
+		frappe.db.set_value(
+			"WhatsApp Core Call", first.name, "handled_by", "Guest",
+			update_modified=False,
+		)
+
+		with self.assertRaises(frappe.PermissionError):
+			_claim_call(first.call_id)
+		_claim_call(second.call_id)
+
+		self.assertEqual(
+			frappe.db.get_value("WhatsApp Core Call", first.name, "handled_by"),
+			"Guest",
+		)
+		self.assertEqual(
+			frappe.db.get_value("WhatsApp Core Call", second.name, "handled_by"),
+			"Administrator",
+		)
 
 	def test_group_webhooks_project_members_and_participant_receipts(self):
 		channel = get_or_create_channel("GROUP-PHONE", "GROUP-WABA")

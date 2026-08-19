@@ -6,7 +6,7 @@ import { acceptIncomingMedia } from '@/features/calling/services/callSignaling'
 import {
 	TERMINAL_CALL_STATES,
 	WhatsAppWebRTCSession,
-	isIncomingRinging,
+	nextIncomingCall,
 	normalizedCallStatus,
 	parseCallSession,
 } from '@/features/calling/services/whatsappWebRTC'
@@ -59,12 +59,7 @@ export const useCallingStore = defineStore('core-calling', () => {
 	const callingEnabled = computed(() => Boolean(workspace.value.calling?.enabled))
 	const canManage = computed(() => Boolean(workspace.value.can_manage))
 	const incoming = computed(() =>
-		calls.value.find(
-			(item) =>
-				isIncomingRinging(item) &&
-				(!item.handled_by || item.handled_by === currentUser) &&
-				item.call_id !== active.value?.call_id,
-		),
+		nextIncomingCall(calls.value, active.value?.call_id),
 	)
 	const busy = computed(() => Boolean(active.value))
 
@@ -262,6 +257,7 @@ export const useCallingStore = defineStore('core-calling', () => {
 			phase: 'answering',
 			account_name: accountForChannel(item.channel),
 		}
+		let claimed = false
 		try {
 			const answer = await createRtc().prepareIncoming(item.session)
 			await acceptIncomingMedia({
@@ -270,6 +266,9 @@ export const useCallingStore = defineStore('core-calling', () => {
 				accountName: active.value.account_name,
 				callId: item.call_id,
 				answer,
+				onClaimed: () => {
+					claimed = true
+				},
 				onPhase: (phase) => {
 					if (active.value?.call_id === item.call_id)
 						active.value = { ...active.value, phase }
@@ -277,14 +276,17 @@ export const useCallingStore = defineStore('core-calling', () => {
 			})
 			active.value = { ...active.value, phase: 'connected', handled_by: currentUser }
 		} catch (exception) {
-			try {
-				await call('frappe_whatsapp_core.calling.call_action', {
-					account_name: active.value?.account_name || accountForChannel(item.channel),
-					action: 'terminate',
-					call_id: item.call_id,
-				})
-			} catch {
-				// Meta may already have closed a failed negotiation.
+			if (claimed) {
+				try {
+					await call('frappe_whatsapp_core.calling.call_action', {
+						account_name:
+							active.value?.account_name || accountForChannel(item.channel),
+						action: 'terminate',
+						call_id: item.call_id,
+					})
+				} catch {
+					// Meta may already have closed a failed negotiation.
+				}
 			}
 			finishCall()
 			error.value = errorMessage(exception, 'The incoming call could not be answered.')

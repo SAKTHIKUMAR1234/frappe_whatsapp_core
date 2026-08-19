@@ -777,8 +777,11 @@ def call_action(
 			frappe.throw("call_id is required", frappe.ValidationError)
 		assert_call_access(call_id)
 		_assert_call_account(call_id, resolved_account)
-		if action in {"pre_accept", "accept"}:
-			_claim_call(call_id)
+		# Every provider-side action belongs to the operator who won this call's
+		# row lock. A stale decline/hang-up from another ringing browser must never
+		# terminate a call already answered by a teammate. The claim is per call,
+		# so a different simultaneous call remains available to another operator.
+		_claim_call(call_id)
 		payload["call_id"] = call_id
 	if action in {"connect", "pre_accept"}:
 		if sdp_type not in {"offer", "answer"} or not sdp:
