@@ -254,7 +254,7 @@ def resume_flow(
 			input_record["message"] = answer["message"]
 		context.setdefault("inputs", {})[answer_key] = input_record
 		context["last_input"] = input_record
-		if input_type == "attachment":
+		if input_type in {"attachment", "content"} and isinstance(normalized, dict):
 			context.setdefault("attachments", []).append(normalized)
 	else:
 		context.setdefault("events", {})[event_key] = answer
@@ -479,6 +479,21 @@ def _validate_answer(node: dict[str, Any], answer: Any) -> tuple[bool, Any, str 
 	input_type = _input_type(node)
 	if input_type == "attachment":
 		return _validate_attachment_answer(config, answer)
+	if input_type == "content":
+		if _is_attachment_answer(answer):
+			return _validate_attachment_answer(config, answer)
+		value = str(_answer_value(answer) or "").strip()
+		if not value:
+			return (
+				False,
+				value,
+				config.get("validation_message")
+				or "Please send a message or attachment.",
+			)
+		max_length = int(config.get("max_length", 4096))
+		if len(value) > max_length:
+			return False, value, config.get("validation_message") or "That reply is too long."
+		return True, value, None
 	value = _answer_value(answer)
 	if input_type == "number":
 		try:
@@ -618,6 +633,14 @@ def _validate_attachment_answer(
 		"file": file_doc.name,
 		"file_url": file_doc.file_url,
 	}, None
+
+
+def _is_attachment_answer(answer: Any) -> bool:
+	if not isinstance(answer, dict):
+		return False
+	media = answer.get("media")
+	message_type = str(answer.get("type") or answer.get("message_type") or "").lower()
+	return isinstance(media, dict) and bool(media.get("id")) and message_type in ATTACHMENT_TYPES
 
 
 def _execute_action(

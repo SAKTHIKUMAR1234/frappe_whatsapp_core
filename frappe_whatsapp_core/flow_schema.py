@@ -32,8 +32,16 @@ TRIGGER_TYPES = {
 }
 
 QUESTION_TYPES = {"ask_text", "ask_choice", "ask_input"}
-INPUT_TYPES = {"text", "number", "radio", "select", "multi_select", "attachment"}
-ATTACHMENT_TYPES = {"audio", "document", "image", "video"}
+INPUT_TYPES = {
+	"text",
+	"number",
+	"radio",
+	"select",
+	"multi_select",
+	"attachment",
+	"content",
+}
+ATTACHMENT_TYPES = {"audio", "document", "image", "sticker", "video"}
 TERMINAL_TYPES = {"end", "human_handoff"}
 MAX_NODES = 250
 MAX_EDGES = 750
@@ -250,7 +258,7 @@ def _validate_node_config(node: dict[str, Any], errors: list[str]) -> None:
 			and config["minimum"] > config["maximum"]
 		):
 			errors.append(f"Node {node_id} minimum cannot exceed maximum")
-	if node_type == "ask_input" and input_type == "attachment":
+	if node_type == "ask_input" and input_type in {"attachment", "content"}:
 		accepted = config.get("accepted_media_types") or sorted(ATTACHMENT_TYPES)
 		if not isinstance(accepted, list) or not accepted:
 			errors.append(f"Node {node_id} requires accepted media types")
@@ -390,12 +398,12 @@ def _validate_cycles(
 		)
 		if has_cycle and not any(
 			isinstance(edge.get("max_traversals"), int)
-			and 1 <= edge["max_traversals"] <= 10
+			and 1 <= edge["max_traversals"] <= 100
 			for edge in internal_edges
 		):
 			errors.append(
 				f"Cycle containing {', '.join(sorted(component))} requires one edge "
-				"with max_traversals between 1 and 10"
+				"with max_traversals between 1 and 100"
 			)
 
 	for node_id in node_ids:

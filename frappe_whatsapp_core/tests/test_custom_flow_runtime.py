@@ -116,6 +116,40 @@ def appointment_graph(command="/appointment"):
 
 
 class TestCustomFlowRuntime(FrappeTestCase):
+	def test_content_input_accepts_text_buttons_and_cached_media(self):
+		node = {
+			"type": "ask_input",
+			"config": {
+				"input_type": "content",
+				"accepted_media_types": ["image", "document", "audio", "sticker"],
+			},
+		}
+		self.assertEqual(_validate_answer(node, "Machine stopped"), (True, "Machine stopped", None))
+		self.assertEqual(
+			_validate_answer(node, {"button_id": "finalize"}),
+			(True, "finalize", None),
+		)
+
+		with patch(
+			"frappe_whatsapp_core.message_media.cache_message_media",
+			return_value=frappe._dict(
+				name="FILE-CONTENT",
+				file_name="photo.jpg",
+				file_url="/private/files/photo.jpg",
+				content_type="image/jpeg",
+			),
+		):
+			ok, value, error = _validate_answer(node, {
+				"type": "image",
+				"message": "MSG-CONTENT",
+				"body": "Control panel",
+				"media": {"id": "MEDIA-CONTENT", "filename": "photo.jpg"},
+			})
+		self.assertTrue(ok)
+		self.assertIsNone(error)
+		self.assertEqual(value["file"], "FILE-CONTENT")
+		self.assertEqual(value["caption"], "Control panel")
+
 	def test_multi_select_accepts_numbers_labels_values_and_deduplicates(self):
 		node = {
 			"type": "ask_input",

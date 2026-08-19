@@ -97,6 +97,7 @@ class TestFlowSchema(unittest.TestCase):
 			("select", {"options_from": {"var": "actions.catalog.options"}}),
 			("multi_select", {"options": ["Gym Vest", "Innerwear"]}),
 			("attachment", {"accepted_media_types": ["image", "document", "audio"]}),
+			("content", {"accepted_media_types": ["image", "document", "audio", "sticker"]}),
 		):
 			graph = valid_graph()
 			graph["nodes"][1] = {

@@ -67,8 +67,9 @@
 		{ label: 'Select list', value: 'select' },
 		{ label: 'Multiple selections', value: 'multi_select' },
 		{ label: 'Attachment', value: 'attachment' },
+		{ label: 'Message or attachment', value: 'content' },
 	]
-	const mediaTypes = ['image', 'document', 'audio', 'video']
+	const mediaTypes = ['image', 'document', 'audio', 'video', 'sticker']
 	const isChoiceInput = computed(
 		() =>
 			['ask_choice'].includes(props.selectedNode?.data?.type) ||
@@ -245,7 +246,7 @@
 			<template
 				v-if="
 					selectedNode.data.type === 'ask_input' &&
-					selectedNode.data.config.input_type === 'attachment'
+					['attachment', 'content'].includes(selectedNode.data.config.input_type)
 				"
 			>
 				<label>Accepted attachments</label>
@@ -257,7 +258,8 @@
 				/>
 				<p class="field-note">
 					The inbound file is stored as a private Frappe File before the next action
-					runs.
+					runs. Message-or-attachment inputs can also show action buttons while
+					accepting free text and media.
 				</p>
 			</template>
 

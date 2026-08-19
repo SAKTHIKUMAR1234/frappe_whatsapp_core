@@ -210,6 +210,10 @@ def _dispatch_commands(
 			command_type == "ask_input"
 			and command.get("input_type", "text")
 			in {"text", "number", "multi_select", "attachment"}
+		) or (
+			command_type == "ask_input"
+			and command.get("input_type") == "content"
+			and not command.get("options")
 		):
 			message = queue_text_internal(
 				conversation,
