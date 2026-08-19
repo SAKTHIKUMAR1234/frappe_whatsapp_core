@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlsplit
 import frappe
 from frappe.utils import now_datetime
 
+from frappe_whatsapp_core.identity import normalize_phone
 from frappe_whatsapp_core.materializer import (
 	get_or_create_channel,
 	get_or_create_conversation,
@@ -37,7 +38,12 @@ def legacy_source_plan(config: dict) -> dict:
 		limit_page_length=100000,
 	)
 	configured_channels, using_core_fallback = _resolved_channel_sources(config)
-	eligible_contacts = sum(bool(str(phone or "").strip()) for phone in phones)
+	normalized_phones = [_legacy_phone(phone) for phone in phones]
+	eligible_contacts = sum(bool(phone) for phone in normalized_phones)
+	invalid_contacts = sum(
+		bool(str(raw or "").strip()) and not normalized
+		for raw, normalized in zip(phones, normalized_phones, strict=False)
+	)
 	blockers = []
 	warnings = []
 	if not configured_channels:
@@ -48,6 +54,10 @@ def legacy_source_plan(config: dict) -> dict:
 		)
 	if not eligible_contacts:
 		warnings.append("No legacy contacts contain a usable phone number")
+	if invalid_contacts:
+		warnings.append(
+			f"{invalid_contacts} legacy contact(s) have malformed phone numbers and will be skipped"
+		)
 	legacy_marker = f"%{config['source_key']}%"
 	template_source = config.get("template") or {}
 	campaign_source = config.get("campaign") or {}
@@ -79,6 +89,7 @@ def legacy_source_plan(config: dict) -> dict:
 		"source_channels": len(configured_channels),
 		"source_contacts": len(phones),
 		"eligible_contacts": eligible_contacts,
+		"invalid_contacts": invalid_contacts,
 		"source_messages": source_messages,
 		"source_media_files": source_media_files,
 		"source_templates": source_templates,
@@ -146,6 +157,7 @@ def migrate_legacy_source(
 		"source": config["source_key"],
 		"channels": len(channels),
 		"contacts": contact_result["contacts"],
+		"contacts_skipped_invalid": contact_result["contacts_skipped_invalid"],
 		"conversations": len(set(contact_result["conversation_map"].values())),
 		"party_bindings": contact_result["party_bindings"],
 		"conversations_refreshed": refresh_conversation_activity(),
@@ -414,9 +426,13 @@ def _migrate_contacts(config: dict, channels: dict[str, object]) -> dict:
 	conversation_map = {}
 	bindings = 0
 	contact_count = 0
+	contacts_skipped_invalid = 0
 	for row in rows:
-		phone = row.get(source["phone_field"])
-		if not str(phone or "").strip():
+		raw_phone = row.get(source["phone_field"])
+		phone = _legacy_phone(raw_phone)
+		if not phone:
+			if str(raw_phone or "").strip():
+				contacts_skipped_invalid += 1
 			continue
 		contact_count += 1
 		identity = get_or_create_identity(phone)
@@ -455,6 +471,7 @@ def _migrate_contacts(config: dict, channels: dict[str, object]) -> dict:
 			conversation_map[(mapped_account, row.name)] = conversation.name
 	return {
 		"contacts": contact_count,
+		"contacts_skipped_invalid": contacts_skipped_invalid,
 		"party_bindings": bindings,
 		"conversation_map": conversation_map,
 	}
@@ -1509,11 +1526,17 @@ def _message_conversation(source, row, channel):
 	phone_field = (
 		source.get("inbound_phone_field") if direction == "Inbound" else source.get("outbound_phone_field")
 	)
-	phone = row.get(phone_field) if phone_field else None
-	if not str(phone or "").strip():
+	phone = _legacy_phone(row.get(phone_field) if phone_field else None)
+	if not phone:
 		return None
 	identity = get_or_create_identity(phone)
 	return get_or_create_conversation(channel, identity).name
+
+
+def _legacy_phone(value) -> str:
+	"""Normalize a legacy phone without letting one bad row abort an import."""
+	normalized = normalize_phone(value)
+	return normalized if 7 <= len(normalized) <= 15 else ""
 
 
 def _row_account(source, row, channels) -> str:

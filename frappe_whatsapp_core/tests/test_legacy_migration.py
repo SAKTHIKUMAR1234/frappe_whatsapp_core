@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
@@ -9,11 +9,14 @@ from frappe_whatsapp_core.legacy_migration import (
 	_delivery_status,
 	_direction,
 	_legacy_contact_display_value,
-	_migrate_channels,
 	_legacy_key,
 	_legacy_message_content,
+	_legacy_phone,
 	_local_media_url,
 	_media_reference_result,
+	_message_conversation,
+	_migrate_channels,
+	_migrate_contacts,
 	_migration_reconciliation,
 	_percent_value,
 	_provider_id,
@@ -310,13 +313,14 @@ class TestLegacyMigrationContract(FrappeTestCase):
 			},
 		}
 		validate.return_value = config
-		get_all.return_value = ["919000000000", "", None]
+		get_all.return_value = ["919000000000", "not-a-number", "", None]
 		count.side_effect = [25, 4, 3, 40, 6, 70, 20]
 
 		plan = legacy_source_plan(config)
 
-		self.assertEqual(plan["source_contacts"], 3)
+		self.assertEqual(plan["source_contacts"], 4)
 		self.assertEqual(plan["eligible_contacts"], 1)
+		self.assertEqual(plan["invalid_contacts"], 1)
 		self.assertEqual(plan["source_messages"], 25)
 		self.assertEqual(plan["source_media_files"], 0)
 		self.assertEqual(plan["source_templates"], 4)
@@ -332,6 +336,65 @@ class TestLegacyMigrationContract(FrappeTestCase):
 		self.assertTrue(plan["source_is_read_only"])
 		self.assertTrue(plan["rerun_safe"])
 		self.assertIn("read markers", " ".join(plan["warnings"]))
+		self.assertIn("malformed phone", " ".join(plan["warnings"]))
+
+	def test_legacy_phone_rejects_malformed_nonempty_values(self):
+		self.assertEqual(_legacy_phone("+91 90000 00000"), "919000000000")
+		self.assertEqual(_legacy_phone("not-available"), "")
+		self.assertEqual(_legacy_phone("123"), "")
+
+	@patch("frappe_whatsapp_core.legacy_migration._legacy_contact_display_value")
+	@patch("frappe_whatsapp_core.legacy_migration._migrate_party_binding", return_value=0)
+	@patch("frappe_whatsapp_core.legacy_migration.get_or_create_conversation")
+	@patch("frappe_whatsapp_core.legacy_migration.get_or_create_identity")
+	@patch("frappe_whatsapp_core.legacy_migration.frappe.get_all")
+	@patch("frappe_whatsapp_core.legacy_migration._source_fields", return_value=["name", "phone"])
+	def test_contact_migration_skips_one_bad_phone_without_aborting(
+		self,
+		_source_fields,
+		get_all,
+		get_identity,
+		get_conversation,
+		_party_binding,
+		_display_value,
+	):
+		get_all.return_value = [
+			frappe._dict(name="GOOD", phone="+91 90000 00000"),
+			frappe._dict(name="BAD", phone="not-available"),
+		]
+		identity = frappe._dict(name="IDENTITY", attributes="{}", save=Mock())
+		get_identity.return_value = identity
+		get_conversation.return_value = frappe._dict(name="CONVERSATION")
+		_display_value.return_value = "Member"
+
+		result = _migrate_contacts(
+			{
+				"source_key": "test",
+				"contact": {
+					"doctype": "Legacy Contact",
+					"phone_field": "phone",
+					"default_account": "default",
+				},
+			},
+			{"default": frappe._dict(name="CHANNEL")},
+		)
+
+		self.assertEqual(result["contacts"], 1)
+		self.assertEqual(result["contacts_skipped_invalid"], 1)
+		get_identity.assert_called_once_with("919000000000")
+
+	@patch("frappe_whatsapp_core.legacy_migration.get_or_create_conversation")
+	@patch("frappe_whatsapp_core.legacy_migration.get_or_create_identity")
+	def test_direct_message_with_bad_phone_is_skipped(self, get_identity, get_conversation):
+		result = _message_conversation(
+			{"direction_field": "direction", "inbound_phone_field": "phone"},
+			frappe._dict(direction="Inbound", phone="not-available"),
+			frappe._dict(name="CHANNEL"),
+		)
+
+		self.assertIsNone(result)
+		get_identity.assert_not_called()
+		get_conversation.assert_not_called()
 
 	@patch("frappe_whatsapp_core.legacy_migration._validated_config")
 	@patch("frappe_whatsapp_core.legacy_migration._resolved_channel_sources", return_value=([], False))
