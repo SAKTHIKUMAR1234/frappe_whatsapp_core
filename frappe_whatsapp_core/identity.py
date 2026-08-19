@@ -714,9 +714,23 @@ def contact_options(
 		if link_names
 		else {}
 	)
+	phone_aliases = {
+		row.identity: row.alias_value
+		for row in frappe.get_all(
+			"WhatsApp Core Identity Alias",
+			filters={
+				"identity": ["in", [identity.name for identity in identities]],
+				"alias_type": "Phone",
+			},
+			fields=["identity", "alias_value"],
+			order_by="modified asc",
+			limit_page_length=max(1, len(identities) * 2),
+		)
+	} if identities else {}
 	presentations = present_contacts(
 		identities,
 		primary_links=links,
+		phone_aliases=phone_aliases,
 		context={"surface": "contact_options"},
 	)
 	options = []
@@ -725,8 +739,12 @@ def contact_options(
 		options.append(
 			{
 				"identity": row.name,
-				"phone_number": row.normalized_value,
-				"label": presentation.get("display_name") or row.normalized_value,
+				"phone_number": presentation.get("secondary_text") or "",
+				"label": (
+					presentation.get("display_name")
+					or row.display_value
+					or "WhatsApp contact"
+				),
 				"reference": presentation.get("reference") or "WhatsApp contact",
 				"presentation": presentation,
 			}

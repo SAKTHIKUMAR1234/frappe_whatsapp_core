@@ -19,7 +19,7 @@
 		return (contacts || []).map((contact) => ({
 			...contact,
 			label: contact.label || contact.display_value || contact.identity,
-			description: contact.phone_number || contact.normalized_value || '',
+			description: contact.phone_number || '',
 		}))
 	}
 

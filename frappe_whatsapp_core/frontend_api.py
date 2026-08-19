@@ -508,7 +508,7 @@ def campaign_recipient_page(
 			or identity.get("normalized_value")
 			or row.identity
 		)
-		row.secondary_text = presentation.get("secondary_text") or identity.get("normalized_value") or ""
+		row.secondary_text = presentation.get("secondary_text") or ""
 		row.status = message.get("delivery_status") or row.status
 		row.provider_message_id = message.get("provider_message_id")
 		row.provider_timestamp = message.get("provider_timestamp")

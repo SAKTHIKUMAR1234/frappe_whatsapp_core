@@ -120,6 +120,7 @@ def list_conversations(
 		row.attributes = _json_dict(row.attributes)
 		row.contact_presentation = presentations.get(row.identity) or {}
 		row.display_value = row.contact_presentation.get("display_name") or row.display_value
+		row.phone_number = row.contact_presentation.get("secondary_text") or ""
 	return {
 		"rows": rows,
 		"limit": limit,
@@ -143,6 +144,7 @@ def get_conversation(conversation: str) -> dict:
 			"name": identity.name,
 			"display_value": presentation.get("display_name") or identity.display_value,
 			"normalized_value": identity.normalized_value,
+			"phone_number": presentation.get("secondary_text") or "",
 			"attributes": _json_dict(identity.attributes),
 			"presentation": presentation,
 		},
