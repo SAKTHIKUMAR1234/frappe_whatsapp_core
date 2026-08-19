@@ -236,24 +236,6 @@
 					<input v-model="form.add_security_recommendation" type="checkbox" />
 					<span>Add Meta's security recommendation</span>
 				</label>
-				<div v-if="sampleFields.length" class="sample-panel">
-					<div class="section-heading compact-heading">
-						<div>
-							<strong>Variable samples</strong
-							><small>Required by Meta on submission</small>
-						</div>
-					</div>
-					<div class="field-grid">
-						<label v-for="field in sampleFields" :key="field.key">
-							<span>{{ field.label }}</span>
-							<input
-								v-model="form.sample_values[field.scope][field.name]"
-								type="text"
-								placeholder="Example value"
-							/>
-						</label>
-					</div>
-				</div>
 				<div class="field-grid">
 					<label>
 						<span>Footer (optional)</span>
@@ -269,6 +251,30 @@
 						/>
 					</label>
 				</div>
+			</section>
+
+			<section class="editor-section">
+				<div class="section-heading">
+					<div>
+						<strong>Sample values</strong>
+						<small>Examples Meta uses to review every template variable</small>
+					</div>
+				</div>
+				<div v-if="sampleFields.length" class="field-grid">
+					<label v-for="field in sampleFields" :key="field.key">
+						<span>{{ field.label }}</span>
+						<input
+							v-model="form.sample_values[field.scope][field.name]"
+							type="text"
+							placeholder="Enter a realistic sample value"
+						/>
+					</label>
+				</div>
+				<p v-else class="empty-note">
+					Add a body or text-header variable such as &#123;&#123;1&#125;&#125; to enter
+					its sample value here. Media and dynamic-button samples remain beside the
+					fields they describe.
+				</p>
 			</section>
 
 			<section class="editor-section">

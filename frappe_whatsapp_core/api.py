@@ -273,10 +273,16 @@ def _apply_outbound_result_batch(results: list[dict]) -> list[dict]:
 	for index, idempotency_key, status, result in provider_results:
 		row = by_key.get(idempotency_key)
 		if not row:
-			frappe.throw(
-				f"Outbound message not found for idempotency key {idempotency_key}",
-				frappe.DoesNotExistError,
-			)
+			# Old direct-Hub sends and records removed during a completed migration
+			# can still produce a durable relay result. They have no Core projection
+			# to update. Acknowledge that item independently so one stale result does
+			# not poison and endlessly retry an otherwise valid callback batch.
+			applied[index] = {
+				"status": "ignored",
+				"reason": "message_not_found",
+				"idempotency_key": idempotency_key,
+			}
+			continue
 		incoming = "Sent" if status == "sent" and _as_bool(result.get("success")) else "Failed"
 		provider_id = str(result.get("meta_message_id") or "").strip()
 		provider_owner = provider_owners.get(provider_id) if provider_id else None

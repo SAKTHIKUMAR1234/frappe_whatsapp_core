@@ -156,6 +156,7 @@
 	const pendingReadMessages = new Map()
 	const locallyReadMessages = new Set()
 	const optimisticReadCursors = new Map()
+	const clearedConversationBadges = new Set()
 	let realtimeConnectedOnce = false
 	let restoringMessageScroll = false
 
@@ -276,7 +277,14 @@
 				team: team.value || null,
 			})
 			if (request !== listRequest) return
-			rows.value = loaded.rows || []
+			const currentUnread = new Map(
+				rows.value.map((row) => [row.name, Number(row.unread_count || 0)]),
+			)
+			rows.value = (loaded.rows || []).map((row) =>
+				clearedConversationBadges.has(row.name)
+					? { ...row, unread_count: currentUnread.get(row.name) || 0 }
+					: row,
+			)
 			conversationPage.value = loaded
 		} catch (error) {
 			if (request === listRequest)
@@ -722,12 +730,20 @@
 
 	function selectConversation(name) {
 		if (name === selectedName.value) return
+		clearConversationBadge(name)
 		rememberMessageScroll()
 		router.push({
 			name: 'inbox',
 			params: { conversation: name },
 			state: { fromInbox: true },
 		})
+	}
+
+	function clearConversationBadge(name) {
+		if (!name) return
+		const row = rows.value.find((item) => item.name === name)
+		if (row) row.unread_count = 0
+		clearedConversationBadges.add(name)
 	}
 
 	function closeMobileConversation() {
@@ -1365,12 +1381,19 @@
 		}
 		const row = authoritativeRow || rows.value.find((item) => item.name === event.conversation)
 		if (row) {
+			if (
+				event.message.direction === 'Inbound' &&
+				clearedConversationBadges.has(event.conversation)
+			) {
+				row.unread_count = Number(row.unread_count || 0) + 1
+			}
 			if (!authoritativeRow) {
 				row.latest_message = event.message
 				row.last_message_at = event.message.provider_timestamp
 				if (
 					event.message.direction === 'Inbound' &&
-					event.conversation !== selectedName.value
+					event.conversation !== selectedName.value &&
+					!clearedConversationBadges.has(event.conversation)
 				) {
 					row.unread_count = Number(row.unread_count || 0) + 1
 				}
@@ -1403,6 +1426,9 @@
 			return null
 		}
 		const merged = { ...existing, ...incoming }
+		if (clearedConversationBadges.has(incoming.name)) {
+			merged.unread_count = Number(existing?.unread_count || 0)
+		}
 		rows.value = [merged, ...rows.value.filter((row) => row.name !== incoming.name)]
 		sortConversationRows()
 		return merged
@@ -1570,7 +1596,14 @@
 							latestSelectedInbound = message
 					}
 					const row = rows.value.find((item) => item.name === message.conversation)
-					if (!row || conversationRowsByName.has(message.conversation)) continue
+					if (!row) continue
+					if (
+						isCreated &&
+						message.direction === 'Inbound' &&
+						clearedConversationBadges.has(message.conversation)
+					)
+						row.unread_count = Number(row.unread_count || 0) + 1
+					if (conversationRowsByName.has(message.conversation)) continue
 					if (
 						(isCreated && isNewerMessage(message, row.latest_message)) ||
 						(!isCreated && row.latest_message?.name === message.name)
@@ -1582,7 +1615,8 @@
 					if (
 						isCreated &&
 						message.direction === 'Inbound' &&
-						message.conversation !== selectedName.value
+						message.conversation !== selectedName.value &&
+						!clearedConversationBadges.has(message.conversation)
 					)
 						row.unread_count = Number(row.unread_count || 0) + 1
 				}
@@ -1794,6 +1828,7 @@
 		window.addEventListener('blur', handleReadVisibilityChange)
 		document.addEventListener('visibilitychange', handleReadVisibilityChange)
 		await loadRows()
+		clearConversationBadge(selectedName.value)
 		if (selectedName.value) await loadDetail(selectedName.value)
 		const site = session.boot?.site
 		unsubscribers.push(

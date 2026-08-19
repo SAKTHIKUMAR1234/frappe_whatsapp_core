@@ -1,8 +1,13 @@
 <script setup>
-	import { computed, nextTick, ref, watch } from 'vue'
+	import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 	import Button from 'primevue/button'
 	import { Mic, MicOff, Phone, PhoneOff } from 'lucide-vue-next'
 	import { useCallingStore } from '@/stores/calling'
+	import {
+		startRingtone,
+		stopRingtone,
+		unlockRingtone,
+	} from '@/features/calling/services/callRingtone'
 
 	const calling = useCallingStore()
 	const remoteAudio = ref(null)
@@ -63,6 +68,34 @@
 		},
 		{ flush: 'post' },
 	)
+
+	watch(
+		() => Boolean(calling.incoming && !calling.active),
+		(ringing) => {
+			if (ringing) startRingtone()
+			else stopRingtone()
+		},
+		{ immediate: true },
+	)
+
+	async function unlockCallSound() {
+		if (!(await unlockRingtone())) return
+		window.removeEventListener('pointerdown', unlockCallSound)
+		window.removeEventListener('keydown', unlockCallSound)
+	}
+
+	onMounted(() => {
+		// Browsers permit audible realtime notifications only after a user gesture.
+		// Unlock once while the operator is using the workspace, before a call arrives.
+		window.addEventListener('pointerdown', unlockCallSound)
+		window.addEventListener('keydown', unlockCallSound)
+	})
+
+	onUnmounted(() => {
+		window.removeEventListener('pointerdown', unlockCallSound)
+		window.removeEventListener('keydown', unlockCallSound)
+		stopRingtone()
+	})
 </script>
 
 <template>

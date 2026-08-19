@@ -833,6 +833,70 @@ class TestPayloadContract(unittest.TestCase):
 		side_effect=[
 			[],
 			[frappe._dict(
+				name="MSG-VALID",
+				conversation="CONV-1",
+				delivery_status="Sent",
+				provider_message_id="wamid.valid",
+			)],
+		],
+	)
+	@patch("frappe_whatsapp_core.api.frappe.clear_document_cache")
+	@patch("frappe_whatsapp_core.api.frappe.db.bulk_update")
+	@patch(
+		"frappe_whatsapp_core.api.frappe.db.sql",
+		return_value=[frappe._dict(
+			name="MSG-VALID",
+			idempotency_key="valid-key",
+			conversation="CONV-1",
+			delivery_status="Queued",
+			provider_message_id="local:valid-key",
+			failure=None,
+		)],
+	)
+	@patch("frappe_whatsapp_core.permissions.frappe.get_roles", return_value=["System Manager"])
+	def test_missing_outbound_result_does_not_poison_valid_batch_item(
+		self,
+		_get_roles,
+		_db_sql,
+		bulk_update,
+		_clear,
+		_get_all,
+		publish,
+		refresh,
+	):
+		result = receive_outbound_results([
+			{
+				"idempotency_key": "stale-direct-hub-key",
+				"status": "failed",
+				"success": 0,
+				"error": "legacy send",
+			},
+			{
+				"idempotency_key": "valid-key",
+				"status": "sent",
+				"success": 1,
+				"meta_message_id": "wamid.valid",
+			},
+		])
+
+		self.assertEqual(result["count"], 1)
+		self.assertEqual(result["ignored"], 1)
+		self.assertEqual(result["results"][0]["reason"], "message_not_found")
+		self.assertEqual(result["results"][1]["status"], "applied")
+		self.assertEqual(
+			bulk_update.call_args.args[1]["MSG-VALID"]["delivery_status"],
+			"Sent",
+		)
+		refresh.assert_called_once_with(["MSG-VALID"])
+		publish.assert_called_once()
+
+	@patch("frappe_whatsapp_core.api.enqueue_campaign_refresh_for_messages")
+	@patch("frappe_whatsapp_core.api.publish_message_changes")
+	@patch(
+		"frappe_whatsapp_core.api.frappe.get_all",
+		side_effect=[
+			[],
+			[frappe._dict(
 				name="MSG-1",
 				conversation="CONV-1",
 				delivery_status="Sent",

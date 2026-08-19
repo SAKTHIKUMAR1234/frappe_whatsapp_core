@@ -61,6 +61,42 @@ class TestBatchTransport(TestCase):
 
 		self.assertEqual(sequence, ["send", "rollback", "mark"])
 
+	def test_single_delivery_marks_relay_queued_response_as_sent(self):
+		message = frappe._dict(
+			name="message-queued",
+			channel="channel-1",
+			conversation="conversation-1",
+			idempotency_key="key-queued",
+			delivery_status="Queued",
+		)
+		documents = {
+			("WhatsApp Core Message", message.name): message,
+			("WhatsApp Core Conversation", "conversation-1"): frappe._dict(
+				name="conversation-1", remote_identity="identity-1"
+			),
+			("WhatsApp Core Identity", "identity-1"): frappe._dict(
+				name="identity-1", normalized_value="919999999999"
+			),
+		}
+		with (
+			patch("frappe_whatsapp_core.outbound.frappe.cache.lock", return_value=nullcontext()),
+			patch(
+				"frappe_whatsapp_core.outbound.frappe.get_doc",
+				side_effect=lambda doctype, name: documents[(doctype, name)],
+			),
+			patch("frappe_whatsapp_core.outbound.resolve_recipient_phone", return_value="919999999999"),
+			patch("frappe_whatsapp_core.outbound._message_payload", return_value={"to": "919999999999"}),
+			patch(
+				"frappe_whatsapp_core.outbound.send_raw",
+				return_value={"accepted": True, "status": "queued"},
+			),
+			patch("frappe_whatsapp_core.outbound.frappe.db.rollback"),
+			patch("frappe_whatsapp_core.outbound._mark_sent") as mark_sent,
+		):
+			deliver_queued_message(message.name)
+
+		mark_sent.assert_called_once_with(message, None)
+
 	def test_hub_batch_maps_channels_and_uses_one_request(self):
 		settings = SimpleNamespace(
 			hub_url="https://hub.example.test",
@@ -416,12 +452,14 @@ class TestBatchTransport(TestCase):
 				return_value=hub_response,
 			) as hub_batch,
 			patch("frappe_whatsapp_core.outbound.frappe.db.rollback") as rollback,
+			patch("frappe_whatsapp_core.outbound._mark_sent") as mark_sent,
 		):
 			deliver_queued_message_batch(list(messages))
 
 		self.assertEqual(hub_batch.call_count, 1)
 		self.assertEqual(len(hub_batch.call_args.args[0]), 2)
 		self.assertEqual(rollback.call_count, 2)
+		self.assertEqual(mark_sent.call_count, 2)
 
 	def test_missing_message_does_not_abort_other_committed_batch_items(self):
 		message = frappe._dict(
@@ -460,12 +498,14 @@ class TestBatchTransport(TestCase):
 			) as hub_batch,
 			patch("frappe_whatsapp_core.outbound.frappe.db.rollback"),
 			patch("frappe_whatsapp_core.outbound.frappe.logger") as logger,
+			patch("frappe_whatsapp_core.outbound._mark_sent") as mark_sent,
 		):
 			deliver_queued_message_batch(["message-missing", "message-valid"])
 
 		hub_batch.assert_called_once()
 		self.assertEqual(len(hub_batch.call_args.args[0]), 1)
 		logger.return_value.warning.assert_called_once()
+		mark_sent.assert_called_once_with(message, None)
 
 	def test_invalid_campaign_recipient_fails_before_message_creation(self):
 		campaign = SimpleNamespace(

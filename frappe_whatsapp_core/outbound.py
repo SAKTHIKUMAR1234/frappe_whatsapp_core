@@ -1318,9 +1318,10 @@ def deliver_queued_message_batch(message_names: list[str]) -> None:
 				or relay_status == "queued"
 			)
 		):
-			# The relay accepted this independent JetStream work item.
-			# Its durable result callback will finalize the local message.
-			pass
+			# JetStream now owns this durable work item. That is the WhatsApp
+			# client's single-tick boundary; the provider callback may later
+			# advance it to Delivered/Read or report a terminal failure.
+			_mark_sent(message, relay_result.get("meta_message_id"))
 		elif (
 			hub_result.get("accepted")
 			and (
@@ -1390,8 +1391,10 @@ def deliver_queued_message(message_name: str) -> None:
 		# against the current row rather than the pre-request read snapshot.
 		frappe.db.rollback()
 		if result.get("accepted"):
-			if result.get("status") not in {"queued", "retrying"}:
-				_mark_sent(message, result.get("meta_message_id"))
+			# A successful relay response means the message is durably owned by
+			# JetStream. Show one tick immediately; waiting for Meta's later result
+			# leaves a successfully submitted message incorrectly stuck at Queued.
+			_mark_sent(message, result.get("meta_message_id"))
 			return
 		if result.get("retryable"):
 			_record_retryable_submission(message, result)
