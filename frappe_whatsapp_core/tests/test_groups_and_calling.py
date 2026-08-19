@@ -1,4 +1,5 @@
 import json
+from unittest.mock import call as mock_call
 from unittest.mock import patch
 
 import frappe
@@ -7,10 +8,13 @@ from frappe.tests.utils import FrappeTestCase
 from frappe_whatsapp_core.calling import (
 	_rtc_configuration,
 	_claim_call,
+	_release_call_claim,
 	call_action as core_call_action,
 	call_history,
 	calling_workspace,
+	claim_incoming_call,
 	get_call_permission,
+	release_incoming_call_claim,
 	send_call_button,
 	update_call_settings,
 )
@@ -557,6 +561,58 @@ class TestGroupsAndCalling(FrappeTestCase):
 		self.assertEqual(
 			frappe.db.get_value("WhatsApp Core Call", second.name, "handled_by"),
 			"Administrator",
+		)
+
+		with self.assertRaises(frappe.PermissionError):
+			_release_call_claim(first.call_id)
+		_release_call_claim(second.call_id)
+		self.assertIsNone(
+			frappe.db.get_value("WhatsApp Core Call", second.name, "handled_by")
+		)
+
+	@patch("frappe_whatsapp_core.realtime.publish_call_changes")
+	@patch("frappe_whatsapp_core.calling._assert_call_account")
+	@patch("frappe_whatsapp_core.calling.assert_call_access")
+	@patch("frappe_whatsapp_core.calling._resolve_account_name", return_value="Hub Account")
+	def test_browser_claim_and_release_publish_team_updates(
+		self, resolve, assert_access, assert_account, publish,
+	):
+		channel = get_or_create_channel("CALL-RESERVE-PHONE", "CALL-RESERVE-WABA")
+		identity = get_or_create_identity("919876543214", resolve=False)
+		conversation = frappe.get_doc({
+			"doctype": "WhatsApp Core Conversation",
+			"conversation_key": "CALL-RESERVE-CONVERSATION",
+			"channel": channel.name,
+			"remote_identity": identity.name,
+			"status": "Open",
+			"last_message_at": frappe.utils.now_datetime(),
+		}).insert(ignore_permissions=True)
+		call = frappe.get_doc({
+			"doctype": "WhatsApp Core Call",
+			"call_id": "CALL-RESERVE",
+			"channel": channel.name,
+			"conversation": conversation.name,
+			"remote_identity": identity.name,
+			"direction": "Inbound",
+			"status": "connect",
+			"session": {"sdp_type": "offer", "sdp": "v=0"},
+			"last_event": {"event": "connect"},
+		}).insert(ignore_permissions=True)
+
+		claimed = claim_incoming_call("Hub Account", call.call_id)
+		self.assertEqual(claimed["handled_by"], "Administrator")
+		self.assertEqual(
+			frappe.db.get_value("WhatsApp Core Call", call.name, "handled_by"),
+			"Administrator",
+		)
+		released = release_incoming_call_claim("Hub Account", call.call_id)
+		self.assertTrue(released["success"])
+		self.assertIsNone(
+			frappe.db.get_value("WhatsApp Core Call", call.name, "handled_by")
+		)
+		self.assertEqual(
+			publish.call_args_list,
+			[mock_call([call.name]), mock_call([call.name])],
 		)
 
 	def test_group_webhooks_project_members_and_participant_receipts(self):

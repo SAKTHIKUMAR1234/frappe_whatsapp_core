@@ -257,8 +257,14 @@ export const useCallingStore = defineStore('core-calling', () => {
 			phase: 'answering',
 			account_name: accountForChannel(item.channel),
 		}
-		let claimed = false
+		let locallyClaimed = false
+		let providerClaimed = false
 		try {
+			await call('frappe_whatsapp_core.calling.claim_incoming_call', {
+				account_name: active.value.account_name,
+				call_id: item.call_id,
+			})
+			locallyClaimed = true
 			const answer = await createRtc().prepareIncoming(item.session)
 			await acceptIncomingMedia({
 				invoke: (args) => call('frappe_whatsapp_core.calling.call_action', args),
@@ -267,7 +273,7 @@ export const useCallingStore = defineStore('core-calling', () => {
 				callId: item.call_id,
 				answer,
 				onClaimed: () => {
-					claimed = true
+					providerClaimed = true
 				},
 				onPhase: (phase) => {
 					if (active.value?.call_id === item.call_id)
@@ -276,7 +282,7 @@ export const useCallingStore = defineStore('core-calling', () => {
 			})
 			active.value = { ...active.value, phase: 'connected', handled_by: currentUser }
 		} catch (exception) {
-			if (claimed) {
+			if (providerClaimed) {
 				try {
 					await call('frappe_whatsapp_core.calling.call_action', {
 						account_name:
@@ -286,6 +292,16 @@ export const useCallingStore = defineStore('core-calling', () => {
 					})
 				} catch {
 					// Meta may already have closed a failed negotiation.
+				}
+			} else if (locallyClaimed) {
+				try {
+					await call('frappe_whatsapp_core.calling.release_incoming_call_claim', {
+						account_name:
+							active.value?.account_name || accountForChannel(item.channel),
+						call_id: item.call_id,
+					})
+				} catch {
+					// A concurrent provider event may have made the claim non-releasable.
 				}
 			}
 			finishCall()

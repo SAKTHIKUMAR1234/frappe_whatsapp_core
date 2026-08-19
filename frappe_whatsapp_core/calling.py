@@ -56,6 +56,7 @@ CALL_ACTION_SOURCE_STATES = {
 		"connected",
 	},
 }
+INCOMING_CALL_CLAIM_STATES = {"connect", "ringing", "received"}
 
 CALL_HISTORY_PAGE_SIZE = 30
 CALL_HISTORY_MAX_PAGE_SIZE = 100
@@ -372,15 +373,17 @@ def enable_calling(account_name):
 	return {"success": True, "calling": {"enabled": True, "status": "ENABLED"}}
 
 
-def _claim_call(call_id):
+def _claim_call(call_id, *, allowed_states=None):
 	row = frappe.db.sql(
-		"""SELECT name, handled_by FROM `tabWhatsApp Core Call`
+		"""SELECT name, handled_by, status FROM `tabWhatsApp Core Call`
 		WHERE call_id = %s FOR UPDATE""",
 		(str(call_id or "").strip(),),
 		as_dict=True,
 	)
 	if not row:
 		frappe.throw("Call not found", frappe.DoesNotExistError)
+	if allowed_states and str(row[0].status or "").lower() not in allowed_states:
+		frappe.throw("This call is no longer available to answer", frappe.ValidationError)
 	handler = str(row[0].handled_by or "")
 	if handler and handler != frappe.session.user:
 		frappe.throw("This call is already being handled by another team member", frappe.PermissionError)
@@ -389,6 +392,56 @@ def _claim_call(call_id):
 			"WhatsApp Core Call", row[0].name, "handled_by", frappe.session.user,
 			update_modified=False,
 		)
+	return row[0].name
+
+
+def _release_call_claim(call_id):
+	row = frappe.db.sql(
+		"""SELECT name, handled_by, status FROM `tabWhatsApp Core Call`
+		WHERE call_id = %s FOR UPDATE""",
+		(str(call_id or "").strip(),),
+		as_dict=True,
+	)
+	if not row:
+		frappe.throw("Call not found", frappe.DoesNotExistError)
+	handler = str(row[0].handled_by or "")
+	if handler != frappe.session.user:
+		frappe.throw("Only the operator handling this call can release it", frappe.PermissionError)
+	if str(row[0].status or "").lower() not in INCOMING_CALL_CLAIM_STATES:
+		frappe.throw("This call has already entered provider negotiation", frappe.ValidationError)
+	frappe.db.set_value(
+		"WhatsApp Core Call", row[0].name, "handled_by", None,
+		update_modified=False,
+	)
+	return row[0].name
+
+
+@frappe.whitelist()
+@require_core_access()
+def claim_incoming_call(account_name, call_id):
+	"""Atomically reserve one incoming call before browser media negotiation."""
+	resolved_account = _resolve_account_name(account_name)
+	assert_call_access(call_id)
+	_assert_call_account(call_id, resolved_account)
+	name = _claim_call(call_id, allowed_states=INCOMING_CALL_CLAIM_STATES)
+	from frappe_whatsapp_core.realtime import publish_call_changes
+
+	publish_call_changes([name])
+	return {"success": True, "call_id": call_id, "handled_by": frappe.session.user}
+
+
+@frappe.whitelist()
+@require_core_access()
+def release_incoming_call_claim(account_name, call_id):
+	"""Return a locally failed, not-yet-preaccepted call to the team queue."""
+	resolved_account = _resolve_account_name(account_name)
+	assert_call_access(call_id)
+	_assert_call_account(call_id, resolved_account)
+	name = _release_call_claim(call_id)
+	from frappe_whatsapp_core.realtime import publish_call_changes
+
+	publish_call_changes([name])
+	return {"success": True, "call_id": call_id}
 
 
 def _provider_call_id(result):
