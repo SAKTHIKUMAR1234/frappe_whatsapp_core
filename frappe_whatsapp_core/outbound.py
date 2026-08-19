@@ -1663,15 +1663,20 @@ def _approved_template(template: str, *, channel: str | None = None):
 		frappe.throw("Template is required")
 	record_name = template_name if frappe.db.exists("WhatsApp Core Template", template_name) else None
 	if not record_name:
-		filters = {"template_name": template_name, "enabled": 1}
-		if channel:
-			filters["channel"] = channel
-		matches = frappe.get_all(
-			"WhatsApp Core Template", filters=filters, pluck="name", limit_page_length=2
-		)
-		if len(matches) > 1:
-			frappe.throw("Template name is ambiguous; select its account-scoped record")
-		record_name = matches[0] if matches else None
+		for identity_field in ("template_name", "template_id"):
+			filters = {identity_field: template_name, "enabled": 1}
+			if channel:
+				filters["channel"] = channel
+			matches = frappe.get_all(
+				"WhatsApp Core Template", filters=filters, pluck="name", limit_page_length=2
+			)
+			if len(matches) > 1:
+				frappe.throw(
+					"Template identity is ambiguous; select its account-scoped record"
+				)
+			if matches:
+				record_name = matches[0]
+				break
 	if not record_name:
 		frappe.throw("Template is not assigned to this site")
 	doc = frappe.get_doc("WhatsApp Core Template", record_name)

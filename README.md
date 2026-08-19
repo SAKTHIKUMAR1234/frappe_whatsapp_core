@@ -95,6 +95,34 @@ and returns either a phone string or `{ "phone_number": "..." }`. Core rejects
 missing records, empty configured numbers and ambiguous resolver registrations
 with an actionable validation error instead of silently sending to stale data.
 
+### Outbound API by mobile number
+
+Authenticated business apps can send without first resolving a Core conversation.
+The API-token user must have **WhatsApp Manager** or **System Manager** because
+an arbitrary number may create a new unassigned conversation.
+
+```http
+POST /api/method/frappe_whatsapp_core.outbound_api.send_template
+Authorization: token <api-key>:<api-secret>
+Content-Type: application/json
+
+{
+  "phone_number": "919876543210",
+  "template": "order_update",
+  "parameters": ["Sakthi", "ready"],
+  "language_code": "en",
+  "client_message_id": "bf9aa28e-8053-4470-9a94-ef314960169b"
+}
+```
+
+The entries in `parameters` map to body placeholders `{{1}}`, `{{2}}`, and so
+on. `template` may be the Core template record, Meta template name, or Meta
+template id. When multiple channels are enabled, also pass `channel` (Core
+Channel record) or `phone_number_id`. For session-window text messages, use
+`frappe_whatsapp_core.outbound_api.send_text` with `phone_number`, `body`, and
+the same optional channel/idempotency fields. `client_message_id`, when sent,
+must be a UUID and makes retries idempotent.
+
 ### Installation
 
 You can install this app using the [bench](https://github.com/frappe/bench) CLI:
