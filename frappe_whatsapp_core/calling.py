@@ -20,7 +20,10 @@ from frappe_whatsapp_core.hub_client import (
 	get_call_permission as relay_get_call_permission,
 )
 from frappe_whatsapp_core.identity import contact_options, is_business_scoped_user_id
-from frappe_whatsapp_core.materializer import get_or_create_conversation
+from frappe_whatsapp_core.materializer import (
+	get_or_create_conversation,
+	touch_conversation_call_activity,
+)
 from frappe_whatsapp_core.meta_flows import _accounts, _call, _resolve_account_name, _workspace_failure
 from frappe_whatsapp_core.outbound import resolve_recipient_phone
 from frappe_whatsapp_core.permissions import (
@@ -151,11 +154,20 @@ def _calling_settings(value):
 	return value
 
 
-def _call_rows(channel=None, *, start=0, limit=CALL_HISTORY_PAGE_SIZE):
+def _call_rows(
+	channel=None,
+	*,
+	conversation=None,
+	start=0,
+	limit=CALL_HISTORY_PAGE_SIZE,
+):
 	conditions, values = conversation_conditions("conversation")
 	if channel:
 		conditions.append("call_log.channel = %(channel)s")
 		values["channel"] = channel
+	if conversation:
+		conditions.append("call_log.conversation = %(conversation)s")
+		values["conversation"] = conversation
 	values["start"] = max(0, cint(start))
 	values["limit"] = min(
 		CALL_HISTORY_MAX_PAGE_SIZE + 1,
@@ -170,13 +182,17 @@ def _call_rows(channel=None, *, start=0, limit=CALL_HISTORY_PAGE_SIZE):
 			call_log.handled_by,
 			call_log.started_at, call_log.ended_at, call_log.cta_payload,
 			call_log.deeplink_payload, call_log.recording_media_id,
-			call_log.recording_mime_type, call_log.transcript_media_id,
-			call_log.transcript_mime_type, call_log.session, call_log.modified
+			call_log.recording_mime_type, call_log.recording_url,
+			call_log.transcript_media_id, call_log.transcript_mime_type,
+			call_log.transcript_url, call_log.session, call_log.creation,
+			call_log.modified
 		FROM `tabWhatsApp Core Call` AS call_log
 		LEFT JOIN `tabWhatsApp Core Conversation` AS conversation
 			ON conversation.name = call_log.conversation
 		WHERE {" AND ".join(conditions)}
-		ORDER BY call_log.modified DESC
+		ORDER BY
+			COALESCE(call_log.ended_at, call_log.started_at, call_log.creation) DESC,
+			call_log.name DESC
 		LIMIT %(start)s, %(limit)s
 		""",
 		values,
@@ -195,6 +211,7 @@ def _call_rows(channel=None, *, start=0, limit=CALL_HISTORY_PAGE_SIZE):
 			or "WhatsApp contact"
 		)
 		row["presentation"] = presentation
+		row["timeline_at"] = row.started_at or row.ended_at or row.creation or row.modified
 	handlers = {
 		str(row.handled_by)
 		for row in rows
@@ -214,6 +231,18 @@ def _call_rows(channel=None, *, start=0, limit=CALL_HISTORY_PAGE_SIZE):
 		for row in rows:
 			row["handled_by_name"] = labels.get(row.handled_by, row.handled_by or "")
 	return rows
+
+
+@frappe.whitelist()
+@require_core_access()
+def conversation_call_history(conversation, limit=CALL_HISTORY_MAX_PAGE_SIZE):
+	"""Return call cards for one already-authorized Shared Inbox conversation."""
+	from frappe_whatsapp_core.permissions import assert_conversation_access
+
+	conversation = str(conversation or "").strip()
+	assert_conversation_access(conversation)
+	limit = min(CALL_HISTORY_MAX_PAGE_SIZE, max(1, cint(limit) or CALL_HISTORY_MAX_PAGE_SIZE))
+	return {"rows": _call_rows(conversation=conversation, limit=limit)}
 
 
 def _call_history_page(*, start=0, limit=CALL_HISTORY_PAGE_SIZE):
@@ -405,6 +434,7 @@ def _record_outgoing_call(account_name, identity, payload, result):
 			"call_id": call_id,
 			**values,
 		}).insert(ignore_permissions=True).name
+	touch_conversation_call_activity(conversation.name, values["started_at"])
 	from frappe_whatsapp_core.realtime import publish_call_changes
 
 	publish_call_changes([name])
@@ -615,25 +645,69 @@ def upload_voicemail_announcement(account_name, file_url, description=None):
 
 @frappe.whitelist()
 @require_core_access()
-def get_call_artifact(account_name, media_id, download=0):
-	call = frappe.db.get_value(
-		"WhatsApp Core Call",
-		{"recording_media_id": media_id},
-		["name", "call_id"],
-		as_dict=True,
-	)
-	kind = "recording"
-	if not call:
+def get_call_artifact(
+	account_name=None,
+	media_id=None,
+	download=0,
+	call_name=None,
+	kind=None,
+):
+	"""Return a scoped call artifact, resolving its Hub account from the call.
+
+	``account_name`` and ``media_id`` remain supported for the Calling workspace.
+	The Shared Inbox sends the durable Core call name instead, so it never needs to
+	guess which Hub account owns a recording on a multi-number site.
+	"""
+	kind = str(kind or "recording").strip().lower()
+	if kind not in {"recording", "transcript"}:
+		frappe.throw("Call artifact kind must be recording or transcript", frappe.ValidationError)
+	fields = [
+		"name", "call_id", "channel", "recording_media_id", "recording_url",
+		"transcript_media_id", "transcript_url",
+	]
+	call = None
+	if call_name:
 		call = frappe.db.get_value(
 			"WhatsApp Core Call",
-			{"transcript_media_id": media_id},
-			["name", "call_id"],
+			str(call_name).strip(),
+			fields,
 			as_dict=True,
 		)
-		kind = "transcript"
+		if call:
+			media_id = call.get(f"{kind}_media_id")
+	else:
+		media_id = str(media_id or "").strip()
+		call = frappe.db.get_value(
+			"WhatsApp Core Call",
+			{"recording_media_id": media_id},
+			fields,
+			as_dict=True,
+		)
+		kind = "recording"
+		if not call:
+			call = frappe.db.get_value(
+				"WhatsApp Core Call",
+				{"transcript_media_id": media_id},
+				fields,
+				as_dict=True,
+			)
+			kind = "transcript"
 	if not call:
 		frappe.throw("Call artifact is not linked to a Core call", frappe.DoesNotExistError)
 	assert_call_access(call.call_id)
+	if not media_id:
+		frappe.throw(f"This call has no {kind} artifact", frappe.DoesNotExistError)
+	local_url = str(call.get(f"{kind}_url") or "").strip()
+	if int(download or 0) and local_url.startswith("/private/files/"):
+		return {
+			"success": True,
+			"file_url": local_url,
+			"media_id": media_id,
+			"cached": True,
+		}
+	if not account_name:
+		settings = frappe.get_cached_doc("WhatsApp Core Settings")
+		account_name = settings.get_account_name(call.channel)
 	account_name = _resolve_account_name(account_name)
 	_assert_call_account(call.call_id, account_name)
 	result = (

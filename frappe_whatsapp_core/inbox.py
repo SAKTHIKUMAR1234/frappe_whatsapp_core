@@ -217,6 +217,7 @@ def _enrich_conversation_rows(
 	contact_teams = _identity_team_presentations(identity_names)
 	presentations = present_identity_names(identity_names, context={"surface": "inbox_list"})
 	latest_messages = _latest_messages(conversation_names)
+	latest_calls = _latest_calls(conversation_names)
 	unread_counts = (
 		_unread_counts(conversation_names, user=user)
 		if include_unread
@@ -228,6 +229,15 @@ def _enrich_conversation_rows(
 		identity = identity_map.get(row.remote_identity) or {}
 		presentation = presentations.get(row.remote_identity) or {}
 		display_name = presentation.get("display_name") or row.name
+		latest_message = latest_messages.get(row.name)
+		latest_call = latest_calls.get(row.name)
+		if latest_call and (
+			not latest_message
+			or latest_call.provider_timestamp > latest_message.provider_timestamp
+		):
+			latest_message = latest_call
+			if not row.last_message_at or latest_call.provider_timestamp > row.last_message_at:
+				row.last_message_at = latest_call.provider_timestamp
 		result.append({
 			**row,
 			"assigned_team_details": teams.get(row.assigned_team),
@@ -237,7 +247,7 @@ def _enrich_conversation_rows(
 			"identity_status": identity.get("status") or "",
 			"contact_presentation": presentation,
 			"party_binding": bindings.get(row.remote_identity),
-			"latest_message": latest_messages.get(row.name),
+			"latest_message": latest_message,
 			"unread_count": unread_counts.get(row.name, 0),
 		})
 	return result
@@ -348,6 +358,9 @@ def conversation(name: str, message_limit: int = 30) -> dict:
 		message_limit,
 		current_read,
 	)
+	from frappe_whatsapp_core.calling import _call_rows
+
+	calls = _call_rows(conversation=doc.name, limit=100)
 	_enrich_message_senders(messages)
 	_attach_template_snapshots(messages)
 	attach_message_reactions(messages, doc.name)
@@ -371,6 +384,7 @@ def conversation(name: str, message_limit: int = 30) -> dict:
 		"contact_presentation": presentation,
 		"party_bindings": bindings,
 		"messages": messages,
+		"calls": calls,
 		"message_page": message_page,
 		"resume_message": resume_message,
 		"current_user_read": current_read,
@@ -843,6 +857,66 @@ def _latest_messages(conversation_names: list[str]) -> dict:
 				row.body = inbound_message_body("interactive", interactive)
 		row.pop("content", None)
 	return {row.conversation: row for row in rows}
+
+
+def _latest_calls(conversation_names: list[str]) -> dict:
+	"""Project the newest call as a familiar conversation-list activity row."""
+	rows = frappe.db.sql(
+		"""
+		SELECT
+			ranked.name,
+			ranked.call_id,
+			ranked.conversation,
+			ranked.direction,
+			ranked.status,
+			ranked.provider_timestamp
+		FROM (
+			SELECT
+				call_log.name,
+				call_log.call_id,
+				call_log.conversation,
+				call_log.direction,
+				call_log.status,
+				COALESCE(
+					call_log.ended_at,
+					call_log.started_at,
+					call_log.creation
+				) AS provider_timestamp,
+				ROW_NUMBER() OVER (
+					PARTITION BY call_log.conversation
+					ORDER BY
+						COALESCE(
+							call_log.ended_at,
+							call_log.started_at,
+							call_log.creation
+						) DESC,
+						call_log.name DESC
+				) AS row_rank
+			FROM `tabWhatsApp Core Call` AS call_log
+			WHERE call_log.conversation IN %(conversation_names)s
+		) AS ranked
+		WHERE ranked.row_rank = 1
+		""",
+		{"conversation_names": tuple(conversation_names)},
+		as_dict=True,
+	)
+	for row in rows:
+		row.message_type = "call"
+		row.delivery_status = row.status
+		row.body = _call_preview(row)
+	return {row.conversation: row for row in rows}
+
+
+def _call_preview(call) -> str:
+	direction = "Incoming" if call.direction == "Inbound" else "Outgoing"
+	status = str(call.status or "").lower()
+	if status in {"missed", "reject", "rejected", "failed"}:
+		return f"{direction} call · {status.title()}"
+	if status in {"terminate", "terminated", "ended"}:
+		return f"{direction} call · Completed"
+	if status in {"accept", "accepted", "connected"}:
+		return f"{direction} call · Answered"
+	return f"{direction} call"
 
 
 def _unread_counts(conversation_names: list[str], *, user: str | None = None) -> dict:

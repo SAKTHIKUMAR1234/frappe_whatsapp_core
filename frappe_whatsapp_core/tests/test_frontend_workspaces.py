@@ -218,7 +218,10 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		self.assertIn("document.visibilityState !== 'visible'", inbox)
 		self.assertIn("async function loadLatestMessages()", inbox)
 		self.assertIn("'Scroll to bottom'", inbox)
-		self.assertNotIn("row.unread_count = 0", inbox)
+		# Opening a chat acknowledges its list badge for this browser, while the
+		# exact per-message ledger above still records only settled visible rows.
+		self.assertIn("function clearConversationBadge(name)", inbox)
+		self.assertIn("if (row) row.unread_count = 0", inbox)
 
 	def test_inbox_applies_complete_realtime_deltas_without_refetching(self):
 		inbox = (

@@ -260,6 +260,46 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertFalse(inbox_page["message_page"]["has_more"])
 		self.assertTrue(inbox_page["message_page"]["has_more_newer"])
 
+	def test_call_and_recording_are_projected_into_the_contact_chat(self):
+		from frappe_whatsapp_core.calling import get_call_artifact
+		from frappe_whatsapp_core.inbox import conversation, conversation_page
+
+		started_at = frappe.utils.add_to_date(now_datetime(), seconds=10)
+		call = frappe.get_doc({
+			"doctype": "WhatsApp Core Call",
+			"call_id": f"workspace-call-{frappe.generate_hash(length=8).lower()}",
+			"channel": self.channel.name,
+			"conversation": self.conversation.name,
+			"remote_identity": self.identity.name,
+			"direction": "Inbound",
+			"status": "terminated",
+			"remote_number": self.identity.normalized_value,
+			"started_at": started_at,
+			"ended_at": frappe.utils.add_to_date(started_at, seconds=42),
+			"recording_media_id": "MEDIA-WORKSPACE-CALL",
+			"recording_url": "/private/files/workspace-call.ogg",
+			"recording_mime_type": "audio/ogg",
+			"last_event": {"event": "call_recording_available"},
+		}).insert(ignore_permissions=True)
+
+		detail = conversation(self.conversation.name)
+		projected = next(row for row in detail["calls"] if row.name == call.name)
+		self.assertEqual(projected.conversation, self.conversation.name)
+		self.assertEqual(projected.recording_media_id, "MEDIA-WORKSPACE-CALL")
+		self.assertEqual(projected.timeline_at, started_at)
+
+		row = next(
+			row
+			for row in conversation_page(limit=100)["rows"]
+			if row["name"] == self.conversation.name
+		)
+		self.assertEqual(row["latest_message"].message_type, "call")
+		self.assertEqual(row["latest_message"].body, "Incoming call · Completed")
+
+		artifact = get_call_artifact(call_name=call.name, kind="recording", download=1)
+		self.assertEqual(artifact["file_url"], "/private/files/workspace-call.ogg")
+		self.assertTrue(artifact["cached"])
+
 	@patch(
 		"frappe_whatsapp_core.conversation_reads._latest_inbound_provider_message",
 		return_value=None,

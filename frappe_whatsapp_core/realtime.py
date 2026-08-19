@@ -318,7 +318,9 @@ def publish_call_changes(call_names, *, after_commit: bool = True) -> int:
 			"name", "call_id", "channel", "conversation", "remote_identity",
 			"direction", "status", "remote_number", "remote_user_id",
 			"remote_username", "handled_by", "started_at", "ended_at", "session",
-			"recording_media_id", "transcript_media_id", "modified",
+			"recording_media_id", "recording_mime_type", "recording_url",
+			"transcript_media_id", "transcript_mime_type", "transcript_url",
+			"creation", "modified",
 		],
 		limit_page_length=len(names),
 	)
@@ -353,6 +355,7 @@ def publish_call_changes(call_names, *, after_commit: bool = True) -> int:
 			or "WhatsApp contact"
 		)
 		row["presentation"] = presentation
+		row["timeline_at"] = row.started_at or row.ended_at or row.creation or row.modified
 		row["handled_by_name"] = handler_names.get(
 			row.handled_by, row.handled_by or ""
 		)

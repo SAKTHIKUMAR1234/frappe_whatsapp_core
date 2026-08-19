@@ -830,9 +830,37 @@ def materialize_call(event, channel, provider_call, contact=None):
 		doc = frappe.get_doc("WhatsApp Core Call", existing)
 		doc.update(values)
 		doc.save(ignore_permissions=True)
+		touch_conversation_call_activity(
+			doc.conversation,
+			doc.ended_at or doc.started_at or doc.creation,
+		)
 		return {"kind": "call", "status": "updated", "name": doc.name}
 	doc = frappe.get_doc(values).insert(ignore_permissions=True)
+	touch_conversation_call_activity(
+		doc.conversation,
+		doc.ended_at or doc.started_at or doc.creation,
+	)
 	return {"kind": "call", "status": "created", "name": doc.name}
+
+
+def touch_conversation_call_activity(conversation, activity_at) -> None:
+	"""Move a contact chat to its latest call without opening the message window."""
+	conversation = str(conversation or "").strip()
+	if not conversation or not activity_at:
+		return
+	current = frappe.db.get_value(
+		"WhatsApp Core Conversation", conversation, "last_message_at"
+	)
+	activity_at = get_datetime(activity_at)
+	if current and get_datetime(current) >= activity_at:
+		return
+	frappe.db.set_value(
+		"WhatsApp Core Conversation",
+		conversation,
+		"last_message_at",
+		activity_at,
+		update_modified=False,
+	)
 
 
 def materialize_group_event(event, channel, provider_group, webhook_field="groups"):

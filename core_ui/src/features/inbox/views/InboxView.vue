@@ -10,6 +10,7 @@
 	import { MessageSquarePlus, ArrowDown, Search, ShieldAlert, X } from 'lucide-vue-next'
 
 	import ConversationHeader from '@/features/inbox/components/ConversationHeader.vue'
+	import CallTimelineEvent from '@/features/inbox/components/CallTimelineEvent.vue'
 	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
 	import ConversationContext from '@/features/inbox/components/ConversationContext.vue'
 	import ContactMessageEditor from '@/features/inbox/components/ContactMessageEditor.vue'
@@ -263,6 +264,51 @@
 	const ungrouped = computed(() =>
 		(detail.value?.messages || []).filter(
 			(message) => !assignedMessages.value.has(message.name),
+		),
+	)
+	function timelineTimestamp(value) {
+		const raw =
+			value?.timeline_at ||
+			value?.provider_timestamp ||
+			value?.started_at ||
+			value?.ended_at ||
+			value?.creation ||
+			value?.modified
+		const timestamp = new Date(raw || 0).getTime()
+		return Number.isFinite(timestamp) ? timestamp : 0
+	}
+	const visibleCalls = computed(() => {
+		const calls = detail.value?.calls || []
+		const messages = detail.value?.messages || []
+		if (!messages.length) return calls
+		const timestamps = messages.map(timelineTimestamp).filter(Boolean)
+		if (!timestamps.length) return calls
+		const oldest = Math.min(...timestamps)
+		const newest = Math.max(...timestamps)
+		return calls.filter((callRow) => {
+			const at = timelineTimestamp(callRow)
+			return (
+				(!messagePage.value.has_more || at >= oldest) &&
+				(!messagePage.value.has_more_newer || at <= newest)
+			)
+		})
+	})
+	const timelineItems = computed(() =>
+		[
+			...ungrouped.value.map((message) => ({
+				kind: 'message',
+				key: `message:${message.name}`,
+				value: message,
+			})),
+			...visibleCalls.value.map((callRow) => ({
+				kind: 'call',
+				key: `call:${callRow.name || callRow.call_id}`,
+				value: callRow,
+			})),
+		].sort(
+			(left, right) =>
+				timelineTimestamp(left.value) - timelineTimestamp(right.value) ||
+				left.key.localeCompare(right.key),
 		),
 	)
 	const textReady = computed(() => Boolean(detail.value?.outbound?.text_ready))
@@ -1446,6 +1492,76 @@
 		}
 	}
 
+	function callPreview(callRow) {
+		const direction = callRow?.direction === 'Inbound' ? 'Incoming' : 'Outgoing'
+		const status = String(callRow?.status || '').toLowerCase()
+		if (['missed', 'reject', 'rejected', 'failed'].includes(status))
+			return `${direction} call · ${status[0].toUpperCase()}${status.slice(1)}`
+		if (['terminate', 'terminated', 'ended'].includes(status))
+			return `${direction} call · Completed`
+		if (['accept', 'accepted', 'connected'].includes(status))
+			return `${direction} call · Answered`
+		return `${direction} call`
+	}
+
+	function upsertTimelineCall(event) {
+		const callRow = event?.call
+		if (!callRow?.conversation) return
+		if (callRow.conversation === selectedName.value && detail.value) {
+			if (!Array.isArray(detail.value.calls)) detail.value.calls = []
+			const existing = detail.value.calls.findIndex(
+				(item) =>
+					(callRow.name && item.name === callRow.name) ||
+					(callRow.call_id && item.call_id === callRow.call_id),
+			)
+			const merged =
+				existing >= 0 ? { ...detail.value.calls[existing], ...callRow } : callRow
+			if (existing >= 0) detail.value.calls.splice(existing, 1, merged)
+			else detail.value.calls.push(merged)
+			if (existing < 0 && atMessageBottom.value) nextTick().then(() => scrollToBottom())
+		}
+		const row = rows.value.find((item) => item.name === callRow.conversation)
+		if (!row) {
+			hydrateConversationRow(callRow.conversation)
+			return
+		}
+		const activityAt =
+			callRow.ended_at || callRow.started_at || callRow.timeline_at || callRow.modified
+		if (
+			!row.last_message_at ||
+			timelineTimestamp({ timeline_at: activityAt }) >=
+				timelineTimestamp({ timeline_at: row.last_message_at })
+		) {
+			row.last_message_at = activityAt
+			row.latest_message = {
+				name: callRow.name,
+				call_id: callRow.call_id,
+				message_type: 'call',
+				direction: callRow.direction,
+				body: callPreview(callRow),
+				provider_timestamp: activityAt,
+				delivery_status: callRow.status,
+			}
+			sortConversationRows()
+		}
+	}
+
+	async function refreshVisibleCalls() {
+		if (!detail.value || !selectedName.value) return
+		const conversation = selectedName.value
+		const currentDetail = detail.value
+		try {
+			const result = await call('frappe_whatsapp_core.calling.conversation_call_history', {
+				conversation,
+				limit: 100,
+			})
+			if (conversation === selectedName.value && detail.value === currentDetail)
+				currentDetail.calls = result?.rows || []
+		} catch {
+			// A later scoped call event or reconnect will retry this projection.
+		}
+	}
+
 	function updateMessageStatus(event) {
 		if (event?.changed) {
 			refreshCommittedBatch(event)
@@ -1834,6 +1950,7 @@
 		unsubscribers.push(
 			subscribe(site, 'whatsapp_core_message', appendMessage),
 			subscribe(site, 'whatsapp_core_message_status', updateMessageStatus),
+			subscribe(site, 'whatsapp_core_call', upsertTimelineCall),
 			subscribe(site, 'whatsapp_core_conversation_read', updateConversationReader),
 			subscribe(site, 'whatsapp_core_batch_committed', refreshCommittedBatch),
 			subscribeConnection(site, async (status) => {
@@ -1845,7 +1962,8 @@
 				// Socket.IO does not replay events missed while a browser was offline.
 				// Reconcile from durable Core projections after every reconnect.
 				await loadRows({ silent: true })
-				if (selectedName.value) await refreshVisibleMessages()
+				if (selectedName.value)
+					await Promise.all([refreshVisibleMessages(), refreshVisibleCalls()])
 			}),
 		)
 	})
@@ -2024,22 +2142,27 @@
 									/>
 								</div>
 							</details>
-							<div v-if="ungrouped.length" class="ungrouped">
+							<div v-if="timelineItems.length" class="ungrouped">
 								<div v-if="topics.length" class="section-label">
-									Recent ungrouped messages
+									Recent conversation activity
 								</div>
-								<MessageBubble
-									v-for="message in ungrouped"
-									:key="message.name"
-									:message="message"
-									:message-index="providerMessageMap"
-									:contact-name="detail.display_name"
-									:readers="readersByMessage.get(message.name) || []"
-									@reply="selectReply"
-									@quote="openQuotedMessage"
-									@retry="retryMessage"
-									@menu="openMessageMenu"
-								/>
+								<template v-for="item in timelineItems" :key="item.key">
+									<CallTimelineEvent
+										v-if="item.kind === 'call'"
+										:call="item.value"
+									/>
+									<MessageBubble
+										v-else
+										:message="item.value"
+										:message-index="providerMessageMap"
+										:contact-name="detail.display_name"
+										:readers="readersByMessage.get(item.value.name) || []"
+										@reply="selectReply"
+										@quote="openQuotedMessage"
+										@retry="retryMessage"
+										@menu="openMessageMenu"
+									/>
+								</template>
 							</div>
 							<Button
 								v-if="messagePage.has_more_newer"
