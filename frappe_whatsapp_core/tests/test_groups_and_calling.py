@@ -9,6 +9,7 @@ from frappe_whatsapp_core.calling import (
 	_rtc_configuration,
 	_claim_call,
 	_release_call_claim,
+	attach_mixed_call_recording,
 	call_action as core_call_action,
 	call_history,
 	calling_workspace,
@@ -517,6 +518,79 @@ class TestGroupsAndCalling(FrappeTestCase):
 		)
 		publish.assert_called_once_with([call.name])
 		relay.assert_called_once()
+
+	def test_handling_operator_can_attach_valid_private_two_way_recording(self):
+		from frappe.utils.file_manager import save_file
+
+		channel = get_or_create_channel("CALL-MIX-PHONE", "CALL-MIX-WABA")
+		identity = get_or_create_identity("919876543215", resolve=False)
+		conversation = frappe.get_doc({
+			"doctype": "WhatsApp Core Conversation",
+			"conversation_key": "CALL-MIX-CONVERSATION",
+			"channel": channel.name,
+			"remote_identity": identity.name,
+			"status": "Open",
+			"last_message_at": frappe.utils.now_datetime(),
+		}).insert(ignore_permissions=True)
+		call = frappe.get_doc({
+			"doctype": "WhatsApp Core Call",
+			"call_id": "CALL-MIX-RECORDING",
+			"channel": channel.name,
+			"conversation": conversation.name,
+			"remote_identity": identity.name,
+			"direction": "Inbound",
+			"status": "terminated",
+			"handled_by": "Administrator",
+			"last_event": {"event": "terminated"},
+		}).insert(ignore_permissions=True)
+		content = b"\x1aE\xdf\xa3" + b"browser-mixed-local-and-remote"
+		file_doc = save_file(
+			f"call-mix-{frappe.generate_hash(length=8)}.webm",
+			content,
+			None,
+			None,
+			is_private=1,
+		)
+		frappe.db.set_value(
+			"WhatsApp Core Call", call.name, "handled_by", "Guest", update_modified=False
+		)
+		with self.assertRaises(frappe.PermissionError):
+			attach_mixed_call_recording(call.call_id, file_doc.file_url)
+		self.assertFalse(
+			frappe.db.get_value("File", file_doc.name, "attached_to_doctype")
+		)
+		frappe.db.set_value(
+			"WhatsApp Core Call",
+			call.name,
+			"handled_by",
+			"Administrator",
+			update_modified=False,
+		)
+
+		with patch("frappe_whatsapp_core.realtime.publish_call_changes") as publish:
+			result = attach_mixed_call_recording(call.call_id, file_doc.file_url)
+
+		self.assertTrue(result["success"])
+		stored = frappe.db.get_value(
+			"WhatsApp Core Call",
+			call.name,
+			[
+				"mixed_recording_url",
+				"mixed_recording_mime_type",
+				"mixed_recording_sha256",
+			],
+			as_dict=True,
+		)
+		self.assertEqual(stored.mixed_recording_url, file_doc.file_url)
+		self.assertEqual(stored.mixed_recording_mime_type, "audio/webm")
+		self.assertEqual(len(stored.mixed_recording_sha256), 64)
+		self.assertEqual(
+			frappe.db.get_value(
+				"File", file_doc.name, ["attached_to_doctype", "attached_to_name"]
+			),
+			("WhatsApp Core Call", call.name),
+		)
+		publish.assert_called_once_with([call.name])
 
 	def test_call_claims_are_exclusive_per_call_not_global(self):
 		channel = get_or_create_channel("CALL-CLAIM-PHONE", "CALL-CLAIM-WABA")

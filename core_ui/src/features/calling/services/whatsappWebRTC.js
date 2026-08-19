@@ -88,6 +88,7 @@ export class WhatsAppWebRTCSession {
 		this.localStream = null
 		this.remoteStream = null
 		this.muted = false
+		this.recording = null
 	}
 
 	static supported() {
@@ -164,13 +165,106 @@ export class WhatsAppWebRTCSession {
 		return this.muted
 	}
 
+	async startMixedRecording() {
+		if (this.recording?.recorder?.state === 'recording') return true
+		const AudioContext = globalThis.AudioContext || globalThis.webkitAudioContext
+		if (!globalThis.MediaRecorder || !AudioContext) return false
+		if (!this.localStream?.getAudioTracks?.().length) return false
+		if (!this.remoteStream?.getAudioTracks?.().length) return false
+
+		const context = new AudioContext()
+		if (context.state === 'suspended') await context.resume()
+		const destination = context.createMediaStreamDestination()
+		const localSource = context.createMediaStreamSource(this.localStream)
+		const remoteSource = context.createMediaStreamSource(this.remoteStream)
+		localSource.connect(destination)
+		remoteSource.connect(destination)
+		const mimeType =
+			['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm'].find((candidate) =>
+				globalThis.MediaRecorder.isTypeSupported?.(candidate),
+			) || ''
+		const recorder = new globalThis.MediaRecorder(
+			destination.stream,
+			mimeType ? { mimeType } : undefined,
+		)
+		const chunks = []
+		recorder.addEventListener('dataavailable', (event) => {
+			if (event.data?.size) chunks.push(event.data)
+		})
+		this.recording = {
+			context,
+			destination,
+			localSource,
+			remoteSource,
+			recorder,
+			chunks,
+			mimeType: recorder.mimeType || mimeType || 'audio/webm',
+		}
+		recorder.start(1000)
+		return true
+	}
+
+	stopMixedRecording() {
+		const recording = this.recording
+		this.recording = null
+		if (!recording?.recorder || recording.recorder.state === 'inactive') {
+			this.#closeRecordingGraph(recording)
+			return Promise.resolve(null)
+		}
+		return new Promise((resolve, reject) => {
+			let finished = false
+			const finish = () => {
+				if (finished) return
+				finished = true
+				const blob = recording.chunks.length
+					? new Blob(recording.chunks, { type: recording.mimeType })
+					: null
+				this.#closeRecordingGraph(recording)
+				resolve(blob?.size ? blob : null)
+			}
+			const fail = (event) => {
+				if (finished) return
+				finished = true
+				this.#closeRecordingGraph(recording)
+				reject(event?.error || new Error('The mixed call recording failed.'))
+			}
+			recording.recorder.addEventListener('stop', finish, { once: true })
+			recording.recorder.addEventListener('error', fail, { once: true })
+			try {
+				recording.recorder.stop()
+			} catch (error) {
+				fail({ error })
+			}
+		})
+	}
+
 	close() {
+		if (this.recording) {
+			try {
+				this.recording.recorder?.stop()
+			} catch {
+				// The recorder may already be stopping during call cleanup.
+			}
+			this.#closeRecordingGraph(this.recording)
+			this.recording = null
+		}
 		for (const track of this.localStream?.getTracks?.() || []) track.stop()
 		for (const track of this.remoteStream?.getTracks?.() || []) track.stop()
 		this.peer?.close()
 		this.peer = null
 		this.localStream = null
 		this.remoteStream = null
+	}
+
+	#closeRecordingGraph(recording) {
+		try {
+			recording?.localSource?.disconnect()
+			recording?.remoteSource?.disconnect()
+		} catch {
+			// A browser may already have disconnected a source as media ended.
+		}
+		for (const track of recording?.destination?.stream?.getTracks?.() || []) track.stop()
+		recording?.context?.close?.()?.catch?.(() => {})
 	}
 
 	async #prepareMedia() {

@@ -29,6 +29,9 @@
 		"recording_url",
 		"recording_mime_type",
 		"recording_sha256",
+		"mixed_recording_url",
+		"mixed_recording_mime_type",
+		"mixed_recording_sha256",
 		"transcript_media_id",
 		"transcript_url",
 		"transcript_mime_type",
@@ -161,6 +164,24 @@
 			"fieldname": "recording_sha256",
 			"fieldtype": "Data",
 			"label": "Recording SHA-256"
+		},
+		{
+			"fieldname": "mixed_recording_url",
+			"fieldtype": "Small Text",
+			"label": "Browser Mixed Recording URL",
+			"read_only": 1
+		},
+		{
+			"fieldname": "mixed_recording_mime_type",
+			"fieldtype": "Data",
+			"label": "Browser Mixed Recording MIME Type",
+			"read_only": 1
+		},
+		{
+			"fieldname": "mixed_recording_sha256",
+			"fieldtype": "Data",
+			"label": "Browser Mixed Recording SHA-256",
+			"read_only": 1
 		},
 		{
 			"fieldname": "transcript_media_id",

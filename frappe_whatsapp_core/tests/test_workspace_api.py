@@ -282,6 +282,8 @@ class TestWorkspaceAPI(FrappeTestCase):
 			"recording_media_id": "MEDIA-WORKSPACE-CALL",
 			"recording_url": "/private/files/workspace-call.ogg",
 			"recording_mime_type": "audio/ogg",
+			"mixed_recording_url": "/private/files/workspace-call-mixed.webm",
+			"mixed_recording_mime_type": "audio/webm",
 			"last_event": {"event": "call_recording_available"},
 		}).insert(ignore_permissions=True)
 
@@ -289,6 +291,8 @@ class TestWorkspaceAPI(FrappeTestCase):
 		projected = next(row for row in detail["calls"] if row.name == call.name)
 		self.assertEqual(projected.conversation, self.conversation.name)
 		self.assertEqual(projected.recording_media_id, "MEDIA-WORKSPACE-CALL")
+		self.assertEqual(projected.recording_url, "/private/files/workspace-call-mixed.webm")
+		self.assertEqual(projected.provider_recording_url, "/private/files/workspace-call.ogg")
 		self.assertEqual(projected.timeline_at, started_at)
 
 		row = next(
@@ -300,7 +304,7 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertEqual(row["latest_message"].body, "Incoming call · Completed")
 
 		artifact = get_call_artifact(call_name=call.name, kind="recording", download=1)
-		self.assertEqual(artifact["file_url"], "/private/files/workspace-call.ogg")
+		self.assertEqual(artifact["file_url"], "/private/files/workspace-call-mixed.webm")
 		self.assertTrue(artifact["cached"])
 
 	@patch(

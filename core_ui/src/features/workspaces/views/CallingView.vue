@@ -143,11 +143,13 @@
 
 	async function openArtifact(callRow, kind) {
 		const mediaId = callRow?.[`${kind}_media_id`]
-		if (!mediaId) return
-		const result = await run(`artifact-${mediaId}`, () =>
+		const localUrl = kind === 'recording' ? callRow?.recording_url : callRow?.transcript_url
+		if (!mediaId && !localUrl) return
+		const artifactKey = callRow?.name || mediaId
+		const result = await run(`artifact-${artifactKey}`, () =>
 			call('frappe_whatsapp_core.calling.get_call_artifact', {
-				account_name: calling.selectedAccount,
-				media_id: mediaId,
+				call_name: callRow.name,
+				kind,
 				download: 1,
 			}),
 		)
@@ -357,11 +359,13 @@
 					/>
 					<div class="row-actions">
 						<Button
-							v-if="callRow.recording_media_id"
+							v-if="callRow.recording_media_id || callRow.recording_url"
 							label="Recording"
 							severity="secondary"
 							text
-							:loading="action === `artifact-${callRow.recording_media_id}`"
+							:loading="
+								action === `artifact-${callRow.name || callRow.recording_media_id}`
+							"
 							@click="openArtifact(callRow, 'recording')"
 						/>
 						<Button

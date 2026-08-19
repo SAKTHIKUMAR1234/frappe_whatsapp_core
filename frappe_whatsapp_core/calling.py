@@ -1,5 +1,6 @@
 """Site-scoped Core facade for the complete WhatsApp Calling surface."""
 
+import hashlib
 import mimetypes
 from pathlib import Path
 
@@ -65,6 +66,8 @@ DEFAULT_CALL_RECORDING = {
 	"purpose": "Customer service quality and record keeping",
 	"announcement_language": "en_US",
 }
+MAX_BROWSER_CALL_RECORDING_BYTES = 50 * 1024 * 1024
+MIXED_RECORDING_MIME_TYPES = {"audio/webm", "audio/ogg", "audio/mp4"}
 
 
 def _can_manage():
@@ -184,6 +187,8 @@ def _call_rows(
 			call_log.started_at, call_log.ended_at, call_log.cta_payload,
 			call_log.deeplink_payload, call_log.recording_media_id,
 			call_log.recording_mime_type, call_log.recording_url,
+			call_log.mixed_recording_url, call_log.mixed_recording_mime_type,
+			call_log.mixed_recording_sha256,
 			call_log.transcript_media_id, call_log.transcript_mime_type,
 			call_log.transcript_url, call_log.session, call_log.creation,
 			call_log.modified
@@ -213,6 +218,8 @@ def _call_rows(
 		)
 		row["presentation"] = presentation
 		row["timeline_at"] = row.started_at or row.ended_at or row.creation or row.modified
+		row["provider_recording_url"] = row.recording_url
+		row["recording_url"] = row.mixed_recording_url or row.recording_url
 	handlers = {
 		str(row.handled_by)
 		for row in rows
@@ -475,6 +482,7 @@ def _record_outgoing_call(account_name, identity, payload, result):
 		"status": "connect",
 		"remote_number": payload.get("to"),
 		"remote_user_id": payload.get("recipient"),
+		"handled_by": frappe.session.user,
 		"started_at": now_datetime(),
 		"session": payload.get("session"),
 		"last_event": {"event": "connect", "source": "browser"},
@@ -716,6 +724,7 @@ def get_call_artifact(
 		frappe.throw("Call artifact kind must be recording or transcript", frappe.ValidationError)
 	fields = [
 		"name", "call_id", "channel", "recording_media_id", "recording_url",
+		"mixed_recording_url", "mixed_recording_mime_type",
 		"transcript_media_id", "transcript_url",
 	]
 	call = None
@@ -748,16 +757,20 @@ def get_call_artifact(
 	if not call:
 		frappe.throw("Call artifact is not linked to a Core call", frappe.DoesNotExistError)
 	assert_call_access(call.call_id)
-	if not media_id:
-		frappe.throw(f"This call has no {kind} artifact", frappe.DoesNotExistError)
-	local_url = str(call.get(f"{kind}_url") or "").strip()
+	local_url = str(
+		(call.get("mixed_recording_url") if kind == "recording" else None)
+		or call.get(f"{kind}_url")
+		or ""
+	).strip()
 	if int(download or 0) and local_url.startswith("/private/files/"):
 		return {
 			"success": True,
 			"file_url": local_url,
-			"media_id": media_id,
+			"media_id": media_id or "",
 			"cached": True,
 		}
+	if not media_id:
+		frappe.throw(f"This call has no {kind} artifact", frappe.DoesNotExistError)
 	if not account_name:
 		settings = frappe.get_cached_doc("WhatsApp Core Settings")
 		account_name = settings.get_account_name(call.channel)
@@ -798,6 +811,90 @@ def get_call_artifact(
 		"mime_type": mime_type,
 		"media_id": media_id,
 	}
+
+
+def _mixed_recording_mime_type(file_doc, content: bytes) -> str:
+	"""Validate the small set of browser audio containers accepted by Core."""
+	suffix = Path(file_doc.file_name or "").suffix.lower()
+	mime_type = {
+		".webm": "audio/webm",
+		".ogg": "audio/ogg",
+		".oga": "audio/ogg",
+		".m4a": "audio/mp4",
+		".mp4": "audio/mp4",
+	}.get(suffix, "")
+	valid_magic = (
+		(mime_type == "audio/webm" and content.startswith(b"\x1aE\xdf\xa3"))
+		or (mime_type == "audio/ogg" and content.startswith(b"OggS"))
+		or (mime_type == "audio/mp4" and len(content) >= 12 and content[4:8] == b"ftyp")
+	)
+	if mime_type not in MIXED_RECORDING_MIME_TYPES or not valid_magic:
+		frappe.throw("Call recording must be a WebM, OGG, or MP4 audio file", frappe.ValidationError)
+	return mime_type
+
+
+@frappe.whitelist()
+@require_core_access()
+def attach_mixed_call_recording(call_id, file_url):
+	"""Attach the browser mix made by the operator who handled this call.
+
+	The upload endpoint creates an unattached private File first. This operation
+	binds it to exactly one authorized call only after checking ownership, size,
+	container signature and the call claim.
+	"""
+	call_id = str(call_id or "").strip()
+	file_url = str(file_url or "").strip()
+	assert_call_access(call_id)
+	call = frappe.db.get_value(
+		"WhatsApp Core Call",
+		{"call_id": call_id},
+		["name", "handled_by", "mixed_recording_url"],
+		as_dict=True,
+	)
+	if not call:
+		frappe.throw("Call not found", frappe.DoesNotExistError)
+	if str(call.handled_by or "") != frappe.session.user:
+		frappe.throw(
+			"Only the operator who handled this call can attach its browser recording",
+			frappe.PermissionError,
+		)
+	if call.mixed_recording_url:
+		if call.mixed_recording_url == file_url:
+			return {"success": True, "file_url": file_url, "cached": True}
+		frappe.throw("This call already has a browser recording", frappe.ValidationError)
+	file_name = frappe.db.get_value("File", {"file_url": file_url}, "name")
+	if not file_name:
+		frappe.throw("Uploaded call recording not found", frappe.DoesNotExistError)
+	file_doc = frappe.get_doc("File", file_name)
+	if not file_doc.is_private or file_doc.owner != frappe.session.user:
+		frappe.throw("The recording must be a private upload owned by you", frappe.PermissionError)
+	if file_doc.attached_to_doctype or file_doc.attached_to_name:
+		frappe.throw("The recording file is already attached to another document", frappe.PermissionError)
+	if int(file_doc.file_size or 0) > MAX_BROWSER_CALL_RECORDING_BYTES:
+		frappe.throw("Call recording exceeds the 50 MB limit", frappe.ValidationError)
+	content = file_doc.get_content()
+	if isinstance(content, str):
+		content = content.encode()
+	if not content or len(content) > MAX_BROWSER_CALL_RECORDING_BYTES:
+		frappe.throw("Call recording is empty or exceeds the 50 MB limit", frappe.ValidationError)
+	mime_type = _mixed_recording_mime_type(file_doc, content)
+	file_doc.attached_to_doctype = "WhatsApp Core Call"
+	file_doc.attached_to_name = call.name
+	file_doc.save(ignore_permissions=True)
+	frappe.db.set_value(
+		"WhatsApp Core Call",
+		call.name,
+		{
+			"mixed_recording_url": file_doc.file_url,
+			"mixed_recording_mime_type": mime_type,
+			"mixed_recording_sha256": hashlib.sha256(content).hexdigest(),
+		},
+		update_modified=False,
+	)
+	from frappe_whatsapp_core.realtime import publish_call_changes
+
+	publish_call_changes([call.name])
+	return {"success": True, "file_url": file_doc.file_url, "mime_type": mime_type}
 
 
 @frappe.whitelist()

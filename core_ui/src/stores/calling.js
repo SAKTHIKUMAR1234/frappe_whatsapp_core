@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
-import { call, errorMessage } from '@/services/frappe'
+import { call, errorMessage, uploadFile } from '@/services/frappe'
 import { subscribe } from '@/services/realtime'
 import { acceptIncomingMedia } from '@/features/calling/services/callSignaling'
 import {
@@ -52,15 +52,14 @@ export const useCallingStore = defineStore('core-calling', () => {
 	let currentUser = ''
 	let siteName = ''
 	let durationTimer = null
+	let recordingAuthorized = false
 
 	const accounts = computed(() => workspace.value.accounts || [])
 	const contacts = computed(() => workspace.value.contacts || [])
 	const calls = computed(() => workspace.value.calls || [])
 	const callingEnabled = computed(() => Boolean(workspace.value.calling?.enabled))
 	const canManage = computed(() => Boolean(workspace.value.can_manage))
-	const incoming = computed(() =>
-		nextIncomingCall(calls.value, active.value?.call_id),
-	)
+	const incoming = computed(() => nextIncomingCall(calls.value, active.value?.call_id))
 	const busy = computed(() => Boolean(active.value))
 
 	function accountForChannel(channel) {
@@ -192,16 +191,19 @@ export const useCallingStore = defineStore('core-calling', () => {
 
 	function createRtc() {
 		rtc?.close()
+		recordingAuthorized = false
 		remoteStream.value = null
 		rtc = new WhatsAppWebRTCSession(workspace.value.rtc_configuration || {}, {
 			onRemoteStream: (stream) => {
 				remoteStream.value = stream
+				void startMixedRecordingIfReady()
 			},
 			onConnectionState: (state) => {
 				if (!active.value) return
 				if (state === 'connected') {
 					active.value = { ...active.value, phase: 'connected' }
 					startDuration()
+					void startMixedRecordingIfReady()
 				}
 				if (['failed', 'closed'].includes(state) && active.value.phase !== 'ending') {
 					error.value = state === 'failed' ? 'The call audio connection failed.' : ''
@@ -209,6 +211,19 @@ export const useCallingStore = defineStore('core-calling', () => {
 			},
 		})
 		return rtc
+	}
+
+	async function startMixedRecordingIfReady() {
+		if (!recordingAuthorized || !rtc || !active.value) return false
+		try {
+			return await rtc.startMixedRecording()
+		} catch (exception) {
+			error.value = errorMessage(
+				exception,
+				'The call is connected, but the browser could not start its two-way recording.',
+			)
+			return false
+		}
 	}
 
 	async function startCall(contact) {
@@ -239,6 +254,8 @@ export const useCallingStore = defineStore('core-calling', () => {
 			const callId = providerCallId(result)
 			if (!callId) throw new Error('Meta did not return a call identifier.')
 			active.value = { ...active.value, call_id: callId, status: 'connect' }
+			recordingAuthorized = true
+			void startMixedRecordingIfReady()
 			return result
 		} catch (exception) {
 			finishCall()
@@ -281,6 +298,8 @@ export const useCallingStore = defineStore('core-calling', () => {
 				},
 			})
 			active.value = { ...active.value, phase: 'connected', handled_by: currentUser }
+			recordingAuthorized = true
+			void startMixedRecordingIfReady()
 		} catch (exception) {
 			if (providerClaimed) {
 				try {
@@ -356,16 +375,46 @@ export const useCallingStore = defineStore('core-calling', () => {
 		}, 1000)
 	}
 
+	async function persistMixedRecording(blob, callSnapshot) {
+		if (!blob?.size || !callSnapshot?.call_id) return
+		const mimeType = String(blob.type || 'audio/webm').split(';', 1)[0]
+		const extension =
+			mimeType === 'audio/ogg' ? 'ogg' : mimeType === 'audio/mp4' ? 'm4a' : 'webm'
+		const safeCallId = String(callSnapshot.call_id)
+			.replace(/[^a-zA-Z0-9_.-]/g, '-')
+			.slice(0, 80)
+		const file = new File([blob], `whatsapp-call-${safeCallId}.${extension}`, {
+			type: mimeType,
+		})
+		const stored = await uploadFile(file, true)
+		await call('frappe_whatsapp_core.calling.attach_mixed_call_recording', {
+			call_id: callSnapshot.call_id,
+			file_url: stored.file_url,
+		})
+	}
+
 	function finishCall(message = '') {
 		window.clearInterval(durationTimer)
 		durationTimer = null
 		elapsedSeconds.value = 0
 		muted.value = false
-		rtc?.close()
+		const session = rtc
+		const callSnapshot = active.value ? { ...active.value } : null
 		rtc = null
+		recordingAuthorized = false
 		remoteStream.value = null
 		active.value = null
 		if (message) notice.value = message
+		if (!session) return
+		Promise.resolve(session.stopMixedRecording())
+			.then((blob) => persistMixedRecording(blob, callSnapshot))
+			.catch((exception) => {
+				error.value = errorMessage(
+					exception,
+					'The call ended, but its two-way browser recording could not be saved.',
+				)
+			})
+			.finally(() => session.close())
 	}
 
 	function clearMessages() {

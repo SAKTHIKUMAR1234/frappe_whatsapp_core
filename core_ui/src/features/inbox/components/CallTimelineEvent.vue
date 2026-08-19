@@ -110,9 +110,12 @@
 				<span v-if="duration"><Clock3 :size="12" />{{ duration }}</span>
 				<span v-if="call.handled_by_name">Answered by {{ call.handled_by_name }}</span>
 			</div>
-			<div v-if="call.recording_media_id || call.transcript_media_id" class="call-artifacts">
+			<div
+				v-if="call.recording_media_id || call.recording_url || call.transcript_media_id"
+				class="call-artifacts"
+			>
 				<Button
-					v-if="call.recording_media_id && !recordingUrl"
+					v-if="(call.recording_media_id || call.recording_url) && !recordingUrl"
 					label="Play recording"
 					severity="secondary"
 					text

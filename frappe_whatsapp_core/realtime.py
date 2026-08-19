@@ -319,6 +319,8 @@ def publish_call_changes(call_names, *, after_commit: bool = True) -> int:
 			"direction", "status", "remote_number", "remote_user_id",
 			"remote_username", "handled_by", "started_at", "ended_at", "session",
 			"recording_media_id", "recording_mime_type", "recording_url",
+			"mixed_recording_url", "mixed_recording_mime_type",
+			"mixed_recording_sha256",
 			"transcript_media_id", "transcript_mime_type", "transcript_url",
 			"creation", "modified",
 		],
@@ -356,6 +358,8 @@ def publish_call_changes(call_names, *, after_commit: bool = True) -> int:
 		)
 		row["presentation"] = presentation
 		row["timeline_at"] = row.started_at or row.ended_at or row.creation or row.modified
+		row["provider_recording_url"] = row.recording_url
+		row["recording_url"] = row.mixed_recording_url or row.recording_url
 		row["handled_by_name"] = handler_names.get(
 			row.handled_by, row.handled_by or ""
 		)
