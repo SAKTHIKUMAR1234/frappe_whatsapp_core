@@ -65,11 +65,13 @@
 			"fieldtype": "Column Break"
 		},
 		{
+			"description": "API key provisioned by the Hub for this exact Connected Site; do not reuse another Core site's credential.",
 			"fieldname": "api_key",
 			"fieldtype": "Password",
 			"label": "Hub API Key"
 		},
 		{
+			"description": "API secret paired with this exact Connected Site's Hub API key.",
 			"fieldname": "api_secret",
 			"fieldtype": "Password",
 			"label": "Hub API Secret"

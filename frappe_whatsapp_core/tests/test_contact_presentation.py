@@ -18,6 +18,21 @@ class TestContactPresentation(FrappeTestCase):
 		])
 		self.assertEqual(result["IDENTITY-1"]["display_name"], "Default contact")
 		self.assertEqual(result["IDENTITY-1"]["reference"], "WhatsApp contact")
+		self.assertEqual(result["IDENTITY-1"]["secondary_text"], "10000000000")
+
+	def test_phone_alias_hides_opaque_business_scoped_identifier(self):
+		result = present_contacts(
+			[
+				frappe._dict({
+					"name": "IDENTITY-1",
+					"normalized_value": "IN.816402064840131",
+					"display_value": "Member Company",
+					"primary_link": None,
+				})
+			],
+			phone_aliases={"IDENTITY-1": "918190986951"},
+		)
+		self.assertEqual(result["IDENTITY-1"]["secondary_text"], "918190986951")
 
 	@patch("frappe_whatsapp_core.contact_presentation.frappe.get_attr")
 	@patch("frappe_whatsapp_core.contact_presentation.frappe.get_hooks")

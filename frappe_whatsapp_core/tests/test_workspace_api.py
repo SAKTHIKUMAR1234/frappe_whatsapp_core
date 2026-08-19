@@ -18,6 +18,7 @@ from frappe_whatsapp_core.message_media import (
 )
 from frappe_whatsapp_core.workspace_api import (
 	_outbound_handler,
+	add_team_contact,
 	add_team_member,
 	get_conversation,
 	list_conversations,
@@ -26,6 +27,7 @@ from frappe_whatsapp_core.workspace_api import (
 	remove_team_member,
 	send_text,
 	team_member_page,
+	team_contact_page,
 	team_workspace,
 	upsert_team,
 )
@@ -626,6 +628,11 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertEqual(team_member_page(team["name"])["rows"], [])
 		add_team_member(team["name"], "Administrator", "Manager")
 		self.assertEqual(team_member_page(team["name"])["rows"][0]["team_role"], "Manager")
+		add_team_contact(team["name"], self.identity.name)
+		contact = team_contact_page(team["name"])["rows"][0]
+		self.assertEqual(contact["display_value"], self.identity.display_value)
+		self.assertEqual(contact["phone_number"], "")
+		self.assertNotEqual(contact["phone_number"], self.identity.normalized_value)
 
 		with patch(
 			"frappe_whatsapp_core.workspace_api._outbound_handler"

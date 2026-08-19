@@ -668,6 +668,14 @@ def team_contact_page(team: str, search=None, limit=50, offset=0) -> dict:
 		values,
 		as_dict=True,
 	)
+	presentations = present_identity_names(
+		[row.identity for row in rows], context={"surface": "team_contacts", "team": team}
+	)
+	for row in rows:
+		presentation = presentations.get(row.identity) or {}
+		row.contact_presentation = presentation
+		row.display_value = presentation.get("display_name") or row.display_value
+		row.phone_number = presentation.get("secondary_text") or ""
 	return {"rows": rows[:limit], "has_more": len(rows) > limit, "offset": offset}
 
 

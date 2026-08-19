@@ -22,7 +22,9 @@
 				<span>{{ (data.display_name || 'WA').slice(0, 2).toUpperCase() }}</span>
 				<div>
 					<strong>{{ data.display_name }}</strong>
-					<small>{{ data.identity?.normalized_value }}</small>
+					<small v-if="data.contact_presentation?.secondary_text">
+						{{ data.contact_presentation.secondary_text }}
+					</small>
 				</div>
 			</div>
 			<Select

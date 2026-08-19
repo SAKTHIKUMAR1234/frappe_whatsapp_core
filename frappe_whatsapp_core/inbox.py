@@ -233,7 +233,7 @@ def _enrich_conversation_rows(
 			"assigned_team_details": teams.get(row.assigned_team),
 			"contact_teams": contact_teams.get(row.remote_identity, []),
 			"display_name": display_name,
-			"phone_number": identity.get("normalized_value") or "",
+			"phone_number": presentation.get("secondary_text") or "",
 			"identity_status": identity.get("status") or "",
 			"contact_presentation": presentation,
 			"party_binding": bindings.get(row.remote_identity),

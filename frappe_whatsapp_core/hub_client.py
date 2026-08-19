@@ -102,7 +102,7 @@ def call_management(method: str, args: dict | None = None) -> dict:
 		body = {"raw": response.text[:2000]}
 	result = body.get("message", body) if isinstance(body, dict) else body
 	if not response.ok:
-		frappe.throw(_error_message(result), frappe.ValidationError)
+		frappe.throw(_management_error(result), frappe.ValidationError)
 	if not isinstance(result, dict):
 		frappe.throw("WhatsApp Hub returned an invalid response", frappe.ValidationError)
 	return result
@@ -630,6 +630,18 @@ def _error_message(result) -> str:
 			or str(error)
 		)
 	return str(error or "WhatsApp Hub request failed")
+
+
+def _management_error(result) -> str:
+	message = _error_message(result)
+	if "Connected Site is outside this user's scope" not in message:
+		return message
+	site = str(getattr(frappe.local, "site", None) or "this Core site")
+	return (
+		f"The configured Hub API credential is not provisioned for {site}. "
+		"Provision this exact Connected Site in the Hub, then save its Hub API key "
+		"and secret in WhatsApp Core Settings."
+	)
 
 
 def _server_message(value) -> str:

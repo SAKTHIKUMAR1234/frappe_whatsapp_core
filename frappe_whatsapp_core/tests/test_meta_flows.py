@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from frappe_whatsapp_core.hub_client import _error_message, call_management
+from frappe_whatsapp_core.hub_client import _error_message, _management_error, call_management
 from frappe_whatsapp_core.meta_flows import (
 	create_flow,
 	flow_endpoint_status,
@@ -27,6 +27,13 @@ class TestHubManagementClient(FrappeTestCase):
 			)
 		}
 		self.assertEqual(_error_message(result), "Meta access token expired")
+
+	def test_scope_error_explains_connected_site_credential_mismatch(self):
+		message = _management_error({
+			"message": "The Connected Site is outside this user's scope"
+		})
+		self.assertIn("Hub API credential is not provisioned", message)
+		self.assertIn("WhatsApp Core Settings", message)
 
 	@patch("frappe_whatsapp_core.hub_client._session.post")
 	@patch("frappe_whatsapp_core.hub_client.get_settings")

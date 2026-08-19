@@ -129,7 +129,7 @@
 				<tbody>
 					<tr v-for="row in rows" :key="row.name">
 						<td>{{ row.display_value || row.identity }}</td>
-						<td>{{ row.normalized_value || '—' }}</td>
+						<td>{{ row.phone_number || '—' }}</td>
 						<td>
 							<Button
 								text

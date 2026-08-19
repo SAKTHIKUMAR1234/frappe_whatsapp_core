@@ -1942,7 +1942,7 @@
 				<template v-else>
 					<ConversationHeader
 						:display-name="detail.display_name"
-						:identity="detail.identity.normalized_value"
+						:identity="detail.contact_presentation?.secondary_text || ''"
 						:status="detail.conversation.status"
 						:context-open="contextOpen"
 						@back="closeMobileConversation"
