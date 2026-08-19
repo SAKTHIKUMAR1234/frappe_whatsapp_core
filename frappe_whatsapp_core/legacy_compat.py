@@ -87,7 +87,14 @@ def conversation_for_phone(
 	)
 	if not 7 <= len(phone) <= 15:
 		frappe.throw("Enter a valid WhatsApp phone number", frappe.ValidationError)
-	identity = get_or_create_identity(phone)
+	# The exact number supplied by the business API is authoritative. Reuse a
+	# provider-confirmed phone alias within this channel instead of creating a
+	# second global identity or selecting another number linked to the same party.
+	identity = get_or_create_identity(
+		phone,
+		scope=channel_doc.name,
+		aliases={"phone": phone},
+	)
 	conversation = get_or_create_conversation(channel_doc, identity)
 	return conversation
 
@@ -113,6 +120,7 @@ def queue_text_by_phone(
 		source,
 		client_message_id=client_message_id,
 		enqueue_delivery=enqueue_delivery,
+		recipient_override=phone_number,
 	)
 
 
@@ -158,6 +166,7 @@ def queue_template_by_phone(
 		source,
 		client_message_id=client_message_id,
 		enqueue_delivery=enqueue_delivery,
+		recipient_override=phone_number,
 	)
 	if local_file_url:
 		_preserve_local_template_file(message, local_file_url)
@@ -204,6 +213,7 @@ def queue_media_by_phone(
 		source,
 		local_file_url=local_file_url,
 		enqueue_delivery=enqueue_delivery,
+		recipient_override=phone_number,
 	)
 
 
@@ -262,6 +272,7 @@ def queue_interactive_by_phone(
 		body_text,
 		source,
 		enqueue_delivery=enqueue_delivery,
+		recipient_override=phone_number,
 	)
 
 

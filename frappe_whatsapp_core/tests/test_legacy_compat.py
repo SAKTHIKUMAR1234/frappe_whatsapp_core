@@ -6,12 +6,14 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from frappe_whatsapp_core.legacy_compat import (
+	conversation_for_phone,
 	legacy_template_components,
 	queue_interactive_by_phone,
 	queue_media_by_phone,
 	queue_template_by_phone,
 	queue_text_by_phone,
 )
+from frappe_whatsapp_core.materializer import get_or_create_identity
 from frappe_whatsapp_core.template_catalog import scoped_template_key
 
 
@@ -55,6 +57,23 @@ class TestLegacyCompatibility(FrappeTestCase):
 		self.assertEqual(message.delivery_status, "Queued")
 		self.assertEqual(message.message_type, "text")
 		self.assertEqual(message.body, "Core cutover proof")
+		self.assertEqual(message.recipient_address, self.phone)
+
+	def test_exact_phone_reuses_its_channel_scoped_provider_identity(self):
+		bsuid = f"IN.{frappe.generate_hash(length=18)}"
+		identity = get_or_create_identity(
+			bsuid,
+			resolve=False,
+			scope=self.channel.name,
+			aliases={"user_id": bsuid, "phone": self.phone},
+		)
+
+		conversation = conversation_for_phone(
+			self.phone,
+			phone_number_id=self.phone_number_id,
+		)
+
+		self.assertEqual(conversation.remote_identity, identity.name)
 
 	def test_template_converts_legacy_variables(self):
 		template_name = f"compat_{frappe.generate_hash(length=6).lower()}"

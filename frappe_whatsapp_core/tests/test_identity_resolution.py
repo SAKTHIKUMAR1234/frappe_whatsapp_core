@@ -52,7 +52,7 @@ class TestIdentityResolution(FrappeTestCase):
 		self.assertEqual([row["identity"] for row in results], [identity.name])
 		self.assertEqual(results[0]["label"], user.full_name)
 
-	def test_outbound_uses_current_phone_from_linked_document(self):
+	def test_outbound_rejects_linked_document_phone_replacement(self):
 		suffix = f"7{str(uuid.uuid4().int)[-9:]}"
 		replacement = f"8{str(uuid.uuid4().int)[-9:]}"
 		user = frappe.get_doc({
@@ -84,7 +84,8 @@ class TestIdentityResolution(FrappeTestCase):
 			"frappe_whatsapp_core.outbound.frappe.get_hooks",
 			side_effect=lambda key: {} if key == "whatsapp_core_contact_phone_resolvers" else [],
 		):
-			self.assertEqual(resolve_recipient_phone(identity), f"91{replacement}")
+			with self.assertRaises(frappe.ValidationError):
+				resolve_recipient_phone(identity)
 
 	def test_generic_source_resolves_and_deactivates_cleanly(self):
 		suffix = f"7{str(uuid.uuid4().int)[-9:]}"

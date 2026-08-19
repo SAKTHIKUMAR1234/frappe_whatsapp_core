@@ -108,6 +108,25 @@ def resolve_recipient_phone(identity, context: dict | None = None) -> str:
 	elif not bsuid:
 		value = _linked_recipient_phone(identity, context) or value
 
+	phone = _normalized_identity_phone(identity, value, context, attributes)
+	return phone
+
+
+def _normalized_identity_phone(
+	identity,
+	value,
+	context: dict | None = None,
+	attributes: dict | None = None,
+) -> str:
+	"""Validate a phone destination against provider-confirmed identity aliases.
+
+	Business adapters may choose among phone numbers linked to the same business
+	record, but they may never redirect a WhatsApp identity to an unrelated row.
+	"""
+	context = context or {}
+	attributes = attributes if attributes is not None else _json_dict(
+		getattr(identity, "attributes", None)
+	)
 	default_country_code = str(
 		context.get("default_country_calling_code")
 		or frappe.conf.get("whatsapp_default_country_calling_code")
@@ -123,7 +142,30 @@ def resolve_recipient_phone(identity, context: dict | None = None) -> str:
 			"The resolved WhatsApp recipient phone number is invalid",
 			frappe.ValidationError,
 		)
+	known_numbers = _identity_phone_candidates(identity, attributes)
+	if not known_numbers or not known_numbers.intersection(phone_candidates(phone)):
+		frappe.throw(
+			"The resolved WhatsApp recipient phone number does not belong to this "
+			"WhatsApp identity",
+			frappe.ValidationError,
+		)
 	return phone
+
+
+def _identity_phone_candidates(identity, attributes: dict | None = None) -> set[str]:
+	attributes = attributes if attributes is not None else _json_dict(
+		getattr(identity, "attributes", None)
+	)
+	values = list(attributes.get("phone_aliases") or [])
+	normalized_value = str(getattr(identity, "normalized_value", None) or "").strip()
+	if normalized_value and not is_business_scoped_user_id(normalized_value):
+		values.append(normalized_value)
+	return {
+		candidate
+		for value in values
+		for candidate in phone_candidates(value)
+		if candidate
+	}
 
 
 def _linked_recipient_phone(identity, context: dict) -> str | None:
@@ -205,7 +247,7 @@ def _mapped_phone_value(document, phone_field: str, identity_value: str) -> str 
 	for value in values:
 		if candidates.intersection(phone_candidates(value)):
 			return value
-	return values[0]
+	return None
 
 
 def outbound_state(conversation: str | None = None) -> dict:
@@ -349,6 +391,7 @@ def queue_text_internal(
 	preview_url=False,
 	enqueue_delivery: bool = True,
 	_batch_context: dict | None = None,
+	recipient_override: str | None = None,
 ) -> dict:
 	body = str(body or "").strip()
 	if not body:
@@ -369,6 +412,7 @@ def queue_text_internal(
 		client_message_id=client_message_id,
 		enqueue_delivery=enqueue_delivery,
 		_batch_context=_batch_context,
+		recipient_override=recipient_override,
 	)
 
 
@@ -545,6 +589,7 @@ def queue_rich_internal(
 	local_file_url: str | None = None,
 	enqueue_delivery: bool = True,
 	_batch_context: dict | None = None,
+	recipient_override: str | None = None,
 ) -> dict:
 	"""Queue a supported native Cloud API message without exposing its recipient.
 
@@ -570,6 +615,7 @@ def queue_rich_internal(
 		client_message_id=client_message_id,
 		enqueue_delivery=enqueue_delivery,
 		_batch_context=_batch_context,
+		recipient_override=recipient_override,
 	)
 	if local_file:
 		local_file.attached_to_doctype = "WhatsApp Core Message"
@@ -728,6 +774,7 @@ def queue_template_internal(
 	_template_doc=None,
 	transport_endpoint: str = "messages",
 	marketing_options: dict | None = None,
+	recipient_override: str | None = None,
 ) -> dict:
 	conversation_channel = frappe.db.get_value(
 		"WhatsApp Core Conversation", conversation_name, "channel"
@@ -782,6 +829,7 @@ def queue_template_internal(
 		client_message_id=client_message_id,
 		enqueue_delivery=enqueue_delivery,
 		_batch_context=_batch_context,
+		recipient_override=recipient_override,
 	)
 
 
@@ -1101,6 +1149,7 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 					_batch_context={
 						"conversation": conversation,
 						"identity": identity,
+						"recipient_address": recipient_phone,
 					},
 				)
 			else:
@@ -1114,6 +1163,7 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 					_batch_context={
 						"conversation": conversation,
 						"identity": identity,
+						"recipient_address": recipient_phone,
 					},
 					_template_doc=template,
 				)
@@ -1242,7 +1292,11 @@ def deliver_queued_message_batch(message_names: list[str]) -> None:
 				"require_phone": _message_requires_phone(message),
 			}
 			group_id = _group_id(identity)
-			recipient = group_id or resolve_recipient_phone(identity, context)
+			recipient = (
+				str(getattr(message, "recipient_address", None) or "").strip()
+				or group_id
+				or resolve_recipient_phone(identity, context)
+			)
 			submissions.append({
 				"message": message,
 				"channel": message.channel,
@@ -1372,7 +1426,11 @@ def deliver_queued_message(message_name: str) -> None:
 			"require_phone": _message_requires_phone(message),
 		}
 		group_id = _group_id(identity)
-		recipient = group_id or resolve_recipient_phone(identity, context)
+		recipient = (
+			str(getattr(message, "recipient_address", None) or "").strip()
+			or group_id
+			or resolve_recipient_phone(identity, context)
+		)
 		payload = _message_payload(
 			message,
 			recipient,
@@ -1440,6 +1498,7 @@ def _queue_message(
 	enqueue_delivery: bool = True,
 	client_message_id: str | None = None,
 	_batch_context: dict | None = None,
+	recipient_override: str | None = None,
 ) -> dict:
 	batch_context = _batch_context or {}
 	if not batch_context:
@@ -1475,20 +1534,39 @@ def _queue_message(
 		"WhatsApp Core Identity", conversation.remote_identity
 	)
 	group_id = _group_id(identity)
+	if group_id and recipient_override:
+		frappe.throw(
+			"A phone recipient cannot be supplied for a group conversation",
+			frappe.ValidationError,
+		)
 	direct_send_category = _direct_send_category(content.get("direct_send_category"))
 	if direct_send_category and group_id:
 		frappe.throw(
 			"Meta Direct Send does not support group conversations",
 			frappe.ValidationError,
 		)
-	if not group_id and _content_requires_phone(message_type, content):
-		resolve_recipient_phone(
+	require_phone = _content_requires_phone(message_type, content)
+	if recipient_override:
+		recipient_address = _normalized_identity_phone(
 			identity,
+			recipient_override,
 			{
-				"operation": "phone_only_message",
+				"operation": "explicit_phone_recipient",
 				"channel": conversation.channel,
-				"require_phone": True,
 			},
+		)
+	else:
+		recipient_address = (
+			str(batch_context.get("recipient_address") or "").strip()
+			or group_id
+			or resolve_recipient_phone(
+				identity,
+				{
+					"operation": "queue_message",
+					"channel": conversation.channel,
+					"require_phone": require_phone,
+				},
+			)
 		)
 	if (
 		not group_id
@@ -1522,6 +1600,7 @@ def _queue_message(
 			"idempotency_key": message_key,
 			"conversation": conversation.name,
 			"channel": conversation.channel,
+			"recipient_address": recipient_address,
 			"provider_message_id": local_id,
 			"direction": "Outbound",
 			"message_type": message_type,

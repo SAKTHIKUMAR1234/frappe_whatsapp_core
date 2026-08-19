@@ -1,7 +1,7 @@
 from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import frappe
 
@@ -232,7 +232,7 @@ class TestBatchTransport(TestCase):
 		):
 			self.assertEqual(resolve_recipient_phone(identity), "919876543210")
 
-	def test_company_resolver_can_override_recipient_phone(self):
+	def test_company_resolver_cannot_redirect_recipient_phone(self):
 		identity = SimpleNamespace(
 			name="identity-1",
 			normalized_value="911111111111",
@@ -248,12 +248,15 @@ class TestBatchTransport(TestCase):
 				return_value=resolver,
 			),
 		):
-			phone = resolve_recipient_phone(identity, {"source": "message"})
+			with self.assertRaises(frappe.ValidationError):
+				resolve_recipient_phone(identity, {"source": "message"})
 
-		self.assertEqual(phone, "919999988888")
-		resolver.assert_called_once_with(
+		self.assertIn(
+			call(
 			identity=identity,
 			context={"source": "message"},
+			),
+			resolver.mock_calls,
 		)
 
 	def test_campaign_batch_defers_transport_until_after_commit(self):
