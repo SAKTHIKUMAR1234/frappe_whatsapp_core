@@ -3,13 +3,17 @@ name = "frappe_whatsapp_core"
 authors = [
     { name = "Essdee", email = "engineering@essdee.com"}
 ]
-description = "Reusable, configurable WhatsApp business workflow foundation"
+description = "Team inbox, automation, campaigns, calling, and WhatsApp operations for Frappe"
 requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # "frappe~=15.0.0" # Installed and managed by bench.
 ]
+
+[project.urls]
+Repository = "https://github.com/SAKTHIKUMAR1234/frappe_whatsapp_core"
+Documentation = "https://github.com/SAKTHIKUMAR1234/frappe_whatsapp_core/tree/develop/docs"
 
 [build-system]
 requires = ["flit_core >=3.4,<4"]

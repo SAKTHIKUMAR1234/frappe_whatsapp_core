@@ -1,7 +1,7 @@
 app_name = "frappe_whatsapp_core"
 app_title = "Frappe WhatsApp Core"
 app_publisher = "Essdee"
-app_description = "Reusable, configurable WhatsApp business workflow foundation"
+app_description = "Team inbox, automation, campaigns, calling, and WhatsApp operations for Frappe"
 app_email = "engineering@essdee.com"
 app_license = "mit"
 

@@ -22,6 +22,7 @@
 	const loading = ref(true)
 	const loadError = ref('')
 	const workspace = ref({
+		product: {},
 		channels: [],
 		workspaces: [],
 		solutions: [],
@@ -65,6 +66,11 @@
 		<div>
 			<div class="eyebrow">Company configuration</div>
 			<h1>Core Settings</h1>
+			<p class="product-version">
+				WhatsApp Core {{ workspace.product?.version || '—' }} · Transport contract v{{
+					workspace.product?.transport_contract_version || '—'
+				}}
+			</p>
 		</div>
 		<Button label="Refresh inventory" outlined @click="load">
 			<template #icon><RefreshCw :size="16" /></template>
@@ -260,6 +266,12 @@
 		border-radius: 14px;
 		color: var(--wa-success);
 		background: var(--wa-success-soft);
+	}
+
+	.product-version {
+		margin: 4px 0 0;
+		color: var(--wa-muted);
+		font-size: 12px;
 	}
 
 	.boundary-note strong,

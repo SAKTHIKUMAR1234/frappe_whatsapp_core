@@ -1,6 +1,6 @@
 ### Frappe WhatsApp Core
 
-Reusable, configurable WhatsApp business workflow foundation
+Team inbox, automation, campaigns, calling, and WhatsApp operations for Frappe
 
 Supports Frappe **15 and 16** and Python 3.10 or newer.
 
@@ -13,6 +13,9 @@ by hand.
 
 For the shortest role-based installation and daily-use path, start with
 [Getting started](docs/getting-started.md).
+
+Core `1.0.0` is part of the versioned WhatsApp product release. Read
+[Product releases](docs/product-releases.md) before upgrading Core and Hub.
 
 Open `/whatsapp` for the Core application. The legacy `/whatsapp_core` entry
 remains supported, and each entry keeps its own browser-history base so inbox

@@ -41,6 +41,7 @@ from frappe_whatsapp_core.permissions import (
 	require_system_manager,
 	require_transport_access,
 )
+from frappe_whatsapp_core.product import product_manifest
 from frappe_whatsapp_core.realtime import publish_invalidation
 from frappe_whatsapp_core.topics import unclassified_messages, upsert_topic
 
@@ -250,6 +251,7 @@ def _transport_status_payload():
 	return {
 		"site": frappe.local.site,
 		"service": "frappe_whatsapp_core_transport",
+		"product": product_manifest(),
 		"transport": connection_status(),
 		"accounts": [
 			{
@@ -890,6 +892,7 @@ def settings_workspace():
 	i2a_schema_available = _i2a_schema_available()
 	return {
 		"site": frappe.local.site,
+		"product": product_manifest(),
 		"time_zone": frappe.db.get_single_value(
 			"System Settings",
 			"time_zone",

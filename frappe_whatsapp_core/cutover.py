@@ -15,6 +15,7 @@ from frappe_whatsapp_core.permissions import (
 	TRANSPORT_CAPABILITY_ROLES,
 	is_dedicated_transport_user,
 )
+from frappe_whatsapp_core.product import product_manifest
 
 
 CORE_RUNTIME_DOCTYPES = (
@@ -251,6 +252,7 @@ def production_preflight() -> dict:
 	failed = [check for check in checks if not check["ready"]]
 	return {
 		"site": frappe.local.site,
+		"product": product_manifest(),
 		"ready": not failed,
 		"passed": len(checks) - len(failed),
 		"failed": len(failed),
