@@ -91,6 +91,7 @@ export class WhatsAppWebRTCSession {
 
 	async prepareOutgoing() {
 		await this.#prepareMedia()
+		this.#attachOutgoingTrack()
 		const offer = await this.peer.createOffer({ offerToReceiveAudio: true })
 		await this.peer.setLocalDescription(offer)
 		await waitForIceGathering(this.peer)
@@ -101,10 +102,15 @@ export class WhatsAppWebRTCSession {
 		const remote = parseCallSession(remoteSession)
 		if (remote?.type !== 'offer') throw new Error('The incoming call offer is unavailable.')
 		await this.#prepareMedia()
+		// Apply Meta's offer before attaching the microphone. Explicit transceivers
+		// created before a remote offer are not associated with that offer's media
+		// section, which leaves the answer receive-only and causes one-way audio.
 		await this.peer.setRemoteDescription(remote)
+		await this.#attachIncomingTrack()
 		const answer = await this.peer.createAnswer()
 		await this.peer.setLocalDescription(answer)
 		await waitForIceGathering(this.peer)
+		this.#assertSendingAudio()
 		return this.#localDescription('answer')
 	}
 
@@ -180,13 +186,52 @@ export class WhatsAppWebRTCSession {
 			}
 			this.handlers.onRemoteStream?.(this.remoteStream)
 		})
-		const track = this.localStream.getAudioTracks()[0]
-		if (!track) throw new Error('No microphone audio track is available.')
+		this.#microphoneTrack()
+	}
+
+	#microphoneTrack() {
+		const track = this.localStream?.getAudioTracks?.()[0]
+		if (!track || track.readyState === 'ended') {
+			throw new Error('No microphone audio track is available.')
+		}
+		return track
+	}
+
+	#attachOutgoingTrack() {
+		const track = this.#microphoneTrack()
 		const transceiver = this.peer.addTransceiver(track, {
 			direction: 'sendrecv',
 			streams: [this.localStream],
 		})
 		preferOpus(transceiver)
+	}
+
+	async #attachIncomingTrack() {
+		const transceiver = this.peer
+			.getTransceivers()
+			.find((item) => item.receiver?.track?.kind === 'audio')
+		if (!transceiver?.sender) {
+			throw new Error('The incoming call did not offer an audio connection.')
+		}
+		const track = this.#microphoneTrack()
+		await transceiver.sender.replaceTrack(track)
+		transceiver.sender.setStreams?.(this.localStream)
+		transceiver.direction = 'sendrecv'
+		preferOpus(transceiver)
+	}
+
+	#assertSendingAudio() {
+		const transceiver = this.peer
+			.getTransceivers()
+			.find((item) => item.receiver?.track?.kind === 'audio')
+		const track = transceiver?.sender?.track
+		if (
+			!track ||
+			track.readyState === 'ended' ||
+			!['sendrecv', 'sendonly'].includes(transceiver.direction)
+		) {
+			throw new Error('The microphone could not be attached to the secure audio connection.')
+		}
 	}
 
 	#localDescription(expectedType) {

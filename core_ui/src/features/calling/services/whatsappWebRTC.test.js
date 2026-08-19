@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
 	TERMINAL_CALL_STATES,
+	WhatsAppWebRTCSession,
 	isIncomingRinging,
 	normalizedCallStatus,
 	parseCallSession,
@@ -39,4 +40,94 @@ test('identifies an actionable inbound offer', () => {
 		}),
 		false,
 	)
+})
+
+test('binds the microphone to the audio transceiver created by the incoming offer', async (t) => {
+	const operations = []
+	const microphone = { kind: 'audio', enabled: true, readyState: 'live', stop() {} }
+	const localStream = {
+		getAudioTracks: () => [microphone],
+		getTracks: () => [microphone],
+	}
+	const sender = {
+		track: null,
+		async replaceTrack(track) {
+			operations.push('replaceTrack')
+			this.track = track
+		},
+		setStreams(stream) {
+			operations.push('setStreams')
+			assert.equal(stream, localStream)
+		},
+	}
+	const offeredAudio = {
+		direction: 'recvonly',
+		receiver: { track: { kind: 'audio' } },
+		sender,
+		setCodecPreferences() {},
+	}
+
+	class IncomingPeer {
+		constructor() {
+			this.iceGatheringState = 'complete'
+			this.localDescription = null
+			this.transceivers = []
+		}
+
+		addEventListener() {}
+		removeEventListener() {}
+		getTransceivers() {
+			return this.transceivers
+		}
+		addTransceiver() {
+			operations.push('addTransceiver')
+			throw new Error('incoming calls must not create a disassociated transceiver')
+		}
+		async setRemoteDescription() {
+			operations.push('setRemoteDescription')
+			this.transceivers = [offeredAudio]
+		}
+		async createAnswer() {
+			operations.push('createAnswer')
+			assert.equal(sender.track, microphone)
+			assert.equal(offeredAudio.direction, 'sendrecv')
+			return { type: 'answer', sdp: 'v=0\r\na=sendrecv\r\n' }
+		}
+		async setLocalDescription(description) {
+			operations.push('setLocalDescription')
+			this.localDescription = description
+		}
+	}
+
+	const previousPeer = globalThis.RTCPeerConnection
+	const previousNavigator = globalThis.navigator
+	Object.defineProperty(globalThis, 'RTCPeerConnection', {
+		configurable: true,
+		value: IncomingPeer,
+	})
+	Object.defineProperty(globalThis, 'navigator', {
+		configurable: true,
+		value: { mediaDevices: { getUserMedia: async () => localStream } },
+	})
+	t.after(() => {
+		Object.defineProperty(globalThis, 'RTCPeerConnection', {
+			configurable: true,
+			value: previousPeer,
+		})
+		Object.defineProperty(globalThis, 'navigator', {
+			configurable: true,
+			value: previousNavigator,
+		})
+	})
+
+	const rtc = new WhatsAppWebRTCSession()
+	const answer = await rtc.prepareIncoming({ sdp_type: 'offer', sdp: 'v=0' })
+	assert.deepEqual(answer, { sdp_type: 'answer', sdp: 'v=0\r\na=sendrecv\r\n' })
+	assert.deepEqual(operations, [
+		'setRemoteDescription',
+		'replaceTrack',
+		'setStreams',
+		'createAnswer',
+		'setLocalDescription',
+	])
 })
