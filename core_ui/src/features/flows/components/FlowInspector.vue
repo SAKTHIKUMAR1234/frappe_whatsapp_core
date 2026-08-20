@@ -258,8 +258,8 @@
 				/>
 				<p class="field-note">
 					The inbound file is stored as a private Frappe File before the next action
-					runs. Message-or-attachment inputs can also show action buttons while
-					accepting free text and media.
+					runs. Message-or-attachment inputs can also show action buttons while accepting
+					free text and media.
 				</p>
 			</template>
 
