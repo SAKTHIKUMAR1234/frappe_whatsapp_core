@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { hydrateFlowGraph } from './nodeTypes.js'
+import { arrangeFlowNodes, hydrateFlowGraph } from './nodeTypes.js'
 
 test('imported flow nodes receive readable labels and non-overlapping positions', () => {
 	const graph = {
@@ -84,4 +84,24 @@ test('published flow nodes with identical saved coordinates are laid out again',
 		hydrated.nodes.map(({ position }) => position.x),
 		[60, 310, 560, 810],
 	)
+})
+
+test('explicit arrange replaces a valid but unhelpful operator layout', () => {
+	const nodes = [
+		{ id: 'start', position: { x: 40, y: 40 } },
+		{ id: 'collect', position: { x: 60, y: 60 } },
+		{ id: 'finish', position: { x: 80, y: 80 } },
+	]
+	const edges = [
+		{ id: 'e1', source: 'start', target: 'collect' },
+		{ id: 'e2', source: 'collect', target: 'finish' },
+	]
+
+	const arranged = arrangeFlowNodes(nodes, edges)
+
+	assert.deepEqual(
+		arranged.map(({ position }) => position.x),
+		[60, 310, 560],
+	)
+	assert.equal(new Set(arranged.map(({ position }) => `${position.x}:${position.y}`)).size, 3)
 })

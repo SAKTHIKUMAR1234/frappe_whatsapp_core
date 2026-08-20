@@ -10,6 +10,8 @@
 	import { useToast } from 'primevue/usetoast'
 	import {
 		ArrowLeft,
+		Braces,
+		ChevronDown,
 		CloudUpload,
 		Copy,
 		ExternalLink,
@@ -18,6 +20,7 @@
 		Send,
 		ShieldCheck,
 	} from 'lucide-vue-next'
+	import FlowAssetOverview from '@/features/flows/components/FlowAssetOverview.vue'
 	import {
 		createFlow,
 		deprecateFlow,
@@ -38,6 +41,7 @@
 	const saving = ref(false)
 	const uploading = ref(false)
 	const lifecycle = ref(false)
+	const advancedJsonOpen = ref(false)
 	const data = ref(null)
 	const form = reactive({ name: '', categories: [], endpoint_uri: '', flow_json: '' })
 	const categories = [
@@ -357,25 +361,48 @@
 			<section class="surface-card json-card">
 				<header>
 					<div>
-						<strong>flow.json</strong
-						><span>The asset is uploaded directly to Meta for schema validation.</span>
+						<strong>Customer experience</strong
+						><span>Review the screens customers will complete in WhatsApp.</span>
 					</div>
 					<Button
-						v-if="canManage && mutable"
-						label="Upload and validate"
-						:loading="uploading"
-						:disabled="!form.flow_json.trim()"
-						@click="uploadJson"
-						><template #icon><CloudUpload :size="15" /></template
-					></Button>
+						severity="secondary"
+						outlined
+						aria-label="Toggle advanced flow.json editor"
+						:aria-expanded="advancedJsonOpen"
+						@click="advancedJsonOpen = !advancedJsonOpen"
+					>
+						<template #icon><Braces :size="15" /></template>
+						<template #default>
+							<span class="advanced-label">Advanced flow.json</span>
+							<ChevronDown :size="14" :class="{ rotated: advancedJsonOpen }" />
+						</template>
+					</Button>
 				</header>
-				<Textarea
-					v-model="form.flow_json"
-					class="json-editor"
-					:readonly="!mutable || !canManage"
-					spellcheck="false"
-					placeholder="Paste a Meta WhatsApp flow.json document"
-				/>
+				<FlowAssetOverview v-if="!advancedJsonOpen" :asset="data?.flow_json" />
+				<div v-else class="advanced-editor">
+					<div class="advanced-notice">
+						<Braces :size="17" />
+						<span
+							>This editor is for Meta Flow developers. Everyday operations use the
+							screen overview above.</span
+						>
+						<Button
+							v-if="canManage && mutable"
+							label="Upload and validate"
+							:loading="uploading"
+							:disabled="!form.flow_json.trim()"
+							@click="uploadJson"
+							><template #icon><CloudUpload :size="15" /></template
+						></Button>
+					</div>
+					<Textarea
+						v-model="form.flow_json"
+						class="json-editor"
+						:readonly="!mutable || !canManage"
+						spellcheck="false"
+						placeholder="Paste a Meta WhatsApp flow.json document"
+					/>
+				</div>
 				<div v-if="validationErrors.length" class="validation-panel">
 					<strong>Meta validation errors</strong>
 					<article v-for="(error, index) in validationErrors" :key="index">
@@ -417,6 +444,30 @@
 		display: flex;
 		align-items: center;
 		gap: 11px;
+	}
+	.advanced-label {
+		margin: 0;
+		color: inherit;
+	}
+	.rotated {
+		transform: rotate(180deg);
+	}
+	.advanced-editor {
+		display: grid;
+		gap: 10px;
+	}
+	.advanced-notice {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 9px 10px;
+		border-radius: 9px;
+		color: var(--wa-muted);
+		background: var(--wa-surface-muted);
+		font-size: 11px;
+	}
+	.advanced-notice span {
+		flex: 1;
 	}
 	.title-row h1 {
 		margin: 2px 0;

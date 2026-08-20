@@ -11,6 +11,7 @@
 		MoreVertical,
 	} from 'lucide-vue-next'
 	import FlowResponseCard from '@/features/flows/components/FlowResponseCard.vue'
+	import MessageDocumentCard from '@/features/inbox/components/MessageDocumentCard.vue'
 	import TemplateMessageCard from '@/features/inbox/components/TemplateMessageCard.vue'
 	import { flowReplyFromContent } from '@/features/flows/utils/flowResponse'
 	import { formatDateTime, formatTime } from '@/utils/datetime'
@@ -309,14 +310,13 @@
 			class="message-audio"
 			controls
 		/>
-		<a
+		<MessageDocumentCard
 			v-else-if="message.message_type === 'document' && mediaUrl"
 			:href="mediaUrl"
-			class="message-link"
-			target="_blank"
-			rel="noreferrer"
-			>Open document</a
-		>
+			:filename="richContent.filename || richContent.file_name || message.body"
+			:mime-type="richContent.mime_type || richContent.mime"
+			:size="Number(richContent.file_size || richContent.size || 0)"
+		/>
 		<a
 			v-else-if="locationUrl"
 			:href="locationUrl"

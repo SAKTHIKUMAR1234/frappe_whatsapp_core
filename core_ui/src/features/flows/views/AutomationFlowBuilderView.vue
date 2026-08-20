@@ -125,6 +125,7 @@
 			:can-manage="flowBuilder.flow.value.can_manage"
 			@back="router.push({ name: 'flows', query: { flow_type: 'automation' } })"
 			@open-triggers="triggerDrawerVisible = true"
+			@arrange="flowBuilder.arrange"
 			@save="flowBuilder.save()"
 			@validate="flowBuilder.validate"
 			@publish="flowBuilder.publish"

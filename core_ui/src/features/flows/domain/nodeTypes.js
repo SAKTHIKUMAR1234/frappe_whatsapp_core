@@ -134,10 +134,30 @@ export function hydrateFlowGraph(graph) {
 	}
 }
 
+// Return a deterministic left-to-right layout even when the graph already has
+// saved coordinates. This powers the explicit "Arrange" action in the builder;
+// hydration continues to preserve good operator-authored positions.
+export function arrangeFlowNodes(nodes, edges) {
+	const graphNodes = nodes.map((node) => ({
+		id: node.id,
+		position: node.position,
+	}))
+	const positions = calculateFlowPositions(graphNodes, edges)
+	return nodes.map((node) => ({
+		...node,
+		position: positions.get(node.id) || node.position || { x: 0, y: 0 },
+	}))
+}
+
 function flowPositions(nodes, edges) {
 	if (!nodes.length || hasCompleteNonOverlappingLayout(nodes)) {
 		return new Map()
 	}
+	return calculateFlowPositions(nodes, edges)
+}
+
+function calculateFlowPositions(nodes, edges) {
+	if (!nodes.length) return new Map()
 
 	const order = new Map(nodes.map((node, index) => [node.id, index]))
 	const nodeIds = new Set(order.keys())
@@ -170,18 +190,12 @@ function flowPositions(nodes, edges) {
 	const levels = new Map(nodes.map((node) => [node.id, 0]))
 	const indegree = new Map(nodes.map((node) => [node.id, 0]))
 	for (const edge of edges) {
-		if (
-			backEdges.has(edge.id) ||
-			!nodeIds.has(edge.source) ||
-			!nodeIds.has(edge.target)
-		) {
+		if (backEdges.has(edge.id) || !nodeIds.has(edge.source) || !nodeIds.has(edge.target)) {
 			continue
 		}
 		indegree.set(edge.target, indegree.get(edge.target) + 1)
 	}
-	const queue = nodes
-		.filter((node) => indegree.get(node.id) === 0)
-		.map((node) => node.id)
+	const queue = nodes.filter((node) => indegree.get(node.id) === 0).map((node) => node.id)
 	while (queue.length) {
 		const source = queue.shift()
 		for (const edge of outgoing.get(source) || []) {

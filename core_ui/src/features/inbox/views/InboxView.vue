@@ -2054,8 +2054,12 @@
 					<Button label="Try again" outlined @click="loadDetail(selectedName)" />
 				</div>
 				<div v-else-if="!detail" class="empty-chat">
-					<MessageSquarePlus :size="38" />
+					<span class="empty-chat-icon"><MessageSquarePlus :size="28" /></span>
 					<strong>Select a conversation</strong>
+					<span
+						>Choose a customer from the shared inbox to review messages, calls and
+						context.</span
+					>
 				</div>
 				<template v-else>
 					<ConversationHeader
@@ -2551,7 +2555,19 @@
 	}
 	.empty-chat strong {
 		color: var(--wa-text);
-		font-size: 13px;
+		font-size: 15px;
+	}
+	.empty-chat-icon {
+		width: 58px;
+		height: 58px;
+		display: grid;
+		place-items: center;
+		margin-bottom: 4px;
+		border: 1px solid color-mix(in srgb, var(--wa-primary) 20%, var(--wa-border));
+		border-radius: 18px;
+		color: var(--wa-primary);
+		background: var(--wa-primary-soft);
+		box-shadow: 0 12px 28px color-mix(in srgb, var(--wa-primary) 10%, transparent);
 	}
 	.empty-chat span {
 		max-width: 310px;

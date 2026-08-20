@@ -1,6 +1,7 @@
 import { computed, nextTick, ref } from 'vue'
 import { useVueFlow } from '@vue-flow/core'
 import {
+	arrangeFlowNodes,
 	createNodeConfig,
 	hydrateFlowGraph,
 	serializeFlowGraph,
@@ -137,6 +138,12 @@ export function useFlowBuilder({ flowName, toast }) {
 	function addNodeFromPalette(type) {
 		const offset = (itemCounter % 7) * 24
 		addNode(type, { x: 280 + offset, y: 150 + offset })
+	}
+
+	async function arrange() {
+		nodes.value = arrangeFlowNodes(nodes.value, edges.value)
+		await nextTick()
+		fitView({ padding: 0.22, maxZoom: 1, duration: 280 })
 	}
 
 	function deleteSelected() {
@@ -326,6 +333,7 @@ export function useFlowBuilder({ flowName, toast }) {
 		requesting,
 		addNodeFromDrop,
 		addNodeFromPalette,
+		arrange,
 		deleteSelected,
 		ensureEdgeCondition,
 		load,

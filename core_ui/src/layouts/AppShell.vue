@@ -23,6 +23,7 @@
 	import CallDock from '@/features/calling/components/CallDock.vue'
 	import { subscribeConnection } from '@/services/realtime'
 	import { onAuthExpired } from '@/services/frappe'
+	import { routeComponentKey } from '@/utils/routeView'
 
 	const session = useSessionStore()
 	const calling = useCallingStore()
@@ -335,7 +336,9 @@
 
 			<main :class="['content', { flush: flushContent }]">
 				<RouterView v-slot="{ Component, route: activeRoute }">
-					<component :is="Component" :key="activeRoute.fullPath" />
+					<Transition name="workspace-view" mode="out-in">
+						<component :is="Component" :key="routeComponentKey(activeRoute)" />
+					</Transition>
 				</RouterView>
 			</main>
 		</div>
@@ -452,7 +455,8 @@
 		height: 38px;
 		border-radius: 8px;
 		color: white;
-		background: var(--wa-green);
+		background: linear-gradient(145deg, var(--wa-green-bright), var(--wa-green));
+		box-shadow: 0 7px 18px color-mix(in srgb, var(--wa-green) 24%, transparent);
 		flex: 0 0 38px;
 	}
 	.brand > div:last-child,
@@ -538,6 +542,7 @@
 		opacity: 1;
 	}
 	.nav-item {
+		position: relative;
 		width: 48px;
 		height: 38px;
 		padding: 0;
@@ -573,6 +578,16 @@
 	.nav-item.active {
 		color: var(--wa-primary);
 		background: var(--wa-primary-soft);
+	}
+	.nav-item.active::before {
+		content: '';
+		position: absolute;
+		left: 2px;
+		width: 3px;
+		height: 20px;
+		border-radius: 999px;
+		background: var(--wa-primary);
+		box-shadow: 0 0 12px color-mix(in srgb, var(--wa-primary) 42%, transparent);
 	}
 	.nav-item em {
 		margin-left: auto;
@@ -767,9 +782,31 @@
 		height: calc(100dvh - 56px);
 		padding: 24px clamp(20px, 2vw, 32px) 32px;
 		overflow: auto;
+		background:
+			radial-gradient(
+				circle at 88% 4%,
+				color-mix(in srgb, var(--wa-primary) 7%, transparent),
+				transparent 30%
+			),
+			var(--wa-bg);
 	}
 	.content.flush {
 		padding: 0;
+		background: var(--wa-surface);
+	}
+	.workspace-view-enter-active,
+	.workspace-view-leave-active {
+		transition:
+			opacity 130ms ease,
+			transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+	}
+	.workspace-view-enter-from {
+		opacity: 0;
+		transform: translateY(5px);
+	}
+	.workspace-view-leave-to {
+		opacity: 0;
+		transform: translateY(-2px);
 	}
 	@media (min-width: 901px) {
 		.inbox-shell .topbar {

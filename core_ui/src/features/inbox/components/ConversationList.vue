@@ -105,10 +105,17 @@
 			<Button
 				v-for="item in visibleRows"
 				:key="item.row.name"
-				:class="['conversation-row', { selected: item.row.name === selected }]"
+				:class="[
+					'conversation-row',
+					{
+						selected: item.row.name === selected,
+						unread: Number(item.row.unread_count || 0) > 0,
+					},
+				]"
 				:style="{ transform: `translateY(${item.index * itemHeight}px)` }"
 				:aria-posinset="item.index + 1"
 				:aria-setsize="rows.length"
+				:aria-current="item.row.name === selected ? 'true' : undefined"
 				unstyled
 				@click="emit('select', item.row.name)"
 			>
@@ -118,7 +125,9 @@
 				<span class="conversation-copy">
 					<span class="row-heading">
 						<span class="name-line">
-							<strong>{{ item.row.display_name }}</strong>
+							<strong :title="item.row.display_name">{{
+								item.row.display_name
+							}}</strong>
 							<component
 								:is="teamIcon(visibleTeam(item.row).icon)"
 								v-if="visibleTeam(item.row)"
@@ -147,7 +156,7 @@
 		<div v-if="!rows.length" class="empty">
 			<MessageCircleMore :size="30" />
 			<strong>No conversations found</strong>
-			<span>Start a template conversation or wait for an inbound message.</span>
+			<span>Start a new chat or adjust the current inbox filters.</span>
 		</div>
 	</div>
 </template>
@@ -184,6 +193,15 @@
 			transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
 			background-color 140ms ease;
 	}
+	.conversation-row::before {
+		content: '';
+		position: absolute;
+		inset: 11px auto 11px 0;
+		width: 3px;
+		border-radius: 0 999px 999px 0;
+		background: transparent;
+		transition: background-color 140ms ease;
+	}
 	.conversation-row:hover,
 	.conversation-row.selected {
 		background: var(--wa-surface-muted);
@@ -194,7 +212,18 @@
 		outline-offset: -2px;
 	}
 	.conversation-row.selected {
-		box-shadow: none;
+		background: color-mix(in srgb, var(--wa-primary-soft) 72%, var(--wa-surface));
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wa-primary) 8%, transparent);
+	}
+	.conversation-row.selected::before {
+		background: var(--wa-primary);
+	}
+	.conversation-row.unread .row-heading strong {
+		font-weight: 750;
+	}
+	.conversation-row.unread time {
+		color: var(--wa-success);
+		font-weight: 700;
 	}
 	.avatar {
 		display: grid;

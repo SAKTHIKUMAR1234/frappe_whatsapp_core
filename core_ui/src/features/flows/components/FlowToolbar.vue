@@ -1,7 +1,15 @@
 <script setup>
 	import Button from 'primevue/button'
 	import Tag from 'primevue/tag'
-	import { ArrowLeft, CheckCircle2, Clock3, Play, Rocket, Save } from 'lucide-vue-next'
+	import {
+		ArrowLeft,
+		CheckCircle2,
+		Clock3,
+		LayoutDashboard,
+		Play,
+		Rocket,
+		Save,
+	} from 'lucide-vue-next'
 
 	defineProps({
 		flow: {
@@ -15,7 +23,15 @@
 		canManage: Boolean,
 	})
 
-	defineEmits(['back', 'open-triggers', 'save', 'validate', 'publish', 'request-approval'])
+	defineEmits([
+		'back',
+		'open-triggers',
+		'arrange',
+		'save',
+		'validate',
+		'publish',
+		'request-approval',
+	])
 
 	function approvalSeverity(status) {
 		if (status === 'Approved') return 'success'
@@ -49,6 +65,15 @@
 		</div>
 
 		<div class="toolbar-actions">
+			<Button
+				label="Arrange"
+				severity="secondary"
+				outlined
+				title="Arrange overlapping steps"
+				@click="$emit('arrange')"
+			>
+				<template #icon><LayoutDashboard :size="15" /></template>
+			</Button>
 			<Button label="Triggers" severity="secondary" outlined @click="$emit('open-triggers')">
 				<template #icon><Play :size="15" /></template>
 			</Button>

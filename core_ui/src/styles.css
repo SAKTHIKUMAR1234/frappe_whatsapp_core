@@ -31,6 +31,8 @@
 	--wa-warning-soft: #fff9ed;
 	--wa-media-bg: #17211d;
 	--wa-shadow-lg: 0 12px 28px rgb(31 39 46 / 10%);
+	--wa-shadow-sm: 0 2px 8px rgb(31 39 46 / 6%);
+	--wa-shadow-card: 0 1px 2px rgb(31 39 46 / 4%), 0 8px 24px rgb(31 39 46 / 4%);
 	--wa-sidebar: #ffffff;
 	--wa-message-in: #ffffff;
 	--wa-message-out: #e7f8ef;
@@ -193,8 +195,8 @@ a {
 .surface-card {
 	background: var(--wa-surface);
 	border: 1px solid var(--wa-border);
-	border-radius: 8px;
-	box-shadow: 0 1px 2px rgb(31 39 46 / 5%);
+	border-radius: 12px;
+	box-shadow: var(--wa-shadow-card);
 	transition:
 		border-color 160ms ease,
 		box-shadow 160ms ease,
