@@ -36,6 +36,11 @@ whatsapp_core_recipient_phone_resolver = []
 # presentation-only overrides keyed by Core Identity name.
 whatsapp_core_contact_presenters = []
 
+# Presentation hooks can derive labels from business documents that Core does
+# not own. Matching search hooks return Core Identity names for a bounded query
+# so the server and browser rank the same visible contact names.
+whatsapp_core_contact_searchers = []
+
 # Flow nodes can invoke only registered, typed actions. A builder graph cannot
 # execute arbitrary Python, SQL or shell commands.
 whatsapp_core_flow_actions = {

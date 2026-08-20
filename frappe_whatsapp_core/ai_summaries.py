@@ -99,9 +99,11 @@ def attach_message_insights(messages) -> None:
 		payload = serializer() if callable(serializer) else dict(insight)
 		for key in ("intents", "action_items", "risks"):
 			payload[key] = _json_list(payload.get(key))
-		payload["categories"] = category_map.get(message.get("name")) or normalize_message_categories(
-			payload.get("category")
+		payload["categories"] = category_map.get(message.get("name")) or _category_labels(
+			normalize_message_categories(payload.get("category"))
 		)
+		if payload["categories"]:
+			payload["category"] = payload["categories"][0]
 		message["ai_insight"] = payload
 
 
@@ -361,7 +363,7 @@ def _build_identity_prompt(summary, messages: list[dict]) -> str:
 		"previous_state": {
 			"summary": summary.summary or "",
 			"primary_intent": summary.primary_intent or "",
-			"categories": _json_list(summary.categories),
+			"categories": _category_labels(_json_list(summary.categories)),
 			"action_items": _json_list(summary.action_items),
 			"risks": _json_list(summary.risks),
 			"language": summary.language or "",
@@ -369,8 +371,8 @@ def _build_identity_prompt(summary, messages: list[dict]) -> str:
 		"available_categories": frappe.get_all(
 			"WhatsApp Core Message Category",
 			filters={"enabled": 1},
-			pluck="name",
-			order_by="name asc",
+			pluck="category_name",
+			order_by="category_name asc",
 			limit_page_length=250,
 		),
 		"new_messages": [
@@ -633,10 +635,16 @@ def _apply_summary_result(summary, data, settings, model_result) -> None:
 	# category so management rollups do not silently lose Payment, Complaint or
 	# Opt-out history when a later Catalogue/Other message arrives. A forced
 	# rebuild clears the stored state first and therefore remains authoritative.
-	categories = _merge_unique(_json_list(summary.categories), data.get("categories"))
-	summary.categories = _json_value([
-		ensure_message_category(category, source="AI") for category in categories
-	])
+	categories = _merge_unique(
+		_category_labels(_json_list(summary.categories)),
+		data.get("categories"),
+	)
+	# Summary categories are presentation JSON, not Link fields. Keep their stable,
+	# human-facing labels in the summary while ensuring the canonical category
+	# records exist for Message Insight/Assignment Link fields.
+	for category in categories:
+		ensure_message_category(category, source="AI")
+	summary.categories = _json_value(categories)
 	summary.action_items = _json_value(data.get("action_items"))
 	summary.risks = _json_value(data.get("risks"))
 	summary.confidence = _confidence(data.get("confidence"))
@@ -768,6 +776,30 @@ def _summary_dict(summary) -> dict:
 	result = summary.as_dict()
 	for key in ("source_identities", "categories", "action_items", "risks"):
 		result[key] = _json_list(result.get(key))
+	result["categories"] = _category_labels(result.get("categories"))
+	return result
+
+
+def _category_labels(categories) -> list[str]:
+	"""Resolve legacy category record IDs/chains to stable display labels."""
+	result = []
+	for value in categories or []:
+		current = " ".join(str(value or "").strip().split())[:140]
+		seen = set()
+		for _depth in range(12):
+			if not current or current in seen:
+				break
+			seen.add(current)
+			label = frappe.db.get_value(
+				"WhatsApp Core Message Category",
+				current,
+				"category_name",
+			)
+			if not label or label == current:
+				break
+			current = " ".join(str(label).strip().split())[:140]
+		if current and current not in result:
+			result.append(current)
 	return result
 
 

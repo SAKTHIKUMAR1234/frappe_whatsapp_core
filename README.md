@@ -14,7 +14,7 @@ by hand.
 For the shortest role-based installation and daily-use path, start with
 [Getting started](docs/getting-started.md).
 
-Core `1.0.0` is part of the versioned WhatsApp product release. Read
+Core `2.0.0` is part of the versioned WhatsApp product release. Read
 [Product releases](docs/product-releases.md) before upgrading Core and Hub.
 
 Open `/whatsapp` for the Core application. The legacy `/whatsapp_core` entry

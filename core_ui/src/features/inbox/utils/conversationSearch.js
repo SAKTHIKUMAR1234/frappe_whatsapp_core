@@ -62,7 +62,9 @@ export function conversationSearchScore(row, query) {
 	const teamNames = (row.contact_teams || []).map((team) => team.team_name)
 	if (row.assigned_team_details?.team_name) teamNames.push(row.assigned_team_details.team_name)
 	const text = normalize(
-		[row.display_name, row.phone_number, row.latest_message?.body, ...teamNames].join(' '),
+		[row.display_name, row.phone_number, ...(row.search_aliases || []), ...teamNames].join(
+			' ',
+		),
 	)
 	const words = text.split(' ').filter(Boolean)
 	const tokens = normalizedQuery.split(' ').filter(Boolean)

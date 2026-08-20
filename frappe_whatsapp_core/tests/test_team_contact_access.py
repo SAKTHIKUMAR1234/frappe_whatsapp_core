@@ -156,6 +156,13 @@ class TestTeamContactAccess(FrappeTestCase):
 		self.assertIn(self.conversation.name, {row["name"] for row in rows})
 		self.assertNotIn(self.open_conversation.name, {row["name"] for row in rows})
 
+	@patch("frappe_whatsapp_core.inbox.search_presented_identities")
+	def test_manager_can_search_business_presented_contact_name(self, presented_search):
+		presented_search.return_value = [self.identity.name]
+		rows = conversation_page(search="Visible Member Company", limit=100)["rows"]
+		self.assertIn(self.conversation.name, {row["name"] for row in rows})
+		presented_search.assert_called_once_with("Visible Member Company")
+
 	def test_realtime_recipients_match_team_and_uncategorized_scope(self):
 		recipients = conversation_recipients([
 			self.conversation.name,
@@ -195,8 +202,14 @@ class TestTeamContactAccess(FrappeTestCase):
 					client_id,
 					active=1,
 				)
+				unchanged = update_conversation_presence(
+					self.conversation.name,
+					client_id,
+					active=1,
+				)
 			self.assertEqual(result["conversation"], self.conversation.name)
 			self.assertEqual(result["viewers"][0]["user"], self.member)
+			self.assertEqual(unchanged["viewers"], result["viewers"])
 			publish.assert_called_once()
 
 			frappe.set_user(self.outsider)
@@ -204,6 +217,7 @@ class TestTeamContactAccess(FrappeTestCase):
 				update_conversation_presence(self.conversation.name, client_id, active=1)
 		finally:
 			frappe.cache.delete_key(_presence_key(self.conversation.name))
+			frappe.cache.delete_key(f"{_presence_key(self.conversation.name)}:viewers")
 
 	def test_created_message_publishes_complete_delta_only_to_scoped_user_rooms(self):
 		message = frappe.get_doc({

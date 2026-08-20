@@ -39,7 +39,10 @@ def ensure_default_categories() -> None:
 		distinct=True,
 		limit_page_length=1000,
 	):
-		ensure_message_category(category, source="AI")
+		# Insight.category is a Link. Older rows already contain the canonical
+		# record ID and must not create a new category whose label is that hash.
+		if not frappe.db.exists("WhatsApp Core Message Category", category):
+			ensure_message_category(category, source="AI")
 
 
 def ensure_message_category(

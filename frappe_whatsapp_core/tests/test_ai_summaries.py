@@ -19,6 +19,7 @@ from frappe_whatsapp_core.ai_summaries import (
 	summarize_identity,
 )
 from frappe_whatsapp_core.hooks import scheduler_events
+from frappe_whatsapp_core.message_categories import ensure_message_category
 
 
 class TestAISummaries(FrappeTestCase):
@@ -29,6 +30,7 @@ class TestAISummaries(FrappeTestCase):
 		self.assertNotIn(method, cron["* * * * *"])
 
 	def test_query_rows_attach_message_insights_without_calling_missing_serializer(self):
+		category = ensure_message_category("Payment proof", source="AI")
 		frappe.get_doc({
 			"doctype": "WhatsApp Core Message Insight",
 			"insight_key": frappe.generate_hash(length=32),
@@ -36,7 +38,7 @@ class TestAISummaries(FrappeTestCase):
 			"conversation": self.conversation.name,
 			"identity": self.identity.name,
 			"status": "Ready",
-			"category": "Payment proof",
+			"category": category,
 			"message_summary": "Payment receipt needs verification.",
 			"intents": json.dumps(["payment_confirmation"]),
 			"action_items": json.dumps(["Verify payment"]),
@@ -48,6 +50,7 @@ class TestAISummaries(FrappeTestCase):
 		attach_message_insights(messages)
 
 		self.assertEqual(messages[0].ai_insight["category"], "Payment proof")
+		self.assertEqual(messages[0].ai_insight["categories"], ["Payment proof"])
 		self.assertEqual(messages[0].ai_insight["action_items"], ["Verify payment"])
 
 	@patch("frappe_whatsapp_core.ai_summaries.frappe.enqueue")
@@ -170,8 +173,12 @@ class TestAISummaries(FrappeTestCase):
 			frappe.db.count("WhatsApp Core Message Insight", {"identity": self.identity.name}),
 			2,
 		)
-		self.assertTrue(frappe.db.exists("WhatsApp Core Message Category", "Payment proof"))
-		self.assertTrue(frappe.db.exists("WhatsApp Core Message Category", "Callback"))
+		self.assertTrue(frappe.db.exists(
+			"WhatsApp Core Message Category", {"category_name": "Payment proof"}
+		))
+		self.assertTrue(frappe.db.exists(
+			"WhatsApp Core Message Category", {"category_name": "Callback"}
+		))
 		third = self._message(
 			"The callback is no longer required",
 			2,
@@ -396,8 +403,12 @@ class TestAISummaries(FrappeTestCase):
 		self.assertEqual(audio_part["input_audio"]["format"], "ogg")
 		self.assertNotEqual(audio_part["input_audio"]["data"], "voice-bytes")
 
+	@patch(
+		"frappe_whatsapp_core.ai_summaries.frappe.get_installed_apps",
+		return_value=["frappe", "frappe_tools", "frappe_whatsapp_core"],
+	)
 	@patch("frappe_tools.i2a.intents.run_intent")
-	def test_invalid_provider_media_falls_back_to_evidence_text(self, run_intent):
+	def test_invalid_provider_media_falls_back_to_evidence_text(self, run_intent, _installed_apps):
 		from frappe_tools.i2a.providers import ProviderError
 
 		run_intent.side_effect = [
@@ -416,8 +427,12 @@ class TestAISummaries(FrappeTestCase):
 		self.assertEqual(run_intent.call_args.kwargs["content_parts"], [])
 		self.assertIn("could not be decoded", run_intent.call_args.args[1])
 
+	@patch(
+		"frappe_whatsapp_core.ai_summaries.frappe.get_installed_apps",
+		return_value=["frappe", "frappe_tools", "frappe_whatsapp_core"],
+	)
 	@patch("frappe_tools.i2a.intents.run_intent")
-	def test_generic_provider_media_error_also_uses_text_fallback(self, run_intent):
+	def test_generic_provider_media_error_also_uses_text_fallback(self, run_intent, _installed_apps):
 		from frappe_tools.i2a.providers import ProviderError
 
 		run_intent.side_effect = [

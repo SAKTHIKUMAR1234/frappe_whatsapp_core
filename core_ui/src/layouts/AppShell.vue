@@ -10,13 +10,13 @@
 		ChevronDown,
 		Menu as MenuIcon,
 		Search,
-		MessageCircleMore,
 		ArrowRight,
 		Moon,
 		PanelLeftClose,
 		PanelLeftOpen,
 		Sun,
 	} from 'lucide-vue-next'
+	import CoreMark from '@/components/CoreMark.vue'
 	import { navigation } from '@/config/navigation'
 	import { useSessionStore } from '@/stores/session'
 	import { useCallingStore } from '@/stores/calling'
@@ -222,7 +222,7 @@
 			@focusout="handleSidebarFocusOut"
 		>
 			<div class="brand">
-				<div class="brand-mark"><MessageCircleMore :size="20" /></div>
+				<div class="brand-mark"><CoreMark :size="38" /></div>
 				<div>
 					<strong>WhatsApp</strong>
 					<span>Business workspace</span>
@@ -452,8 +452,7 @@
 		width: 38px;
 		height: 38px;
 		border-radius: 8px;
-		color: white;
-		background: linear-gradient(145deg, var(--wa-green-bright), var(--wa-green));
+		background: transparent;
 		box-shadow: 0 7px 18px color-mix(in srgb, var(--wa-green) 24%, transparent);
 		flex: 0 0 38px;
 	}

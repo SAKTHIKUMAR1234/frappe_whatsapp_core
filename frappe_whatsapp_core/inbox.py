@@ -9,7 +9,10 @@ import re
 import frappe
 
 from frappe_whatsapp_core.ai_summaries import attach_message_insights, get_identity_summary
-from frappe_whatsapp_core.contact_presentation import present_identity_names
+from frappe_whatsapp_core.contact_presentation import (
+	present_identity_names,
+	search_presented_identities,
+)
 from frappe_whatsapp_core.conversation_reads import (
 	attach_message_readers,
 	conversation_readers,
@@ -87,7 +90,12 @@ def _conversation_page(
 	search: str | None = None,
 ) -> tuple[list[dict], bool]:
 	conditions, values = conversation_conditions("conversation")
-	_add_conversation_search(conditions, values, search)
+	_add_conversation_search(
+		conditions,
+		values,
+		search,
+		presented_identities=search_presented_identities(search),
+	)
 	team = str(team or "").strip()
 	if team:
 		if not frappe.db.exists("WhatsApp Core Team", {"name": team, "enabled": 1}):
@@ -168,7 +176,13 @@ def _conversation_page(
 	return _enrich_conversation_rows(rows), has_more
 
 
-def _add_conversation_search(conditions: list[str], values: dict, search: str | None) -> None:
+def _add_conversation_search(
+	conditions: list[str],
+	values: dict,
+	search: str | None,
+	*,
+	presented_identities: list[str] | None = None,
+) -> None:
 	"""Add a bounded, presentation-aware candidate search to the canonical inbox query.
 
 	The Vue client performs the final fuzzy ranking. Here we deliberately search a
@@ -182,6 +196,14 @@ def _add_conversation_search(conditions: list[str], values: dict, search: str | 
 	terms = list(dict.fromkeys(re.findall(r"[^\W_]+", query.casefold())))[:6]
 	if not terms:
 		return
+	presented_identities = list(dict.fromkeys(presented_identities or []))[:500]
+	if presented_identities:
+		values["search_presented_identities"] = tuple(presented_identities)
+	presented_match = (
+		" OR conversation.remote_identity IN %(search_presented_identities)s"
+		if presented_identities
+		else ""
+	)
 	term_conditions = []
 	for index, term in enumerate(terms):
 		digits = "".join(character for character in term if character.isdigit())
@@ -210,6 +232,7 @@ def _add_conversation_search(conditions: list[str], values: dict, search: str | 
 		term_conditions.append(
 			f"""(
 				conversation.conversation_key LIKE %({key})s
+				{presented_match}
 				OR EXISTS (
 					SELECT 1
 					FROM `tabWhatsApp Core Identity` AS search_identity
@@ -316,6 +339,7 @@ def _enrich_conversation_rows(
 		)
 	}
 	bindings = _primary_bindings(identity_names)
+	identity_aliases = _identity_search_aliases(identity_names)
 	teams = _team_presentations({row.assigned_team for row in rows if row.assigned_team})
 	contact_teams = _identity_team_presentations(identity_names)
 	presentations = present_identity_names(identity_names, context={"surface": "inbox_list"})
@@ -338,6 +362,15 @@ def _enrich_conversation_rows(
 			latest_message = latest_call
 			if not row.last_message_at or latest_call.provider_timestamp > row.last_message_at:
 				row.last_message_at = latest_call.provider_timestamp
+		search_aliases = [
+			*identity_aliases.get(row.remote_identity, []),
+			presentation.get("display_name"),
+			presentation.get("secondary_text"),
+			presentation.get("reference"),
+			presentation.get("entity_type"),
+			*(team.get("team_name") for team in contact_teams.get(row.remote_identity, [])),
+			(teams.get(row.assigned_team) or {}).get("team_name"),
+		]
 		result.append(
 			{
 				**row,
@@ -347,6 +380,7 @@ def _enrich_conversation_rows(
 				"phone_number": presentation.get("secondary_text") or "",
 				"identity_status": identity.get("status") or "",
 				"contact_presentation": presentation,
+				"search_aliases": list(dict.fromkeys(value for value in search_aliases if value)),
 				"party_binding": bindings.get(row.remote_identity),
 				"latest_message": latest_message,
 				"unread_count": unread_counts.get(row.name, 0),
@@ -779,6 +813,26 @@ def _team_presentations(team_names) -> dict[str, dict]:
 		row.avatar_url = team_avatar_url(row.name) if row.get("avatar") else ""
 		row.avatar = ""
 	return {row.name: row for row in rows}
+
+
+def _identity_search_aliases(identity_names) -> dict[str, list[str]]:
+	names = [name for name in set(identity_names or []) if name]
+	result = {name: [] for name in names}
+	if not names:
+		return result
+	rows = frappe.get_all(
+		"WhatsApp Core Identity Link",
+		filters={"identity": ["in", names], "status": "Active"},
+		fields=["identity", "display_name", "reference_name"],
+		order_by="is_primary desc, modified desc",
+		limit_page_length=max(100, len(names) * 5),
+	)
+	for row in rows:
+		for value in (row.display_name, row.reference_name):
+			value = str(value or "").strip()
+			if value and value not in result[row.identity]:
+				result[row.identity].append(value)
+	return result
 
 
 def _identity_team_presentations(identity_names) -> dict[str, list[dict]]:

@@ -497,7 +497,7 @@
 		presenceHeartbeatTimer = window.setInterval(() => {
 			if (presenceConversation && document.visibilityState !== 'hidden')
 				void touchConversationPresence(presenceConversation, true)
-		}, 20_000)
+		}, 45_000)
 	}
 
 	function handlePresenceVisibilityChange() {

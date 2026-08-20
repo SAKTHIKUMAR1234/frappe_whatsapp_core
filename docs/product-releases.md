@@ -5,14 +5,20 @@ release is accepted only when the versions and machine contracts reported by
 the applications agree; matching branch names or Git dates are not a
 compatibility guarantee.
 
-## Stable 1.0 contract
+## Stable 2.0 contract
 
-- WhatsApp Core: `1.0.x`
-- WhatsApp Hub: `1.0.x`
-- Go relay: `1.0.x`
+- WhatsApp Core: `2.0.x`
+- WhatsApp Hub: `2.0.x`
+- Go relay: `2.0.x`
 - Core/Hub transport contract: `3`
 - Hub/relay HTTP contract: `1`
 - Supported Frappe majors: `15` and `16`
+
+Version 2 keeps the proven transport contracts while promoting the complete
+shared inbox, business-owned contact presentation/search, native Flows,
+calling, groups, template synchronization, bounded JetStream storage, and
+operator-safe dead-letter lifecycle as one production release. Core, Hub, and
+relay must still be deployed as a matching `2.0.x` release set.
 
 The authenticated Core transport identity includes a secret-free product
 manifest. Hub validates it during onboarding, activation, and production

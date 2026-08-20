@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from copy import deepcopy
 
 import frappe
@@ -148,6 +149,49 @@ def _phone_number(value) -> str:
 
 def _presenter_hooks() -> list[str]:
 	hooks = frappe.get_hooks("whatsapp_core_contact_presenters") or []
+	if isinstance(hooks, dict):
+		hooks = list(hooks.values())
+	result = []
+	for hook in hooks:
+		if isinstance(hook, (list, tuple)):
+			result.extend(str(method) for method in hook if method)
+		elif hook:
+			result.append(str(hook))
+	return result
+
+
+def search_presented_identities(query: str | None, *, limit: int = 500) -> list[str]:
+	"""Return bounded business-owned identity candidates for an inbox search."""
+	query = " ".join(str(query or "").strip().split())[:120]
+	if not query:
+		return []
+	limit = max(1, min(int(limit or 500), 500))
+	result = []
+	seen = set()
+	for method in _searcher_hooks():
+		matches = frappe.get_attr(method)(query=query, limit=limit)
+		if isinstance(matches, dict):
+			matches = matches.keys()
+		if matches is None:
+			continue
+		if isinstance(matches, (str, bytes)) or not isinstance(matches, Iterable):
+			frappe.throw(
+				f"Contact searcher {method} must return identity names",
+				frappe.ValidationError,
+			)
+		for identity in matches:
+			identity = str(identity or "").strip()
+			if not identity or identity in seen:
+				continue
+			seen.add(identity)
+			result.append(identity)
+			if len(result) >= limit:
+				return result
+	return result
+
+
+def _searcher_hooks() -> list[str]:
+	hooks = frappe.get_hooks("whatsapp_core_contact_searchers") or []
 	if isinstance(hooks, dict):
 		hooks = list(hooks.values())
 	result = []

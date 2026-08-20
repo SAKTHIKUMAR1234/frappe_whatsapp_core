@@ -155,7 +155,7 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		)
 		settings = settings_workspace()
 		self.assertEqual(settings["site"], frappe.local.site)
-		self.assertEqual(settings["product"]["version"], "1.0.0")
+		self.assertEqual(settings["product"]["version"], "2.0.0")
 		self.assertEqual(settings["product"]["transport_contract_version"], 3)
 		self.assertIn("ai_summary", settings)
 		self.assertIn("i2a_actions", settings)

@@ -44,7 +44,13 @@ from frappe_whatsapp_core.naming import name_by_key
 
 class TestGroupsAndCalling(FrappeTestCase):
 	def setUp(self):
+		super().setUp()
 		frappe.set_user("Administrator")
+		settings = frappe.get_single("WhatsApp Core Settings")
+		settings.enabled = 1
+		settings.hub_url = "https://hub.example.test"
+		settings.relay_url = "https://relay.example.test"
+		settings.save(ignore_permissions=True)
 
 	@patch("frappe_whatsapp_core.calling.frappe.get_single")
 	def test_calling_uses_desk_managed_ice_servers(self, get_single):

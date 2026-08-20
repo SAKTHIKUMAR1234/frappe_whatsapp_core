@@ -3,7 +3,10 @@ from unittest.mock import patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from frappe_whatsapp_core.contact_presentation import present_contacts
+from frappe_whatsapp_core.contact_presentation import (
+	present_contacts,
+	search_presented_identities,
+)
 
 
 class TestContactPresentation(FrappeTestCase):
@@ -56,3 +59,18 @@ class TestContactPresentation(FrappeTestCase):
 		self.assertEqual(result["IDENTITY-1"]["display_name"], "Retailer · North")
 		self.assertEqual(result["IDENTITY-1"]["badges"], ["Retailer"])
 		self.assertNotIn("normalized_value", result["IDENTITY-1"])
+
+	@patch("frappe_whatsapp_core.contact_presentation.frappe.get_attr")
+	@patch("frappe_whatsapp_core.contact_presentation.frappe.get_hooks")
+	def test_business_search_hook_returns_bounded_identity_candidates(self, get_hooks, get_attr):
+		get_hooks.return_value = ["business_app.search_contacts"]
+		get_attr.return_value = lambda query, limit: [
+			"IDENTITY-1",
+			"IDENTITY-1",
+			"IDENTITY-2",
+		]
+
+		self.assertEqual(
+			search_presented_identities("  Visible   Company  ", limit=2),
+			["IDENTITY-1", "IDENTITY-2"],
+		)

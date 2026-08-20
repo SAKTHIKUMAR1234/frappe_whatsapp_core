@@ -40,7 +40,7 @@ class TestProductionPreflight(TestCase):
 
 		result = cutover.production_preflight()
 
-		self.assertEqual(result["product"]["version"], "1.0.0")
+		self.assertEqual(result["product"]["version"], "2.0.0")
 		self.assertEqual(result["product"]["transport_contract_version"], 3)
 		self.assertTrue(result["ready"])
 		self.assertEqual(result["failed"], 0)

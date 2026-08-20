@@ -5,7 +5,7 @@
 	import InputText from 'primevue/inputtext'
 	import Password from 'primevue/password'
 	import Message from 'primevue/message'
-	import { MessageCircleMore } from 'lucide-vue-next'
+	import CoreMark from '@/components/CoreMark.vue'
 	import { useSessionStore } from '@/stores/session'
 	import { errorMessage } from '@/services/frappe'
 
@@ -45,7 +45,7 @@
 	<main class="login-page">
 		<section class="login-art">
 			<div class="art-copy">
-				<div class="art-logo"><MessageCircleMore :size="28" /></div>
+				<div class="art-logo"><CoreMark :size="53" /></div>
 				<span>WhatsApp Core</span>
 				<h1>One place to handle every WhatsApp interaction.</h1>
 				<p>
@@ -153,8 +153,7 @@
 		display: grid;
 		place-items: center;
 		border-radius: 17px;
-		background: #76efbf;
-		color: #0a372a;
+		background: transparent;
 		margin-bottom: 25px;
 	}
 	.art-copy > span {

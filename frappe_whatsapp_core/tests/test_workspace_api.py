@@ -157,7 +157,7 @@ class TestCoreRoleBoundary(FrappeTestCase):
 			result = frontend_api.onboarding_status()
 		self.assertEqual(result["site"], "core.example.test")
 		self.assertEqual(result["product"]["id"], "frappe_whatsapp_core")
-		self.assertEqual(result["product"]["version"], "1.0.0")
+		self.assertEqual(result["product"]["version"], "2.0.0")
 		self.assertEqual(result["product"]["transport_contract_version"], 3)
 		self.assertEqual(result["transport"], transport)
 		self.assertEqual(result["accounts"][0]["account_name"], "Hub Account")
