@@ -169,6 +169,20 @@ class TestFrontendWorkspaces(FrappeTestCase):
 			},
 		)
 
+	def test_core_settings_provisions_one_unified_service_credential(self):
+		script = (
+			Path(__file__).resolve().parents[1]
+			/ "frappe_whatsapp_core"
+			/ "doctype"
+			/ "whatsapp_core_settings"
+			/ "whatsapp_core_settings.js"
+		).read_text()
+		self.assertIn('frappe.user.has_role("System Manager")', script)
+		self.assertIn('__("Generate Integration Credential")', script)
+		self.assertIn("provision_transport_credentials", script)
+		self.assertIn('capability: "all"', script)
+		self.assertNotIn('capability: "ingress"', script)
+
 	def test_shared_fields_and_dialogs_are_used_instead_of_runtime_primevue_variants(self):
 		ui_root = Path(__file__).resolve().parents[2] / "core_ui" / "src"
 		vue_files = list(ui_root.rglob("*.vue"))
