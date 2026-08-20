@@ -10,6 +10,13 @@ test('conversation navigation keeps one mounted inbox workspace', () => {
 	)
 })
 
+test('flow type switching keeps one reactive flow workspace mounted', () => {
+	assert.equal(
+		routeComponentKey({ name: 'flows', fullPath: '/flows' }),
+		routeComponentKey({ name: 'flows', fullPath: '/flows?flow_type=automation' }),
+	)
+})
+
 test('record builders remount when their full route changes', () => {
 	assert.notEqual(
 		routeComponentKey({ name: 'flow-builder', fullPath: '/flows/a' }),

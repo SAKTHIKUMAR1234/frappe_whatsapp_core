@@ -336,7 +336,7 @@
 
 			<main :class="['content', { flush: flushContent }]">
 				<RouterView v-slot="{ Component, route: activeRoute }">
-					<Transition name="workspace-view" mode="out-in">
+					<Transition name="workspace-view">
 						<component :is="Component" :key="routeComponentKey(activeRoute)" />
 					</Transition>
 				</RouterView>
