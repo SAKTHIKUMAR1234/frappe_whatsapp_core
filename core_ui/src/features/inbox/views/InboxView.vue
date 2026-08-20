@@ -15,6 +15,7 @@
 	import ConversationContext from '@/features/inbox/components/ConversationContext.vue'
 	import ContactMessageEditor from '@/features/inbox/components/ContactMessageEditor.vue'
 	import ConversationList from '@/features/inbox/components/ConversationList.vue'
+	import { filterAndRankConversations } from '@/features/inbox/utils/conversationSearch'
 	import InboxSidebarControls from '@/features/inbox/components/InboxSidebarControls.vue'
 	import InboxResizeHandle from '@/features/inbox/components/InboxResizeHandle.vue'
 	import MessageActionMenu from '@/features/inbox/components/MessageActionMenu.vue'
@@ -45,6 +46,7 @@
 	const listMode = ref('all')
 	const team = ref('')
 	const rows = ref([])
+	const conversationViewers = ref([])
 	const conversationPage = ref({ has_more: false })
 	const loadingMoreRows = ref(false)
 	const listScrollTop = ref(Number(sessionStorage.getItem('whatsapp:inbox-scroll') || 0))
@@ -119,6 +121,10 @@
 	let typingIdleTimer = null
 	let typingRefreshTimer = null
 	let messageSearchTimer = null
+	let conversationSearchTimer = null
+	let presenceHeartbeatTimer = null
+	let presenceConversation = ''
+	const presenceClientId = browserPresenceId()
 	const stream = ref(null)
 	const hasUnseenMessages = ref(false)
 	const atMessageBottom = ref(true)
@@ -167,6 +173,21 @@
 	const clearedConversationBadges = new Set()
 	let realtimeConnectedOnce = false
 	let restoringMessageScroll = false
+
+	function browserPresenceId() {
+		const storageKey = 'whatsapp:presence-client'
+		try {
+			const existing = sessionStorage.getItem(storageKey)
+			if (existing) return existing
+			const created =
+				globalThis.crypto?.randomUUID?.().replaceAll('-', '') ||
+				`${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`
+			sessionStorage.setItem(storageKey, created)
+			return created
+		} catch {
+			return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`
+		}
+	}
 
 	function readMessageScrollPositions() {
 		try {
@@ -220,15 +241,8 @@
 	}
 
 	const filteredRows = computed(() => {
-		const query = search.value.trim().toLowerCase()
-		return rows.value.filter(
-			(row) =>
-				(listMode.value !== 'unread' || Number(row.unread_count || 0) > 0) &&
-				(!query ||
-					[row.display_name, row.phone_number, row.latest_message?.body]
-						.join(' ')
-						.toLowerCase()
-						.includes(query)),
+		return filterAndRankConversations(rows.value, search.value).filter(
+			(row) => listMode.value !== 'unread' || Number(row.unread_count || 0) > 0,
 		)
 	})
 	const messageMap = computed(
@@ -322,12 +336,14 @@
 
 	async function loadRows({ silent = false } = {}) {
 		const request = ++listRequest
+		const query = search.value.trim()
 		if (!silent) loading.value = true
 		listError.value = ''
 		try {
 			const loaded = await call('frappe_whatsapp_core.inbox.conversation_page', {
-				limit: 20,
+				limit: query ? 100 : 20,
 				team: team.value || null,
+				search: query || null,
 			})
 			if (request !== listRequest) return
 			const currentUnread = new Map(
@@ -353,10 +369,11 @@
 		const request = listRequest
 		try {
 			const loaded = await call('frappe_whatsapp_core.inbox.conversation_page', {
-				limit: 20,
+				limit: search.value.trim() ? 100 : 20,
 				before: conversationPage.value.next_before,
 				before_name: conversationPage.value.next_before_name,
 				team: team.value || null,
+				search: search.value.trim() || null,
 			})
 			if (request !== listRequest) return
 			const known = new Set(rows.value.map((row) => row.name))
@@ -430,6 +447,62 @@
 				queueVisibleMessages()
 			}
 		}
+	}
+
+	function visiblePresenceViewers(viewers) {
+		const currentUser = session.user?.name
+		return (viewers || []).filter((viewer) => viewer.user && viewer.user !== currentUser)
+	}
+
+	function applyConversationPresence(event) {
+		if (event?.conversation !== selectedName.value || document.visibilityState === 'hidden')
+			return
+		conversationViewers.value = visiblePresenceViewers(event.viewers)
+	}
+
+	async function touchConversationPresence(conversation, active) {
+		if (!conversation) return
+		try {
+			const result = await call(
+				'frappe_whatsapp_core.conversation_presence.update_conversation_presence',
+				{
+					conversation,
+					client_id: presenceClientId,
+					active: active ? 1 : 0,
+				},
+			)
+			if (active && conversation === selectedName.value)
+				conversationViewers.value = visiblePresenceViewers(result?.viewers)
+		} catch {
+			// Presence is advisory. Messaging must remain usable during a cache outage.
+		}
+	}
+
+	function leaveConversationPresence(conversation = presenceConversation) {
+		if (!conversation) return
+		if (presenceConversation === conversation) presenceConversation = ''
+		window.clearInterval(presenceHeartbeatTimer)
+		presenceHeartbeatTimer = null
+		conversationViewers.value = []
+		void touchConversationPresence(conversation, false)
+	}
+
+	function enterConversationPresence(conversation) {
+		if (!conversation || document.visibilityState === 'hidden') return
+		if (presenceConversation && presenceConversation !== conversation)
+			leaveConversationPresence(presenceConversation)
+		presenceConversation = conversation
+		void touchConversationPresence(conversation, true)
+		window.clearInterval(presenceHeartbeatTimer)
+		presenceHeartbeatTimer = window.setInterval(() => {
+			if (presenceConversation && document.visibilityState !== 'hidden')
+				void touchConversationPresence(presenceConversation, true)
+		}, 20_000)
+	}
+
+	function handlePresenceVisibilityChange() {
+		if (document.visibilityState === 'hidden') leaveConversationPresence()
+		else enterConversationPresence(selectedName.value)
 	}
 
 	async function refreshDirectoryPresentations() {
@@ -1933,6 +2006,8 @@
 	}
 
 	watch(selectedName, (name, previousName) => {
+		if (previousName) leaveConversationPresence(previousName)
+		enterConversationPresence(name)
 		rememberMessageScroll(previousName)
 		discardPendingReadMessages(previousName)
 		locallyReadMessages.clear()
@@ -1948,6 +2023,10 @@
 		clearTimeout(messageSearchTimer)
 		messageSearchTimer = setTimeout(runMessageSearch, 300)
 	})
+	watch(search, () => {
+		window.clearTimeout(conversationSearchTimer)
+		conversationSearchTimer = window.setTimeout(() => loadRows({ silent: true }), 220)
+	})
 	watch(team, async () => {
 		await loadRows()
 	})
@@ -1956,15 +2035,18 @@
 		window.addEventListener('focus', handleReadVisibilityChange)
 		window.addEventListener('blur', handleReadVisibilityChange)
 		document.addEventListener('visibilitychange', handleReadVisibilityChange)
+		document.addEventListener('visibilitychange', handlePresenceVisibilityChange)
 		await loadRows()
 		clearConversationBadge(selectedName.value)
 		if (selectedName.value) await loadDetail(selectedName.value)
+		enterConversationPresence(selectedName.value)
 		const site = session.boot?.site
 		unsubscribers.push(
 			subscribe(site, 'whatsapp_core_message', appendMessage),
 			subscribe(site, 'whatsapp_core_message_status', updateMessageStatus),
 			subscribe(site, 'whatsapp_core_call', upsertTimelineCall),
 			subscribe(site, 'whatsapp_core_conversation_read', updateConversationReader),
+			subscribe(site, 'whatsapp_core_conversation_presence', applyConversationPresence),
 			subscribe(site, 'whatsapp_core_batch_committed', refreshCommittedBatch),
 			subscribe(site, 'whatsapp_core_contact', refreshDirectoryPresentations),
 			subscribe(site, 'whatsapp_core_team', refreshDirectoryPresentations),
@@ -1987,8 +2069,11 @@
 		window.removeEventListener('focus', handleReadVisibilityChange)
 		window.removeEventListener('blur', handleReadVisibilityChange)
 		document.removeEventListener('visibilitychange', handleReadVisibilityChange)
+		document.removeEventListener('visibilitychange', handlePresenceVisibilityChange)
 		rememberMessageScroll()
 		clearTimeout(messageSearchTimer)
+		clearTimeout(conversationSearchTimer)
+		leaveConversationPresence()
 		stopTypingSession()
 		window.clearTimeout(batchRefreshTimer)
 		batchRefreshTimer = null
@@ -2083,6 +2168,7 @@
 						:avatar="detail.contact_presentation?.avatar || ''"
 						:teams="detailTeams"
 						:status="detail.conversation.status"
+						:viewers="conversationViewers"
 						:context-open="contextOpen"
 						@back="closeMobileConversation"
 						@search="toggleMessageSearch"

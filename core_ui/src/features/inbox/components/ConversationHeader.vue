@@ -1,4 +1,5 @@
 <script setup>
+	import { computed } from 'vue'
 	import Button from 'primevue/button'
 	import { ChevronLeft, PanelRight, Search } from 'lucide-vue-next'
 
@@ -8,6 +9,7 @@
 		avatar: { type: String, default: '' },
 		teams: { type: Array, default: () => [] },
 		status: { type: String, default: '' },
+		viewers: { type: Array, default: () => [] },
 		contextOpen: { type: Boolean, default: false },
 	})
 
@@ -16,6 +18,16 @@
 	function initials() {
 		return (props.displayName || 'WA').slice(0, 2).toUpperCase()
 	}
+
+	function viewerInitials(viewer) {
+		return (viewer.display_name || viewer.user || 'WA').slice(0, 2).toUpperCase()
+	}
+
+	const presenceLabel = computed(() => {
+		if (!props.viewers.length) return ''
+		if (props.viewers.length === 1) return `${props.viewers[0].display_name} is viewing`
+		return `${props.viewers[0].display_name} and ${props.viewers.length - 1} more are viewing`
+	})
 </script>
 
 <template>
@@ -37,6 +49,23 @@
 			<span class="identity-meta">
 				<small>{{ identity }}</small>
 				<em v-if="teams.length">{{ teams.map((team) => team.team_name).join(' · ') }}</em>
+			</span>
+			<span
+				v-if="viewers.length"
+				class="presence-summary"
+				:title="viewers.map((viewer) => viewer.display_name).join(', ')"
+			>
+				<span class="presence-avatars" aria-hidden="true">
+					<span
+						v-for="viewer in viewers.slice(0, 3)"
+						:key="viewer.user"
+						class="presence-avatar"
+					>
+						<img v-if="viewer.user_image" :src="viewer.user_image" alt="" />
+						<template v-else>{{ viewerInitials(viewer) }}</template>
+					</span>
+				</span>
+				<em>{{ presenceLabel }}</em>
 			</span>
 		</div>
 		<div class="chat-heading-actions">
@@ -114,6 +143,46 @@
 		margin-top: 3px;
 		color: var(--wa-muted);
 		font-size: 12px;
+	}
+	.presence-summary {
+		display: flex !important;
+		align-items: center;
+		gap: 6px;
+		margin-top: 2px;
+		color: var(--wa-primary);
+	}
+	.presence-summary em {
+		overflow: hidden;
+		font-size: 10px;
+		font-style: normal;
+		font-weight: 650;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.presence-avatars {
+		display: flex !important;
+		flex: 0 0 auto;
+	}
+	.presence-avatar {
+		width: 18px;
+		height: 18px;
+		display: grid !important;
+		place-items: center;
+		margin-left: -4px;
+		border: 2px solid var(--wa-surface-muted);
+		border-radius: 50%;
+		background: var(--wa-primary-soft);
+		font-size: 7px;
+		font-weight: 800;
+	}
+	.presence-avatar:first-child {
+		margin-left: 0;
+	}
+	.presence-avatar img {
+		width: 100%;
+		height: 100%;
+		border-radius: inherit;
+		object-fit: cover;
 	}
 	.identity-meta {
 		display: flex !important;

@@ -306,6 +306,28 @@ def publish_conversation_read(read_state: dict, *, after_commit: bool = True) ->
 	return published
 
 
+def publish_conversation_presence(
+	conversation: str,
+	viewers: list[dict],
+	*,
+	after_commit: bool = False,
+) -> int:
+	"""Publish ephemeral operator presence only to users allowed to open the chat."""
+	conversation = str(conversation or "").strip()
+	if not conversation:
+		return 0
+	recipients = conversation_recipients([conversation]).get(conversation, set())
+	payload = {"conversation": conversation, "viewers": list(viewers or [])}
+	for user in recipients:
+		frappe.publish_realtime(
+			"whatsapp_core_conversation_presence",
+			payload,
+			user=user,
+			after_commit=after_commit,
+		)
+	return len(recipients)
+
+
 def publish_call_changes(call_names, *, after_commit: bool = True) -> int:
 	"""Send complete call lifecycle deltas only to users in the call's inbox scope."""
 	names = _unique_strings(call_names)

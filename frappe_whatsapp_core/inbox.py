@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 import frappe
 
@@ -36,9 +37,15 @@ def conversations(
 	limit: int = 250,
 	category: str | None = None,
 	team: str | None = None,
+	search: str | None = None,
 ) -> list[dict]:
 	limit = max(1, min(int(limit), 500))
-	return _conversation_page(limit=limit, category=category, team=team)[0]
+	return _conversation_page(
+		limit=limit,
+		category=category,
+		team=team,
+		search=search,
+	)[0]
 
 
 @frappe.whitelist()
@@ -49,6 +56,7 @@ def conversation_page(
 	before_name: str | None = None,
 	category: str | None = None,
 	team: str | None = None,
+	search: str | None = None,
 ) -> dict:
 	"""Return a stable cursor page for the virtualized conversation list."""
 	limit = max(1, min(int(limit or 20), 100))
@@ -58,6 +66,7 @@ def conversation_page(
 		before_name=before_name,
 		category=category,
 		team=team,
+		search=search,
 	)
 	oldest = rows[-1] if has_more and rows else None
 	return {
@@ -75,8 +84,10 @@ def _conversation_page(
 	before_name: str | None = None,
 	category: str | None = None,
 	team: str | None = None,
+	search: str | None = None,
 ) -> tuple[list[dict], bool]:
 	conditions, values = conversation_conditions("conversation")
+	_add_conversation_search(conditions, values, search)
 	team = str(team or "").strip()
 	if team:
 		if not frappe.db.exists("WhatsApp Core Team", {"name": team, "enabled": 1}):
@@ -155,6 +166,96 @@ def _conversation_page(
 	has_more = len(rows) > limit
 	rows = rows[:limit]
 	return _enrich_conversation_rows(rows), has_more
+
+
+def _add_conversation_search(conditions: list[str], values: dict, search: str | None) -> None:
+	"""Add a bounded, presentation-aware candidate search to the canonical inbox query.
+
+	The Vue client performs the final fuzzy ranking. Here we deliberately search a
+	short prefix of every word so a small spelling error after the first characters
+	still returns the contact as a candidate. Identity Links are included because a
+	business application's display name is often different from Meta's raw identity.
+	"""
+	query = " ".join(str(search or "").strip().split())[:120]
+	if not query:
+		return
+	terms = list(dict.fromkeys(re.findall(r"[^\W_]+", query.casefold())))[:6]
+	if not terms:
+		return
+	term_conditions = []
+	for index, term in enumerate(terms):
+		digits = "".join(character for character in term if character.isdigit())
+		fragment = digits if digits and len(digits) == len(term) else term[: min(3, len(term))]
+		if not fragment:
+			continue
+		key = f"search_{index}"
+		values[key] = f"%{fragment}%"
+		pattern_key = f"search_pattern_{index}"
+		values[pattern_key] = ".*".join(re.escape(character) for character in term[:12])
+		text_pattern = (
+			f" OR search_identity.display_value REGEXP %({pattern_key})s"
+			if not digits or len(digits) != len(term)
+			else ""
+		)
+		link_pattern = (
+			f" OR search_link.display_name REGEXP %({pattern_key})s"
+			if not digits or len(digits) != len(term)
+			else ""
+		)
+		team_pattern = (
+			f" OR search_team.team_name REGEXP %({pattern_key})s"
+			if not digits or len(digits) != len(term)
+			else ""
+		)
+		term_conditions.append(
+			f"""(
+				conversation.conversation_key LIKE %({key})s
+				OR EXISTS (
+					SELECT 1
+					FROM `tabWhatsApp Core Identity` AS search_identity
+					WHERE search_identity.name = conversation.remote_identity
+						AND (
+							search_identity.display_value LIKE %({key})s
+							OR search_identity.normalized_value LIKE %({key})s
+							{text_pattern}
+						)
+				)
+				OR EXISTS (
+					SELECT 1
+					FROM `tabWhatsApp Core Identity Link` AS search_link
+					WHERE search_link.identity = conversation.remote_identity
+						AND search_link.status = 'Active'
+						AND (
+							search_link.display_name LIKE %({key})s
+							OR search_link.reference_name LIKE %({key})s
+							{link_pattern}
+						)
+				)
+				OR EXISTS (
+					SELECT 1
+					FROM `tabWhatsApp Core Team` AS search_team
+					WHERE search_team.enabled = 1
+						AND (
+							search_team.name = conversation.assigned_team
+							OR EXISTS (
+								SELECT 1
+								FROM `tabWhatsApp Core Team Contact` AS search_team_contact
+								WHERE search_team_contact.parent = search_team.name
+									AND search_team_contact.parenttype = 'WhatsApp Core Team'
+									AND search_team_contact.parentfield = 'contacts'
+									AND search_team_contact.enabled = 1
+									AND search_team_contact.identity = conversation.remote_identity
+							)
+						)
+						AND (
+							search_team.team_name LIKE %({key})s
+							{team_pattern}
+						)
+				)
+			)"""
+		)
+	if term_conditions:
+		conditions.extend(term_conditions)
 
 
 @frappe.whitelist()

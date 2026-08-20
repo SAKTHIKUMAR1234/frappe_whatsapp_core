@@ -4,12 +4,17 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import now_datetime
 
+from frappe_whatsapp_core.conversation_presence import (
+	_presence_key,
+	update_conversation_presence,
+)
 from frappe_whatsapp_core.identity import contact_options
 from frappe_whatsapp_core.inbox import conversation_page, conversations
 from frappe_whatsapp_core.permissions import assert_call_access, assert_conversation_access
 from frappe_whatsapp_core.realtime import (
 	conversation_recipients,
 	publish_call_changes,
+	publish_conversation_presence,
 	publish_message_changes,
 )
 from frappe_whatsapp_core.workspace_api import upsert_team
@@ -141,6 +146,16 @@ class TestTeamContactAccess(FrappeTestCase):
 		self.assertIn(self.conversation.name, {row["name"] for row in rows})
 		self.assertNotIn(self.open_conversation.name, {row["name"] for row in rows})
 
+	def test_manager_can_search_inbox_by_fuzzy_name_candidate(self):
+		self.identity.db_set("display_value", "Mohammed Anas")
+		rows = conversation_page(search="Mohamad Anas", limit=100)["rows"]
+		self.assertIn(self.conversation.name, {row["name"] for row in rows})
+
+	def test_manager_can_search_inbox_by_contact_team(self):
+		rows = conversation_page(search="Access Tem", limit=100)["rows"]
+		self.assertIn(self.conversation.name, {row["name"] for row in rows})
+		self.assertNotIn(self.open_conversation.name, {row["name"] for row in rows})
+
 	def test_realtime_recipients_match_team_and_uncategorized_scope(self):
 		recipients = conversation_recipients([
 			self.conversation.name,
@@ -153,6 +168,42 @@ class TestTeamContactAccess(FrappeTestCase):
 		self.assertIn("Administrator", recipients[self.open_conversation.name])
 		self.assertIn(self.outsider, recipients[self.open_conversation.name])
 		self.assertNotIn(self.member, recipients[self.open_conversation.name])
+
+	def test_presence_publishes_only_to_the_conversation_scope(self):
+		with patch("frappe_whatsapp_core.realtime.frappe.publish_realtime") as publish:
+			count = publish_conversation_presence(
+				self.conversation.name,
+				[{"user": self.member, "display_name": "WhatsApp Member", "user_image": ""}],
+			)
+
+		self.assertGreaterEqual(count, 2)
+		users = {item.kwargs.get("user") for item in publish.call_args_list}
+		self.assertIn("Administrator", users)
+		self.assertIn(self.member, users)
+		self.assertNotIn(self.outsider, users)
+		self.assertTrue(all(not item.kwargs["after_commit"] for item in publish.call_args_list))
+
+	def test_operator_presence_is_ephemeral_and_rejects_out_of_scope_users(self):
+		client_id = f"browser_{frappe.generate_hash(length=16)}"
+		try:
+			frappe.set_user(self.member)
+			with patch(
+				"frappe_whatsapp_core.conversation_presence.publish_conversation_presence"
+			) as publish:
+				result = update_conversation_presence(
+					self.conversation.name,
+					client_id,
+					active=1,
+				)
+			self.assertEqual(result["conversation"], self.conversation.name)
+			self.assertEqual(result["viewers"][0]["user"], self.member)
+			publish.assert_called_once()
+
+			frappe.set_user(self.outsider)
+			with self.assertRaises(frappe.PermissionError):
+				update_conversation_presence(self.conversation.name, client_id, active=1)
+		finally:
+			frappe.cache.delete_key(_presence_key(self.conversation.name))
 
 	def test_created_message_publishes_complete_delta_only_to_scoped_user_rooms(self):
 		message = frappe.get_doc({
