@@ -336,9 +336,7 @@
 
 			<main :class="['content', { flush: flushContent }]">
 				<RouterView v-slot="{ Component, route: activeRoute }">
-					<Transition name="workspace-view">
-						<component :is="Component" :key="routeComponentKey(activeRoute)" />
-					</Transition>
+					<component :is="Component" :key="routeComponentKey(activeRoute)" />
 				</RouterView>
 			</main>
 		</div>
@@ -793,20 +791,6 @@
 	.content.flush {
 		padding: 0;
 		background: var(--wa-surface);
-	}
-	.workspace-view-enter-active,
-	.workspace-view-leave-active {
-		transition:
-			opacity 130ms ease,
-			transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
-	}
-	.workspace-view-enter-from {
-		opacity: 0;
-		transform: translateY(5px);
-	}
-	.workspace-view-leave-to {
-		opacity: 0;
-		transform: translateY(-2px);
 	}
 	@media (min-width: 901px) {
 		.inbox-shell .topbar {

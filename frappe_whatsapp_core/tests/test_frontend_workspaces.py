@@ -199,7 +199,7 @@ class TestFrontendWorkspaces(FrappeTestCase):
 			/ "layouts"
 			/ "AppShell.vue"
 		).read_text()
-		self.assertIn(':key="activeRoute.fullPath"', shell)
+		self.assertIn(':key="routeComponentKey(activeRoute)"', shell)
 		self.assertNotIn('<Transition name="workspace-view"', shell)
 		self.assertNotIn(".workspace-view-enter-active", shell)
 
