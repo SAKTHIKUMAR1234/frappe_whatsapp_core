@@ -68,6 +68,7 @@ scheduler_events = {
 		],
 		"*/5 * * * *": [
 			"frappe_whatsapp_core.dispatcher.retry_failed_events",
+			"frappe_whatsapp_core.message_media.queue_uncached_recent_media",
 			"frappe_whatsapp_core.campaigns.refresh_active_campaigns",
 		],
 		"*/30 * * * *": [

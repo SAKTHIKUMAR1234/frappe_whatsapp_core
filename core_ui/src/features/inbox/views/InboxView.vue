@@ -50,6 +50,13 @@
 	const listScrollTop = ref(Number(sessionStorage.getItem('whatsapp:inbox-scroll') || 0))
 	const listPaneWidth = ref(Number(localStorage.getItem('whatsapp:inbox-pane-width') || 360))
 	const detail = ref(null)
+	const detailTeams = computed(() => {
+		const values = [
+			detail.value?.assigned_team_details,
+			...(detail.value?.contact_teams || []),
+		]
+		return [...new Map(values.filter(Boolean).map((item) => [item.name, item])).values()]
+	})
 	const contextOpen = ref(false)
 	const messagePage = ref({ has_more: false, has_more_newer: false })
 	const loadingNewer = ref(false)
@@ -423,6 +430,11 @@
 				queueVisibleMessages()
 			}
 		}
+	}
+
+	async function refreshDirectoryPresentations() {
+		await loadRows({ silent: true })
+		if (selectedName.value) await loadDetail(selectedName.value, { silent: true })
 	}
 
 	async function restoreMessageScroll(
@@ -1306,6 +1318,7 @@
 				template: payload.template,
 				language_code: payload.language_code,
 				components: payload.components,
+				local_file_url: payload.local_file_url || null,
 			})
 			appendMessage({ conversation, message })
 			templateDialog.value = false
@@ -1953,6 +1966,8 @@
 			subscribe(site, 'whatsapp_core_call', upsertTimelineCall),
 			subscribe(site, 'whatsapp_core_conversation_read', updateConversationReader),
 			subscribe(site, 'whatsapp_core_batch_committed', refreshCommittedBatch),
+			subscribe(site, 'whatsapp_core_contact', refreshDirectoryPresentations),
+			subscribe(site, 'whatsapp_core_team', refreshDirectoryPresentations),
 			subscribeConnection(site, async (status) => {
 				if (status !== 'connected') return
 				if (!realtimeConnectedOnce) {
@@ -2065,6 +2080,8 @@
 					<ConversationHeader
 						:display-name="detail.display_name"
 						:identity="detail.contact_presentation?.secondary_text || ''"
+						:avatar="detail.contact_presentation?.avatar || ''"
+						:teams="detailTeams"
 						:status="detail.conversation.status"
 						:context-open="contextOpen"
 						@back="closeMobileConversation"
@@ -2240,6 +2257,7 @@
 				:can-manage="canManage"
 				@status="updateStatus"
 				@refresh-summary="refreshContactSummary"
+				@avatar-changed="refreshDirectoryPresentations"
 			/>
 		</section>
 
@@ -2249,6 +2267,7 @@
 			:templates="detail.templates"
 			:loading="richSending"
 			:initial-template="selectedTemplate"
+			:conversation="selectedName"
 			@send="sendTemplate"
 		/>
 

@@ -29,27 +29,32 @@ def present_identity_names(identity_names, *, context=None) -> dict[str, dict]:
 			"name",
 			"normalized_value",
 			"display_value",
+			"avatar",
 			"primary_link",
 			"attributes",
 		],
 		limit_page_length=len(names),
 	)
 	link_names = [row.primary_link for row in identities if row.primary_link]
-	links = {
-		row.name: row
-		for row in frappe.get_all(
-			"WhatsApp Core Identity Link",
-			filters={"name": ["in", link_names], "status": "Active"},
-			fields=[
-				"name",
-				"display_name",
-				"entity_type",
-				"reference_doctype",
-				"reference_name",
-			],
-			limit_page_length=max(1, len(link_names)),
-		)
-	} if link_names else {}
+	links = (
+		{
+			row.name: row
+			for row in frappe.get_all(
+				"WhatsApp Core Identity Link",
+				filters={"name": ["in", link_names], "status": "Active"},
+				fields=[
+					"name",
+					"display_name",
+					"entity_type",
+					"reference_doctype",
+					"reference_name",
+				],
+				limit_page_length=max(1, len(link_names)),
+			)
+		}
+		if link_names
+		else {}
+	)
 	phone_aliases = {
 		row.identity: row.alias_value
 		for row in frappe.get_all(
@@ -107,7 +112,7 @@ def present_contacts(
 				else "WhatsApp contact"
 			),
 			"entity_type": link.get("entity_type") if link else "",
-			"avatar": "",
+			"avatar": row.get("avatar") or "",
 			"badges": [],
 			"metadata": {},
 		}

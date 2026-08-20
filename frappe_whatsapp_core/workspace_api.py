@@ -7,8 +7,8 @@ import json
 import frappe
 from frappe.utils import cint
 
-from frappe_whatsapp_core.contact_presentation import present_identity_names
 from frappe_whatsapp_core.ai_summaries import attach_message_insights
+from frappe_whatsapp_core.contact_presentation import present_identity_names
 from frappe_whatsapp_core.conversation_reads import (
 	attach_message_readers,
 	mark_conversation_read,
@@ -23,6 +23,12 @@ from frappe_whatsapp_core.permissions import (
 	assert_conversation_access,
 	conversation_conditions,
 	require_core_access,
+)
+from frappe_whatsapp_core.profile_images import (
+	attach_avatar,
+	contact_avatar_url,
+	prepare_avatar_file,
+	team_avatar_url,
 )
 from frappe_whatsapp_core.realtime import publish_invalidation
 
@@ -67,12 +73,14 @@ def list_conversations(
 			conversation.assigned_team,
 			assigned_team.team_name AS assigned_team_name,
 			assigned_team.icon AS assigned_team_icon,
+			assigned_team.avatar AS assigned_team_avatar,
 			conversation.assigned_user,
 			conversation.last_inbound_at,
 			conversation.last_message_at,
 			identity.name AS identity,
 			identity.display_value,
 			identity.normalized_value,
+			identity.avatar AS identity_avatar,
 			identity.attributes,
 			last_message.body AS last_message_body,
 			last_message.message_type AS last_message_type,
@@ -118,9 +126,12 @@ def list_conversations(
 	for row in rows:
 		row.unread_count = int(row.unread_count or 0)
 		row.attributes = _json_dict(row.attributes)
-		row.contact_presentation = presentations.get(row.identity) or {}
+		row.contact_presentation = dict(presentations.get(row.identity) or {})
+		if row.identity_avatar:
+			row.contact_presentation["avatar"] = contact_avatar_url(row.name)
 		row.display_value = row.contact_presentation.get("display_name") or row.display_value
 		row.phone_number = row.contact_presentation.get("secondary_text") or ""
+		row.assigned_team_avatar_url = team_avatar_url(row.assigned_team) if row.assigned_team_avatar else ""
 	return {
 		"rows": rows,
 		"limit": limit,
@@ -138,6 +149,9 @@ def get_conversation(conversation: str) -> dict:
 	presentation = present_identity_names(
 		[identity.name], context={"surface": "workspace_conversation", "conversation": doc.name}
 	).get(identity.name, {})
+	presentation = dict(presentation)
+	if identity.get("avatar"):
+		presentation["avatar"] = contact_avatar_url(doc.name)
 	return {
 		**doc.as_dict(),
 		"identity": {
@@ -339,15 +353,19 @@ def refresh_messages(conversation: str, message_names) -> dict:
 def _enrich_message_rows(rows: list, conversation: str) -> None:
 	"""Apply the same safe UI projection to paged and exact refresh rows."""
 	owners = {row.owner for row in rows if row.direction == "Outbound" and row.owner}
-	owner_names = {
-		row.name: row.full_name or row.name
-		for row in frappe.get_all(
-			"User",
-			filters={"name": ["in", list(owners)]},
-			fields=["name", "full_name"],
-			limit_page_length=len(owners),
-		)
-	} if owners else {}
+	owner_names = (
+		{
+			row.name: row.full_name or row.name
+			for row in frappe.get_all(
+				"User",
+				filters={"name": ["in", list(owners)]},
+				fields=["name", "full_name"],
+				limit_page_length=len(owners),
+			)
+		}
+		if owners
+		else {}
+	)
 	for row in rows:
 		row.content = _json_dict(row.content)
 		row.failure = _json_dict(row.failure)
@@ -389,6 +407,7 @@ def send_template(
 	template_name: str,
 	language_code: str = "en",
 	components=None,
+	local_file_url: str | None = None,
 ) -> dict:
 	_assert_conversation_access(conversation)
 	if isinstance(components, str):
@@ -400,6 +419,7 @@ def send_template(
 		(template_name or "").strip(),
 		(language_code or "en").strip(),
 		components or [],
+		local_file_url=local_file_url,
 	)
 
 
@@ -412,18 +432,20 @@ def assign_conversation(
 	status: str | None = None,
 ) -> dict:
 	_assert_conversation_access(conversation)
-	if (team is not None or user is not None) and not (
-		set(frappe.get_roles()) & CORE_MANAGEMENT_ROLES
-	):
+	if (team is not None or user is not None) and not (set(frappe.get_roles()) & CORE_MANAGEMENT_ROLES):
 		frappe.throw(
 			"WhatsApp Core management access is required for assignment",
 			frappe.PermissionError,
 		)
 	if team and not frappe.db.exists("WhatsApp Core Team", {"name": team, "enabled": 1}):
 		frappe.throw("Enabled team not found", frappe.ValidationError)
-	if user and team and not frappe.db.exists(
-		"WhatsApp Core Team Member",
-		{"parent": team, "user": user, "enabled": 1},
+	if (
+		user
+		and team
+		and not frappe.db.exists(
+			"WhatsApp Core Team Member",
+			{"parent": team, "user": user, "enabled": 1},
+		)
 	):
 		frappe.throw("Assigned user is not an enabled member of the team")
 	if status and status not in {"Open", "Pending", "Resolved"}:
@@ -445,11 +467,12 @@ def assign_conversation(
 def list_teams() -> list[dict]:
 	"""Return bounded team summaries without materializing child tables."""
 	user = frappe.session.user
-	manager = user == "Administrator" or bool(
-		set(frappe.get_roles(user)) & CORE_MANAGEMENT_ROLES
-	)
+	manager = user == "Administrator" or bool(set(frappe.get_roles(user)) & CORE_MANAGEMENT_ROLES)
 	values = {"user": user, "limit": 500}
-	visibility = "1 = 1" if manager else """EXISTS (
+	visibility = (
+		"1 = 1"
+		if manager
+		else """EXISTS (
 		SELECT 1 FROM `tabWhatsApp Core Team Member` scoped_member
 		WHERE scoped_member.parent = team.name
 			AND scoped_member.parenttype = 'WhatsApp Core Team'
@@ -457,12 +480,14 @@ def list_teams() -> list[dict]:
 			AND scoped_member.enabled = 1
 			AND scoped_member.user = %(user)s
 	)"""
-	return frappe.db.sql(
+	)
+	rows = frappe.db.sql(
 		f"""
 		SELECT
 			team.name,
 			team.team_name,
 			team.icon,
+			team.avatar,
 			team.description,
 			team.enabled,
 			(
@@ -486,6 +511,10 @@ def list_teams() -> list[dict]:
 		values,
 		as_dict=True,
 	)
+	for row in rows:
+		row.avatar_url = team_avatar_url(row.name) if row.get("avatar") else ""
+		row.avatar = ""
+	return rows
 
 
 @frappe.whitelist()
@@ -493,15 +522,16 @@ def list_teams() -> list[dict]:
 def search_team_options(search=None, limit=50) -> list[dict]:
 	"""Return a permission-scoped, bounded LinkField page ordered newest first."""
 	user = frappe.session.user
-	manager = user == "Administrator" or bool(
-		set(frappe.get_roles(user)) & CORE_MANAGEMENT_ROLES
-	)
+	manager = user == "Administrator" or bool(set(frappe.get_roles(user)) & CORE_MANAGEMENT_ROLES)
 	values = {
 		"user": user,
 		"search": f"%{str(search or '').strip()}%",
 		"limit": max(1, min(cint(limit or 50), 100)),
 	}
-	visibility = "1 = 1" if manager else """EXISTS (
+	visibility = (
+		"1 = 1"
+		if manager
+		else """EXISTS (
 		SELECT 1 FROM `tabWhatsApp Core Team Member` scoped_member
 		WHERE scoped_member.parent = team.name
 			AND scoped_member.parenttype = 'WhatsApp Core Team'
@@ -509,9 +539,10 @@ def search_team_options(search=None, limit=50) -> list[dict]:
 			AND scoped_member.enabled = 1
 			AND scoped_member.user = %(user)s
 	)"""
-	return frappe.db.sql(
+	)
+	rows = frappe.db.sql(
 		f"""
-		SELECT team.name, team.team_name, team.description, team.icon
+		SELECT team.name, team.team_name, team.description, team.icon, team.avatar
 		FROM `tabWhatsApp Core Team` team
 		WHERE team.enabled = 1
 			AND {visibility}
@@ -526,6 +557,10 @@ def search_team_options(search=None, limit=50) -> list[dict]:
 		values,
 		as_dict=True,
 	)
+	for row in rows:
+		row.avatar_url = team_avatar_url(row.name) if row.get("avatar") else ""
+		row.avatar = ""
+	return rows
 
 
 def _user_options(search=None, limit=50, include=None) -> list[dict]:
@@ -560,9 +595,7 @@ def _user_options(search=None, limit=50, include=None) -> list[dict]:
 		)
 	for user in users:
 		user["label"] = (
-			f"{user.full_name} ({user.name})"
-			if user.full_name and user.full_name != user.name
-			else user.name
+			f"{user.full_name} ({user.name})" if user.full_name and user.full_name != user.name else user.name
 		)
 	return users
 
@@ -700,15 +733,21 @@ def add_team_member(team: str, user: str, team_role: str = "Agent") -> dict:
 		)
 		name = existing
 	else:
-		name = frappe.get_doc({
-			"doctype": "WhatsApp Core Team Member",
-			"parent": team,
-			"parenttype": "WhatsApp Core Team",
-			"parentfield": "members",
-			"user": user,
-			"team_role": team_role or "Agent",
-			"enabled": 1,
-		}).insert(ignore_permissions=True).name
+		name = (
+			frappe.get_doc(
+				{
+					"doctype": "WhatsApp Core Team Member",
+					"parent": team,
+					"parenttype": "WhatsApp Core Team",
+					"parentfield": "members",
+					"user": user,
+					"team_role": team_role or "Agent",
+					"enabled": 1,
+				}
+			)
+			.insert(ignore_permissions=True)
+			.name
+		)
 	_publish_team(team, "member_added")
 	return frappe.get_doc("WhatsApp Core Team Member", name).as_dict()
 
@@ -746,14 +785,20 @@ def add_team_contact(team: str, identity: str) -> dict:
 		frappe.db.set_value("WhatsApp Core Team Contact", existing, "enabled", 1)
 		name = existing
 	else:
-		name = frappe.get_doc({
-			"doctype": "WhatsApp Core Team Contact",
-			"parent": team,
-			"parenttype": "WhatsApp Core Team",
-			"parentfield": "contacts",
-			"identity": identity,
-			"enabled": 1,
-		}).insert(ignore_permissions=True).name
+		name = (
+			frappe.get_doc(
+				{
+					"doctype": "WhatsApp Core Team Contact",
+					"parent": team,
+					"parenttype": "WhatsApp Core Team",
+					"parentfield": "contacts",
+					"identity": identity,
+					"enabled": 1,
+				}
+			)
+			.insert(ignore_permissions=True)
+			.name
+		)
 	_publish_team(team, "contact_added")
 	return frappe.get_doc("WhatsApp Core Team Contact", name).as_dict()
 
@@ -778,6 +823,7 @@ def remove_team_contact(team: str, identity: str) -> dict:
 def upsert_team(
 	team_name: str,
 	icon: str = "users-round",
+	avatar: str | None = None,
 	description: str = "",
 	enabled: int | bool = 1,
 	members=None,
@@ -802,8 +848,11 @@ def upsert_team(
 		if record_name
 		else frappe.new_doc("WhatsApp Core Team")
 	)
+	avatar_file = prepare_avatar_file(avatar) if avatar else None
 	doc.team_name = name
 	doc.icon = _team_icon(icon)
+	if avatar is not None:
+		doc.avatar = avatar_file.file_url if avatar_file else ""
 	doc.description = description or ""
 	doc.enabled = 1 if _as_bool(enabled) else 0
 	if replace_members:
@@ -816,11 +865,14 @@ def upsert_team(
 			if not frappe.db.exists("User", user):
 				frappe.throw(f"User not found: {user}", frappe.ValidationError)
 			seen.add(user)
-			doc.append("members", {
-				"user": user,
-				"team_role": member.get("team_role") or "Agent",
-				"enabled": 1 if member.get("enabled", True) else 0,
-			})
+			doc.append(
+				"members",
+				{
+					"user": user,
+					"team_role": member.get("team_role") or "Agent",
+					"enabled": 1 if member.get("enabled", True) else 0,
+				},
+			)
 	if replace_contacts:
 		doc.set("contacts", [])
 		seen_contacts = set()
@@ -834,13 +886,41 @@ def upsert_team(
 			):
 				frappe.throw(f"Active WhatsApp contact not found: {identity}", frappe.ValidationError)
 			seen_contacts.add(identity)
-			doc.append("contacts", {
-				"identity": identity,
-				"enabled": 1 if contact.get("enabled", True) else 0,
-			})
+			doc.append(
+				"contacts",
+				{
+					"identity": identity,
+					"enabled": 1 if contact.get("enabled", True) else 0,
+				},
+			)
 	doc.save(ignore_permissions=True)
+	if avatar_file:
+		attach_avatar(avatar_file, "WhatsApp Core Team", doc.name)
 	publish_invalidation("whatsapp_core_team")
-	return doc.as_dict()
+	result = doc.as_dict()
+	result.avatar_url = team_avatar_url(doc.name) if doc.avatar else ""
+	result.avatar = ""
+	return result
+
+
+@frappe.whitelist()
+@require_core_access(manage=True)
+def update_contact_avatar(identity: str, avatar: str | None = None) -> dict:
+	"""Set or clear one contact image without exposing its private File URL."""
+	identity = str(identity or "").strip()
+	if not frappe.db.exists(
+		"WhatsApp Core Identity",
+		{"name": identity, "identity_type": "WhatsApp", "status": "Active"},
+	):
+		frappe.throw("Active WhatsApp contact not found", frappe.DoesNotExistError)
+	avatar_file = prepare_avatar_file(avatar) if avatar else None
+	doc = frappe.get_doc("WhatsApp Core Identity", identity)
+	doc.avatar = avatar_file.file_url if avatar_file else ""
+	doc.save(ignore_permissions=True)
+	if avatar_file:
+		attach_avatar(avatar_file, "WhatsApp Core Identity", doc.name)
+	publish_invalidation("whatsapp_core_contact")
+	return {"identity": doc.name, "has_avatar": bool(doc.avatar)}
 
 
 def _outbound_handler(hook_name: str):
@@ -896,8 +976,6 @@ def _as_bool(value) -> bool:
 def _team_icon(value) -> str:
 	"""Keep the icon safe for both Desk's Icon field and the Core UI."""
 	icon = str(value or "users-round").strip().lower()
-	if not icon or len(icon) > 40 or any(
-		not (character.isalnum() or character == "-") for character in icon
-	):
+	if not icon or len(icon) > 40 or any(not (character.isalnum() or character == "-") for character in icon):
 		frappe.throw("Invalid team icon", frappe.ValidationError)
 	return icon

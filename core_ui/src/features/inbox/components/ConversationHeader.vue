@@ -5,6 +5,8 @@
 	const props = defineProps({
 		displayName: { type: String, default: '' },
 		identity: { type: String, default: '' },
+		avatar: { type: String, default: '' },
+		teams: { type: Array, default: () => [] },
 		status: { type: String, default: '' },
 		contextOpen: { type: Boolean, default: false },
 	})
@@ -26,10 +28,16 @@
 		>
 			<ChevronLeft :size="18" />
 		</Button>
-		<span class="chat-avatar" aria-hidden="true">{{ initials() }}</span>
+		<span class="chat-avatar" aria-hidden="true">
+			<img v-if="avatar" :src="avatar" alt="" />
+			<template v-else>{{ initials() }}</template>
+		</span>
 		<div class="chat-identity">
 			<strong>{{ displayName }}</strong>
-			<span>{{ identity }}</span>
+			<span class="identity-meta">
+				<small>{{ identity }}</small>
+				<em v-if="teams.length">{{ teams.map((team) => team.team_name).join(' · ') }}</em>
+			</span>
 		</div>
 		<div class="chat-heading-actions">
 			<span class="conversation-status">{{ status }}</span>
@@ -80,6 +88,12 @@
 		font-size: 12px;
 		font-weight: 750;
 	}
+	.chat-avatar img {
+		width: 100%;
+		height: 100%;
+		border-radius: inherit;
+		object-fit: cover;
+	}
 	.chat-identity {
 		min-width: 0;
 		margin-right: auto;
@@ -100,6 +114,27 @@
 		margin-top: 3px;
 		color: var(--wa-muted);
 		font-size: 12px;
+	}
+	.identity-meta {
+		display: flex !important;
+		align-items: center;
+		gap: 7px;
+	}
+	.identity-meta small {
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.identity-meta em {
+		min-width: 0;
+		overflow: hidden;
+		padding: 2px 6px;
+		border-radius: 999px;
+		background: var(--wa-primary-soft);
+		color: var(--wa-primary);
+		font-size: 9px;
+		font-style: normal;
+		font-weight: 750;
+		text-overflow: ellipsis;
 	}
 	.chat-heading-actions {
 		display: flex;

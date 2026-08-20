@@ -36,7 +36,7 @@ export function templateParameterDescriptors(template) {
 					componentIndex,
 					kind: 'media',
 					parameterType: format.toLowerCase(),
-					label: `${format[0]}${format.slice(1).toLowerCase()} link or media ID`,
+					label: `${format[0]}${format.slice(1).toLowerCase()} file`,
 					example: '',
 				})
 				continue

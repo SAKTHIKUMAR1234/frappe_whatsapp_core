@@ -1,17 +1,51 @@
 <script setup>
+	import { computed, ref } from 'vue'
 	import Select from 'primevue/select'
 	import Tag from 'primevue/tag'
-	import { Bot, RefreshCw, UserRoundCheck } from 'lucide-vue-next'
+	import { Bot, ImagePlus, RefreshCw, UsersRound, UserRoundCheck } from 'lucide-vue-next'
 	import Button from 'primevue/button'
+	import { useToast } from 'primevue/usetoast'
+	import { call, errorMessage, uploadFile } from '@/services/frappe'
 
-	defineProps({
+	const props = defineProps({
 		data: { type: Object, required: true },
 		canManage: { type: Boolean, default: false },
 	})
 
-	defineEmits(['status', 'refresh-summary'])
+	const emit = defineEmits(['status', 'refresh-summary', 'avatar-changed'])
+	const toast = useToast()
+	const avatarUploading = ref(false)
+	const teams = computed(() => {
+		const values = [props.data.assigned_team_details, ...(props.data.contact_teams || [])]
+		return [...new Map(values.filter(Boolean).map((team) => [team.name, team])).values()]
+	})
 
 	const statusOptions = ['Open', 'Pending', 'Resolved']
+
+	async function selectAvatar(event) {
+		const file = event.target.files?.[0]
+		if (!file) return
+		avatarUploading.value = true
+		try {
+			const stored = await uploadFile(file, true)
+			await call('frappe_whatsapp_core.workspace_api.update_contact_avatar', {
+				identity: props.data.identity?.name,
+				avatar: stored.file_url,
+			})
+			emit('avatar-changed')
+			toast.add({ severity: 'success', summary: 'Contact image updated', life: 2500 })
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Image update failed',
+				detail: errorMessage(error),
+				life: 4500,
+			})
+		} finally {
+			avatarUploading.value = false
+			event.target.value = ''
+		}
+	}
 </script>
 
 <template>
@@ -19,7 +53,16 @@
 		<section>
 			<div class="eyebrow">Conversation</div>
 			<div class="identity">
-				<span>{{ (data.display_name || 'WA').slice(0, 2).toUpperCase() }}</span>
+				<span>
+					<img
+						v-if="data.contact_presentation?.avatar"
+						:src="data.contact_presentation.avatar"
+						alt="Contact image"
+					/>
+					<template v-else>{{
+						(data.display_name || 'WA').slice(0, 2).toUpperCase()
+					}}</template>
+				</span>
 				<div>
 					<strong>{{ data.display_name }}</strong>
 					<small v-if="data.contact_presentation?.secondary_text">
@@ -27,6 +70,19 @@
 					</small>
 				</div>
 			</div>
+			<label v-if="canManage" for="contact-avatar" class="avatar-upload">
+				<ImagePlus :size="14" />
+				{{ avatarUploading ? 'Uploading…' : 'Upload contact image' }}
+			</label>
+			<input
+				v-if="canManage"
+				id="contact-avatar"
+				class="avatar-input"
+				type="file"
+				accept="image/png,image/jpeg,image/webp,image/gif"
+				:disabled="avatarUploading"
+				@change="selectAvatar"
+			/>
 			<Select
 				v-if="canManage"
 				:model-value="data.conversation?.status"
@@ -38,7 +94,19 @@
 		</section>
 
 		<section>
-			<header><UserRoundCheck :size="15" /> Team visibility</header>
+			<header><UsersRound :size="15" /> Teams</header>
+			<div class="team-list">
+				<span v-for="team in teams" :key="team.name" class="team-tag">
+					<img v-if="team.avatar_url" :src="team.avatar_url" alt="" />
+					<UsersRound v-else :size="13" />
+					{{ team.team_name }}
+				</span>
+				<span v-if="!teams.length" class="empty-copy">Unassigned contact</span>
+			</div>
+		</section>
+
+		<section>
+			<header><UserRoundCheck :size="15" /> Read by</header>
 			<div class="reader-list">
 				<Tag
 					v-for="reader in data.readers"
@@ -133,6 +201,29 @@
 		font-size: 12px;
 		font-weight: 800;
 	}
+	.identity > span img {
+		width: 100%;
+		height: 100%;
+		border-radius: inherit;
+		object-fit: cover;
+	}
+	.avatar-upload {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		margin: -3px 0 12px;
+		color: var(--wa-primary);
+		font-size: 11px;
+		font-weight: 750;
+		cursor: pointer;
+	}
+	.avatar-input {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		opacity: 0;
+		pointer-events: none;
+	}
 	.identity strong,
 	.identity small {
 		display: block;
@@ -161,6 +252,29 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 6px;
+	}
+	.team-list {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+	.team-tag {
+		max-width: 100%;
+		padding: 5px 8px;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		border-radius: 999px;
+		background: var(--wa-primary-soft);
+		color: var(--wa-primary);
+		font-size: 11px;
+		font-weight: 700;
+	}
+	.team-tag img {
+		width: 18px;
+		height: 18px;
+		border-radius: 50%;
+		object-fit: cover;
 	}
 	.ai-note {
 		background: var(--wa-primary-soft);

@@ -119,21 +119,35 @@
 				unstyled
 				@click="emit('select', item.row.name)"
 			>
-				<span class="avatar">{{
-					(item.row.display_name || 'WA').slice(0, 2).toUpperCase()
-				}}</span>
+				<span class="avatar">
+					<img
+						v-if="item.row.contact_presentation?.avatar"
+						:src="item.row.contact_presentation.avatar"
+						:alt="`${item.row.display_name} image`"
+					/>
+					<template v-else>{{
+						(item.row.display_name || 'WA').slice(0, 2).toUpperCase()
+					}}</template>
+				</span>
 				<span class="conversation-copy">
 					<span class="row-heading">
 						<span class="name-line">
 							<strong :title="item.row.display_name">{{
 								item.row.display_name
 							}}</strong>
-							<component
-								:is="teamIcon(visibleTeam(item.row).icon)"
-								v-if="visibleTeam(item.row)"
-								:size="13"
-								:title="visibleTeam(item.row).team_name"
-							/>
+							<span v-if="visibleTeam(item.row)" class="team-chip">
+								<img
+									v-if="visibleTeam(item.row).avatar_url"
+									:src="visibleTeam(item.row).avatar_url"
+									alt=""
+								/>
+								<component
+									v-else
+									:is="teamIcon(visibleTeam(item.row).icon)"
+									:size="12"
+								/>
+								<small>{{ visibleTeam(item.row).team_name }}</small>
+							</span>
 						</span>
 						<time :datetime="item.row.last_message_at || undefined">{{
 							formatConversationTime(item.row.last_message_at)
@@ -239,6 +253,12 @@
 			background-color 140ms ease,
 			color 140ms ease;
 	}
+	.avatar img {
+		width: 100%;
+		height: 100%;
+		border-radius: inherit;
+		object-fit: cover;
+	}
 	.conversation-copy,
 	.row-heading,
 	.preview-line {
@@ -271,9 +291,30 @@
 		align-items: center;
 		gap: 5px;
 	}
-	.name-line > svg {
-		flex: 0 0 auto;
-		color: var(--wa-muted);
+	.team-chip {
+		min-width: 0;
+		max-width: 96px;
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		padding: 2px 5px;
+		border-radius: 999px;
+		background: var(--wa-primary-soft);
+		color: var(--wa-primary);
+	}
+	.team-chip img {
+		width: 12px;
+		height: 12px;
+		flex: 0 0 12px;
+		border-radius: 50%;
+		object-fit: cover;
+	}
+	.team-chip small {
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+		font-size: 9px;
+		font-weight: 700;
 	}
 	time {
 		color: var(--wa-muted);

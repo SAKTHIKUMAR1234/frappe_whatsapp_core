@@ -15,6 +15,12 @@ from frappe_whatsapp_core.message_media import (
 	download_message_media,
 	enqueue_message_media_cache,
 	media_descriptor,
+	queue_uncached_recent_media,
+)
+from frappe_whatsapp_core.profile_images import (
+	download_contact_avatar,
+	download_team_avatar,
+	prepare_avatar_file,
 )
 from frappe_whatsapp_core.workspace_api import (
 	_outbound_handler,
@@ -26,8 +32,8 @@ from frappe_whatsapp_core.workspace_api import (
 	refresh_messages,
 	remove_team_member,
 	send_text,
-	team_member_page,
 	team_contact_page,
+	team_member_page,
 	team_workspace,
 	upsert_team,
 )
@@ -172,51 +178,59 @@ class TestWorkspaceAPI(FrappeTestCase):
 	def setUp(self):
 		super().setUp()
 		suffix = frappe.generate_hash(length=8).lower()
-		self.channel = frappe.get_doc({
-			"doctype": "WhatsApp Core Channel",
-			"channel_key": f"meta:workspace-{suffix}",
-			"display_name": "Workspace Test",
-			"provider": "meta",
-			"phone_number_id": f"workspace-{suffix}",
-			"enabled": 1,
-		}).insert(ignore_permissions=True)
-		self.identity = frappe.get_doc({
-			"doctype": "WhatsApp Core Identity",
-			"identity_key": f"workspace-identity-{suffix}",
-			"identity_type": "WhatsApp",
-			"normalized_value": f"9198{suffix}",
-			"display_value": f"Workspace User {suffix}",
-			"provider": "meta",
-			"status": "Active",
-			"attributes": json.dumps({"source": "test"}),
-		}).insert(ignore_permissions=True)
+		self.channel = frappe.get_doc(
+			{
+				"doctype": "WhatsApp Core Channel",
+				"channel_key": f"meta:workspace-{suffix}",
+				"display_name": "Workspace Test",
+				"provider": "meta",
+				"phone_number_id": f"workspace-{suffix}",
+				"enabled": 1,
+			}
+		).insert(ignore_permissions=True)
+		self.identity = frappe.get_doc(
+			{
+				"doctype": "WhatsApp Core Identity",
+				"identity_key": f"workspace-identity-{suffix}",
+				"identity_type": "WhatsApp",
+				"normalized_value": f"9198{suffix}",
+				"display_value": f"Workspace User {suffix}",
+				"provider": "meta",
+				"status": "Active",
+				"attributes": json.dumps({"source": "test"}),
+			}
+		).insert(ignore_permissions=True)
 		now = now_datetime()
-		self.conversation = frappe.get_doc({
-			"doctype": "WhatsApp Core Conversation",
-			"conversation_key": f"{self.channel.name}:{self.identity.name}",
-			"channel": self.channel.name,
-			"remote_identity": self.identity.name,
-			"status": "Open",
-			"last_inbound_at": now,
-			"last_message_at": now,
-		}).insert(ignore_permissions=True)
+		self.conversation = frappe.get_doc(
+			{
+				"doctype": "WhatsApp Core Conversation",
+				"conversation_key": f"{self.channel.name}:{self.identity.name}",
+				"channel": self.channel.name,
+				"remote_identity": self.identity.name,
+				"status": "Open",
+				"last_inbound_at": now,
+				"last_message_at": now,
+			}
+		).insert(ignore_permissions=True)
 		self.messages = []
 		for index in range(2):
 			timestamp = now
 			self.messages.append(
-				frappe.get_doc({
-					"doctype": "WhatsApp Core Message",
-					"message_key": f"workspace-message-{suffix}-{index}",
-					"conversation": self.conversation.name,
-					"channel": self.channel.name,
-					"provider_message_id": f"wamid.workspace.{suffix}.{index}",
-					"direction": "Inbound",
-					"message_type": "text",
-					"body": f"Message {index}",
-					"content": json.dumps({"text": {"body": f"Message {index}"}}),
-					"provider_timestamp": timestamp,
-					"delivery_status": "Received",
-				}).insert(ignore_permissions=True)
+				frappe.get_doc(
+					{
+						"doctype": "WhatsApp Core Message",
+						"message_key": f"workspace-message-{suffix}-{index}",
+						"conversation": self.conversation.name,
+						"channel": self.channel.name,
+						"provider_message_id": f"wamid.workspace.{suffix}.{index}",
+						"direction": "Inbound",
+						"message_type": "text",
+						"body": f"Message {index}",
+						"content": json.dumps({"text": {"body": f"Message {index}"}}),
+						"provider_timestamp": timestamp,
+						"delivery_status": "Received",
+					}
+				).insert(ignore_permissions=True)
 			)
 		self.conversation.last_message_at = self.messages[-1].provider_timestamp
 		self.conversation.save(ignore_permissions=True)
@@ -236,9 +250,7 @@ class TestWorkspaceAPI(FrappeTestCase):
 		chronological = sorted(self.messages, key=lambda message: message.name)
 		oldest_message, newest_message = chronological
 		result = list_conversations(search=self.identity.display_value, limit=10)
-		self.assertTrue(
-			any(row.name == self.conversation.name for row in result["rows"])
-		)
+		self.assertTrue(any(row.name == self.conversation.name for row in result["rows"]))
 		detail = get_conversation(self.conversation.name)
 		self.assertEqual(detail["identity"]["name"], self.identity.name)
 
@@ -268,24 +280,26 @@ class TestWorkspaceAPI(FrappeTestCase):
 		from frappe_whatsapp_core.inbox import conversation, conversation_page
 
 		started_at = frappe.utils.add_to_date(now_datetime(), seconds=10)
-		call = frappe.get_doc({
-			"doctype": "WhatsApp Core Call",
-			"call_id": f"workspace-call-{frappe.generate_hash(length=8).lower()}",
-			"channel": self.channel.name,
-			"conversation": self.conversation.name,
-			"remote_identity": self.identity.name,
-			"direction": "Inbound",
-			"status": "terminated",
-			"remote_number": self.identity.normalized_value,
-			"started_at": started_at,
-			"ended_at": frappe.utils.add_to_date(started_at, seconds=42),
-			"recording_media_id": "MEDIA-WORKSPACE-CALL",
-			"recording_url": "/private/files/workspace-call.ogg",
-			"recording_mime_type": "audio/ogg",
-			"mixed_recording_url": "/private/files/workspace-call-mixed.webm",
-			"mixed_recording_mime_type": "audio/webm",
-			"last_event": {"event": "call_recording_available"},
-		}).insert(ignore_permissions=True)
+		call = frappe.get_doc(
+			{
+				"doctype": "WhatsApp Core Call",
+				"call_id": f"workspace-call-{frappe.generate_hash(length=8).lower()}",
+				"channel": self.channel.name,
+				"conversation": self.conversation.name,
+				"remote_identity": self.identity.name,
+				"direction": "Inbound",
+				"status": "terminated",
+				"remote_number": self.identity.normalized_value,
+				"started_at": started_at,
+				"ended_at": frappe.utils.add_to_date(started_at, seconds=42),
+				"recording_media_id": "MEDIA-WORKSPACE-CALL",
+				"recording_url": "/private/files/workspace-call.ogg",
+				"recording_mime_type": "audio/ogg",
+				"mixed_recording_url": "/private/files/workspace-call-mixed.webm",
+				"mixed_recording_mime_type": "audio/webm",
+				"last_event": {"event": "call_recording_available"},
+			}
+		).insert(ignore_permissions=True)
 
 		detail = conversation(self.conversation.name)
 		projected = next(row for row in detail["calls"] if row.name == call.name)
@@ -296,9 +310,7 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertEqual(projected.timeline_at, started_at)
 
 		row = next(
-			row
-			for row in conversation_page(limit=100)["rows"]
-			if row["name"] == self.conversation.name
+			row for row in conversation_page(limit=100)["rows"] if row["name"] == self.conversation.name
 		)
 		self.assertEqual(row["latest_message"].message_type, "call")
 		self.assertEqual(row["latest_message"].body, "Incoming call · Completed")
@@ -403,24 +415,28 @@ class TestWorkspaceAPI(FrappeTestCase):
 		)
 
 	def test_inbound_reactions_do_not_inflate_unread_count(self):
-		frappe.get_doc({
-			"doctype": "WhatsApp Core Message",
-			"message_key": f"reaction-{frappe.generate_hash(length=8)}",
-			"conversation": self.conversation.name,
-			"channel": self.channel.name,
-			"provider_message_id": f"wamid.reaction.{frappe.generate_hash(length=8)}",
-			"direction": "Inbound",
-			"message_type": "reaction",
-			"body": "👍",
-			"content": json.dumps({
-				"reaction": {
-					"message_id": self.messages[0].provider_message_id,
-					"emoji": "👍",
-				},
-			}),
-			"provider_timestamp": now_datetime(),
-			"delivery_status": "Received",
-		}).insert(ignore_permissions=True)
+		frappe.get_doc(
+			{
+				"doctype": "WhatsApp Core Message",
+				"message_key": f"reaction-{frappe.generate_hash(length=8)}",
+				"conversation": self.conversation.name,
+				"channel": self.channel.name,
+				"provider_message_id": f"wamid.reaction.{frappe.generate_hash(length=8)}",
+				"direction": "Inbound",
+				"message_type": "reaction",
+				"body": "👍",
+				"content": json.dumps(
+					{
+						"reaction": {
+							"message_id": self.messages[0].provider_message_id,
+							"emoji": "👍",
+						},
+					}
+				),
+				"provider_timestamp": now_datetime(),
+				"delivery_status": "Received",
+			}
+		).insert(ignore_permissions=True)
 
 		conversation_row = next(
 			row
@@ -436,19 +452,21 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertEqual(refreshed["rows"][0].reactions[0]["emoji"], "👍")
 
 	def test_reply_includes_original_message_preview_outside_page(self):
-		reply = frappe.get_doc({
-			"doctype": "WhatsApp Core Message",
-			"message_key": f"workspace-reply-{frappe.generate_hash(length=8)}",
-			"conversation": self.conversation.name,
-			"channel": self.channel.name,
-			"provider_message_id": f"wamid.reply.{frappe.generate_hash(length=8)}",
-			"direction": "Outbound",
-			"message_type": "text",
-			"body": "Reply body",
-			"content": json.dumps({"context_message_id": self.messages[0].provider_message_id}),
-			"provider_timestamp": now_datetime(),
-			"delivery_status": "Sent",
-		}).insert(ignore_permissions=True)
+		reply = frappe.get_doc(
+			{
+				"doctype": "WhatsApp Core Message",
+				"message_key": f"workspace-reply-{frappe.generate_hash(length=8)}",
+				"conversation": self.conversation.name,
+				"channel": self.channel.name,
+				"provider_message_id": f"wamid.reply.{frappe.generate_hash(length=8)}",
+				"direction": "Outbound",
+				"message_type": "text",
+				"body": "Reply body",
+				"content": json.dumps({"context_message_id": self.messages[0].provider_message_id}),
+				"provider_timestamp": now_datetime(),
+				"delivery_status": "Sent",
+			}
+		).insert(ignore_permissions=True)
 
 		page = list_messages(self.conversation.name, limit=1)
 		self.assertEqual(page["rows"][0].name, reply.name)
@@ -457,19 +475,21 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertNotIn("provider_message_id", page["rows"][0].quoted_message)
 
 	def test_inbound_media_is_exposed_through_authenticated_core_url(self):
-		media = frappe.get_doc({
-			"doctype": "WhatsApp Core Message",
-			"message_key": f"workspace-media-{frappe.generate_hash(length=8)}",
-			"conversation": self.conversation.name,
-			"channel": self.channel.name,
-			"provider_message_id": f"wamid.media.{frappe.generate_hash(length=8)}",
-			"direction": "Inbound",
-			"message_type": "image",
-			"body": "Photo",
-			"content": json.dumps({"type": "image", "image": {"id": "MEDIA-1"}}),
-			"provider_timestamp": now_datetime(),
-			"delivery_status": "Received",
-		}).insert(ignore_permissions=True)
+		media = frappe.get_doc(
+			{
+				"doctype": "WhatsApp Core Message",
+				"message_key": f"workspace-media-{frappe.generate_hash(length=8)}",
+				"conversation": self.conversation.name,
+				"channel": self.channel.name,
+				"provider_message_id": f"wamid.media.{frappe.generate_hash(length=8)}",
+				"direction": "Inbound",
+				"message_type": "image",
+				"body": "Photo",
+				"content": json.dumps({"type": "image", "image": {"id": "MEDIA-1"}}),
+				"provider_timestamp": now_datetime(),
+				"delivery_status": "Received",
+			}
+		).insert(ignore_permissions=True)
 
 		page = list_messages(self.conversation.name, limit=20)
 		row = next(item for item in page["rows"] if item.name == media.name)
@@ -480,16 +500,38 @@ class TestWorkspaceAPI(FrappeTestCase):
 		message = {
 			"name": "ARCHIVED-MEDIA",
 			"message_type": "image",
-			"content": json.dumps({
-				"legacy_source": "essdee_partners_api",
-				"payload": {"local_file_url": "/private/files/archive.jpg"},
-			}),
+			"content": json.dumps(
+				{
+					"legacy_source": "essdee_partners_api",
+					"payload": {"local_file_url": "/private/files/archive.jpg"},
+				}
+			),
 		}
 		add_media_url(message)
 		self.assertIn("message_media.download_message_media", message["media_url"])
 		self.assertEqual(
 			media_descriptor(message["message_type"], message["content"])["local_file_url"],
 			"/private/files/archive.jpg",
+		)
+
+	def test_template_header_media_uses_the_authenticated_core_endpoint(self):
+		message = {
+			"name": "TEMPLATE-MEDIA",
+			"message_type": "template",
+			"content": json.dumps(
+				{
+					"template_snapshot": {
+						"header_type": "IMAGE",
+						"header_media": "/private/files/template-header.jpg",
+					},
+				}
+			),
+		}
+		add_media_url(message)
+		self.assertIn("message_media.download_message_media", message["media_url"])
+		self.assertEqual(
+			media_descriptor(message["message_type"], message["content"])["local_file_url"],
+			"/private/files/template-header.jpg",
 		)
 
 	@patch("frappe_whatsapp_core.message_media.frappe.get_doc")
@@ -502,10 +544,12 @@ class TestWorkspaceAPI(FrappeTestCase):
 		message = SimpleNamespace(
 			name="ARCHIVED-MEDIA",
 			message_type="image",
-			content=json.dumps({
-				"legacy_source": "essdee_partners_api",
-				"payload": {"local_file_url": "/private/files/archive.jpg"},
-			}),
+			content=json.dumps(
+				{
+					"legacy_source": "essdee_partners_api",
+					"payload": {"local_file_url": "/private/files/archive.jpg"},
+				}
+			),
 		)
 		file_doc = SimpleNamespace(name="FILE-ARCHIVE")
 		get_doc.side_effect = lambda doctype, name: (
@@ -529,22 +573,26 @@ class TestWorkspaceAPI(FrappeTestCase):
 	def test_message_media_download_uses_channel_mapping_and_private_cache(
 		self, get_settings, download_media, save_file
 	):
-		media = frappe.get_doc({
-			"doctype": "WhatsApp Core Message",
-			"message_key": f"workspace-download-{frappe.generate_hash(length=8)}",
-			"conversation": self.conversation.name,
-			"channel": self.channel.name,
-			"provider_message_id": f"wamid.download.{frappe.generate_hash(length=8)}",
-			"direction": "Inbound",
-			"message_type": "document",
-			"body": "Invoice",
-			"content": json.dumps({
-				"type": "document",
-				"document": {"id": "MEDIA-DOC", "filename": "invoice.pdf"},
-			}),
-			"provider_timestamp": now_datetime(),
-			"delivery_status": "Received",
-		}).insert(ignore_permissions=True)
+		media = frappe.get_doc(
+			{
+				"doctype": "WhatsApp Core Message",
+				"message_key": f"workspace-download-{frappe.generate_hash(length=8)}",
+				"conversation": self.conversation.name,
+				"channel": self.channel.name,
+				"provider_message_id": f"wamid.download.{frappe.generate_hash(length=8)}",
+				"direction": "Inbound",
+				"message_type": "document",
+				"body": "Invoice",
+				"content": json.dumps(
+					{
+						"type": "document",
+						"document": {"id": "MEDIA-DOC", "filename": "invoice.pdf"},
+					}
+				),
+				"provider_timestamp": now_datetime(),
+				"delivery_status": "Received",
+			}
+		).insert(ignore_permissions=True)
 		settings = SimpleNamespace(get_account_name=lambda channel: "ACCOUNT-1")
 		get_settings.return_value = settings
 		download_media.return_value = {
@@ -569,19 +617,21 @@ class TestWorkspaceAPI(FrappeTestCase):
 
 	@patch("frappe_whatsapp_core.message_media._cached_file")
 	def test_image_media_can_be_forced_to_download(self, cached_file):
-		media = frappe.get_doc({
-			"doctype": "WhatsApp Core Message",
-			"message_key": f"workspace-image-download-{frappe.generate_hash(length=8)}",
-			"conversation": self.conversation.name,
-			"channel": self.channel.name,
-			"provider_message_id": f"wamid.image.{frappe.generate_hash(length=8)}",
-			"direction": "Inbound",
-			"message_type": "image",
-			"body": "Photo",
-			"content": json.dumps({"image": {"id": "MEDIA-IMAGE"}}),
-			"provider_timestamp": now_datetime(),
-			"delivery_status": "Received",
-		}).insert(ignore_permissions=True)
+		media = frappe.get_doc(
+			{
+				"doctype": "WhatsApp Core Message",
+				"message_key": f"workspace-image-download-{frappe.generate_hash(length=8)}",
+				"conversation": self.conversation.name,
+				"channel": self.channel.name,
+				"provider_message_id": f"wamid.image.{frappe.generate_hash(length=8)}",
+				"direction": "Inbound",
+				"message_type": "image",
+				"body": "Photo",
+				"content": json.dumps({"image": {"id": "MEDIA-IMAGE"}}),
+				"provider_timestamp": now_datetime(),
+				"delivery_status": "Received",
+			}
+		).insert(ignore_permissions=True)
 		cached_file.return_value = SimpleNamespace(
 			file_name="photo.png",
 			content_type="image/png",
@@ -616,6 +666,119 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertEqual(result["failed"], ["MESSAGE-2"])
 		log_error.assert_called_once()
 
+	@patch("frappe_whatsapp_core.message_media.enqueue_message_media_cache")
+	@patch("frappe_whatsapp_core.message_media.frappe.db.sql")
+	def test_recent_media_retry_ignores_already_retained_legacy_files(self, query, enqueue):
+		query.return_value = [
+			frappe._dict(
+				{
+					"name": "MESSAGE-ARCHIVED",
+					"message_type": "image",
+					"content": json.dumps(
+						{
+							"legacy_source": "essdee_partners_api",
+							"payload": {"local_file_url": "/private/files/archive.jpg"},
+							"_media_cache": {"status": "stored", "file": "FILE-ARCHIVED"},
+						}
+					),
+				}
+			),
+		]
+
+		result = queue_uncached_recent_media()
+
+		self.assertEqual(result, {"queued": 0, "scanned": 1})
+		enqueue.assert_not_called()
+
+	@patch("frappe_whatsapp_core.message_media.enqueue_message_media_cache")
+	@patch("frappe_whatsapp_core.message_media.frappe.db.sql")
+	def test_recent_media_retry_pages_past_exhausted_newer_items(self, query, enqueue):
+		exhausted = [
+			frappe._dict(
+				{
+					"name": f"MESSAGE-EXHAUSTED-{index}",
+					"message_type": "image",
+					"content": json.dumps(
+						{
+							"image": {"id": f"EXPIRED-{index}"},
+							"_media_cache": {"status": "retry_pending", "attempts": 5},
+						}
+					),
+				}
+			)
+			for index in range(100)
+		]
+		eligible = frappe._dict(
+			{
+				"name": "MESSAGE-RECOVERABLE",
+				"message_type": "image",
+				"content": json.dumps({"image": {"id": "MEDIA-RECOVERABLE"}}),
+			}
+		)
+		query.side_effect = [exhausted, [eligible]]
+
+		result = queue_uncached_recent_media(limit=1)
+
+		self.assertEqual(result, {"queued": 1, "scanned": 101})
+		self.assertEqual(query.call_count, 2)
+		self.assertEqual(query.call_args_list[1].args[1]["offset"], 100)
+		enqueue.assert_called_once_with(["MESSAGE-RECOVERABLE"], enqueue_after_commit=False)
+
+	def test_avatar_upload_rejects_external_file_urls(self):
+		with self.assertRaises(frappe.ValidationError):
+			prepare_avatar_file("https://example.test/avatar.png")
+
+	@patch("frappe_whatsapp_core.profile_images._stream_avatar")
+	@patch("frappe_whatsapp_core.profile_images.assert_conversation_access")
+	def test_contact_avatar_download_enforces_conversation_scope(self, assert_scope, stream_avatar):
+		frappe.db.set_value(
+			"WhatsApp Core Identity",
+			self.identity.name,
+			"avatar",
+			"/private/files/contact-avatar.png",
+			update_modified=False,
+		)
+		stream_avatar.return_value = "streamed"
+
+		result = download_contact_avatar(self.conversation.name)
+
+		self.assertEqual(result, "streamed")
+		assert_scope.assert_called_once_with(self.conversation.name)
+		stream_avatar.assert_called_once_with(
+			"/private/files/contact-avatar.png",
+			"WhatsApp Core Identity",
+			self.identity.name,
+		)
+
+	@patch("frappe_whatsapp_core.profile_images._stream_avatar")
+	@patch("frappe_whatsapp_core.profile_images.frappe.has_permission")
+	def test_team_avatar_download_enforces_doctype_permission(self, has_permission, stream_avatar):
+		team = upsert_team(
+			team_name=f"Avatar Team {frappe.generate_hash(length=6)}",
+			members=[{"user": "Administrator", "team_role": "Manager"}],
+		)
+		frappe.db.set_value(
+			"WhatsApp Core Team",
+			team["name"],
+			"avatar",
+			"/private/files/team-avatar.png",
+			update_modified=False,
+		)
+		stream_avatar.return_value = "streamed"
+
+		result = download_team_avatar(team["name"])
+
+		self.assertEqual(result, "streamed")
+		has_permission.assert_called_once()
+		self.assertEqual(has_permission.call_args.args[:2], ("WhatsApp Core Team", "read"))
+		self.assertEqual(has_permission.call_args.kwargs["doc"].name, team["name"])
+		self.assertTrue(has_permission.call_args.kwargs["throw"])
+		stream_avatar.assert_called_once_with(
+			"/private/files/team-avatar.png",
+			"WhatsApp Core Team",
+			team["name"],
+		)
+
 	@patch("frappe_whatsapp_core.outbound._queue_message")
 	@patch("frappe_whatsapp_core.outbound._local_media_file")
 	def test_outbound_media_file_is_attached_to_optimistic_message(self, local_file, queue):
@@ -639,18 +802,64 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertEqual(file_doc.attached_to_name, "MESSAGE-OUT")
 		file_doc.save.assert_called_once_with(ignore_permissions=True)
 
+	@patch("frappe_whatsapp_core.outbound._queue_message")
+	@patch("frappe_whatsapp_core.outbound._local_media_file")
+	def test_template_media_file_is_attached_to_optimistic_message(self, local_file, queue):
+		from frappe_whatsapp_core.outbound import queue_template_internal
+
+		file_doc = MagicMock()
+		file_doc.file_url = "/private/files/header.jpg"
+		local_file.return_value = file_doc
+		queue.return_value = SimpleNamespace(name="MESSAGE-TEMPLATE")
+		template = SimpleNamespace(
+			name="APPROVED-TEMPLATE",
+			channel=self.channel.name,
+			template_name="photo_update",
+			language_code="en",
+			category="UTILITY",
+			parameter_format="POSITIONAL",
+			header_type="IMAGE",
+			header_content="",
+			body_text="Photo update",
+			footer_text="",
+			components=json.dumps([{"type": "HEADER", "format": "IMAGE"}]),
+		)
+		components = [
+			{
+				"type": "header",
+				"parameters": [{"type": "image", "image": {"id": "META-MEDIA-1"}}],
+			}
+		]
+
+		message = queue_template_internal(
+			self.conversation.name,
+			template.name,
+			components=components,
+			local_file_url=file_doc.file_url,
+			_template_doc=template,
+		)
+
+		self.assertEqual(message.name, "MESSAGE-TEMPLATE")
+		content = queue.call_args.args[3]
+		self.assertEqual(content["template_snapshot"]["header_media"], file_doc.file_url)
+		self.assertEqual(file_doc.attached_to_doctype, "WhatsApp Core Message")
+		self.assertEqual(file_doc.attached_to_name, "MESSAGE-TEMPLATE")
+		file_doc.save.assert_called_once_with(ignore_permissions=True)
+
 	def test_local_media_reference_is_never_sent_to_meta(self):
 		from frappe_whatsapp_core.outbound import _message_payload
 
 		message = SimpleNamespace(
 			message_type="image",
 			body="Proof",
-			content=json.dumps({
-				"payload": {
-					"id": "META-MEDIA-1",
-					"local_file_url": "/private/files/proof.jpg",
+			content=json.dumps(
+				{
+					"payload": {
+						"id": "META-MEDIA-1",
+						"local_file_url": "/private/files/proof.jpg",
+					}
 				}
-			}),
+			),
 		)
 		payload = _message_payload(message, "919999999999")
 		self.assertEqual(payload["image"], {"id": "META-MEDIA-1"})
@@ -681,9 +890,7 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertEqual(contact["phone_number"], "")
 		self.assertNotEqual(contact["phone_number"], self.identity.normalized_value)
 
-		with patch(
-			"frappe_whatsapp_core.workspace_api._outbound_handler"
-		) as outbound_handler:
+		with patch("frappe_whatsapp_core.workspace_api._outbound_handler") as outbound_handler:
 			sender = outbound_handler.return_value
 			sender.return_value = {"name": "queued-message"}
 			result = send_text(self.conversation.name, "Hello")
@@ -776,39 +983,41 @@ class TestWorkspaceAPI(FrappeTestCase):
 		all_names = [tool["name"] for tool in TOOL_DEFINITIONS]
 		names = set(all_names)
 		self.assertEqual(len(all_names), len(names))
-		self.assertTrue({
-			"whatsapp.list_conversations",
-			"whatsapp.list_messages",
-			"whatsapp.send_text",
-			"whatsapp.send_rich_message",
-			"whatsapp.send_template",
-			"whatsapp.mark_conversation_read",
-			"whatsapp.show_typing",
-			"whatsapp.toggle_message_bookmark",
-			"whatsapp.list_teams",
-			"whatsapp.upsert_team",
-			"whatsapp.list_campaigns",
-			"whatsapp.prepare_campaign",
-			"whatsapp.authorize_campaign",
-			"whatsapp.revoke_campaign_authorization",
-			"whatsapp.schedule_campaign",
-			"whatsapp.cancel_campaign",
-			"whatsapp.list_flows",
-			"whatsapp.update_flow",
-			"whatsapp.deprecate_flow",
-			"whatsapp.delete_flow",
-			"whatsapp.migrate_flows",
-			"whatsapp.get_flow_public_key",
-			"whatsapp.set_flow_public_key",
-			"whatsapp.create_group",
-			"whatsapp.update_group",
-			"whatsapp.update_group_picture",
-			"whatsapp.delete_group",
-			"whatsapp.list_group_join_requests",
-			"whatsapp.decide_group_join_requests",
-			"whatsapp.remove_group_participants",
-			"whatsapp.pin_group_message",
-			"whatsapp.get_call_settings",
-			"whatsapp.update_call_settings",
-			"whatsapp.call_action",
-		}.issubset(names))
+		self.assertTrue(
+			{
+				"whatsapp.list_conversations",
+				"whatsapp.list_messages",
+				"whatsapp.send_text",
+				"whatsapp.send_rich_message",
+				"whatsapp.send_template",
+				"whatsapp.mark_conversation_read",
+				"whatsapp.show_typing",
+				"whatsapp.toggle_message_bookmark",
+				"whatsapp.list_teams",
+				"whatsapp.upsert_team",
+				"whatsapp.list_campaigns",
+				"whatsapp.prepare_campaign",
+				"whatsapp.authorize_campaign",
+				"whatsapp.revoke_campaign_authorization",
+				"whatsapp.schedule_campaign",
+				"whatsapp.cancel_campaign",
+				"whatsapp.list_flows",
+				"whatsapp.update_flow",
+				"whatsapp.deprecate_flow",
+				"whatsapp.delete_flow",
+				"whatsapp.migrate_flows",
+				"whatsapp.get_flow_public_key",
+				"whatsapp.set_flow_public_key",
+				"whatsapp.create_group",
+				"whatsapp.update_group",
+				"whatsapp.update_group_picture",
+				"whatsapp.delete_group",
+				"whatsapp.list_group_join_requests",
+				"whatsapp.decide_group_join_requests",
+				"whatsapp.remove_group_participants",
+				"whatsapp.pin_group_message",
+				"whatsapp.get_call_settings",
+				"whatsapp.update_call_settings",
+				"whatsapp.call_action",
+			}.issubset(names)
+		)

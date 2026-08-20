@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 import frappe
 
+from frappe_whatsapp_core.identity import normalize_phone
 from frappe_whatsapp_core.materializer import (
 	get_or_create_conversation,
 	get_or_create_identity,
@@ -23,7 +24,6 @@ from frappe_whatsapp_core.outbound import (
 	queue_text_internal,
 	upload_media_internal,
 )
-from frappe_whatsapp_core.identity import normalize_phone
 
 
 def resolve_channel(
@@ -165,11 +165,10 @@ def queue_template_by_phone(
 		components,
 		source,
 		client_message_id=client_message_id,
+		local_file_url=local_file_url,
 		enqueue_delivery=enqueue_delivery,
 		recipient_override=phone_number,
 	)
-	if local_file_url:
-		_preserve_local_template_file(message, local_file_url)
 	return message
 
 
@@ -292,10 +291,12 @@ def legacy_template_components(variables) -> list[dict]:
 		if not isinstance(values, list):
 			values = [values]
 		if values:
-			components.append({
-				"type": component_type,
-				"parameters": [_template_parameter(value) for value in values],
-			})
+			components.append(
+				{
+					"type": component_type,
+					"parameters": [_template_parameter(value) for value in values],
+				}
+			)
 	return components
 
 
@@ -307,8 +308,7 @@ def _template_parameter(value) -> dict:
 
 def _replace_component(components: list[dict], component_type: str, parameter: dict) -> None:
 	components[:] = [
-		component for component in components
-		if str(component.get("type") or "").lower() != component_type
+		component for component in components if str(component.get("type") or "").lower() != component_type
 	]
 	components.insert(0, {"type": component_type, "parameters": [parameter]})
 
@@ -326,35 +326,6 @@ def _local_file_url(value: str | None) -> str | None:
 	if not value:
 		return None
 	path = urlsplit(str(value)).path or str(value)
-	if path.startswith(("/private/files/", "/files/")) and frappe.db.exists(
-		"File", {"file_url": path}
-	):
+	if path.startswith(("/private/files/", "/files/")) and frappe.db.exists("File", {"file_url": path}):
 		return path
 	return None
-
-
-def _preserve_local_template_file(message: dict, file_url: str) -> None:
-	content = frappe.parse_json(message.get("content") or "{}")
-	snapshot = content.setdefault("template_snapshot", {})
-	snapshot["header_media"] = file_url
-	serialized = json.dumps(content, separators=(",", ":"), ensure_ascii=False)
-	frappe.db.set_value(
-		"WhatsApp Core Message",
-		message["name"],
-		"content",
-		serialized,
-		update_modified=False,
-	)
-	message["content"] = serialized
-	file_name = frappe.db.get_value("File", {"file_url": file_url}, "name")
-	if file_name:
-		frappe.db.set_value(
-			"File",
-			file_name,
-			{
-				"attached_to_doctype": "WhatsApp Core Message",
-				"attached_to_name": message["name"],
-				"attached_to_field": None,
-			},
-			update_modified=False,
-		)

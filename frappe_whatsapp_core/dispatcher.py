@@ -7,8 +7,8 @@ import frappe
 from frappe.utils import add_to_date, now, now_datetime
 
 from frappe_whatsapp_core.materializer import materialize_event
-from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.message_media import enqueue_message_media_cache
+from frappe_whatsapp_core.naming import name_by_key
 from frappe_whatsapp_core.realtime import (
 	publish_batch_notice,
 	publish_call_changes,
@@ -205,11 +205,11 @@ def _wake_waiting_status_events(provider_ids):
 
 
 def _normalized_provider_ids(provider_ids):
-	return list(dict.fromkeys(
-		str(provider_id).strip()
-		for provider_id in provider_ids or []
-		if str(provider_id or "").strip()
-	))
+	return list(
+		dict.fromkeys(
+			str(provider_id).strip() for provider_id in provider_ids or [] if str(provider_id or "").strip()
+		)
+	)
 
 
 def replay_orphaned_status_events(limit=5000, since=None, start=0):
@@ -311,10 +311,12 @@ def _process_generic_event_batch(event_ids):
 	try:
 		for event_id in event_ids:
 			try:
-				results.append({
-					"event_id": event_id,
-					**process_event(event_id, projection_cache=projection_cache),
-				})
+				results.append(
+					{
+						"event_id": event_id,
+						**process_event(event_id, projection_cache=projection_cache),
+					}
+				)
 			except frappe.QueryDeadlockError:
 				# A deadlock invalidates every earlier savepoint/write in this
 				# transaction, so the complete committed batch must be replayed.
@@ -329,14 +331,16 @@ def _process_generic_event_batch(event_ids):
 		from frappe_whatsapp_core.campaigns import refresh_campaigns_for_messages
 
 		refresh_campaigns_for_messages(message_names)
-	created_message_names = list(dict.fromkeys(
-		projection["name"]
-		for result in results
-		for projection in result.get("projections") or []
-		if projection.get("kind") == "message"
-		and projection.get("status") == "created"
-		and projection.get("name")
-	))
+	created_message_names = list(
+		dict.fromkeys(
+			projection["name"]
+			for result in results
+			for projection in result.get("projections") or []
+			if projection.get("kind") == "message"
+			and projection.get("status") == "created"
+			and projection.get("name")
+		)
+	)
 	if created_message_names:
 		# Classification/summarization is intentionally off the webhook
 		# transaction. One deduplicated long-queue job is scheduled per affected
@@ -418,18 +422,22 @@ def _process_status_event_batch(event_ids):
 				)
 				if _has_orphan_status(projections):
 					deferred.append(event_id)
-					results.append({
-						"event_id": event_id,
-						"status": "deferred",
-						"projections": projections,
-					})
+					results.append(
+						{
+							"event_id": event_id,
+							"status": "deferred",
+							"projections": projections,
+						}
+					)
 					continue
 				completed.append(event_id)
-				results.append({
-					"event_id": event_id,
-					"status": "completed",
-					"projections": projections,
-				})
+				results.append(
+					{
+						"event_id": event_id,
+						"status": "completed",
+						"projections": projections,
+					}
+				)
 			except (frappe.QueryDeadlockError, frappe.TimestampMismatchError):
 				# A deadlock invalidates every savepoint in the transaction. A stale
 				# identity Document also needs a fresh committed snapshot. Let the
@@ -470,9 +478,7 @@ def _process_status_event_batch(event_ids):
 			{"event_ids": deferred, "max_attempts": MAX_ATTEMPTS},
 		)
 		retry_ids = [
-			event_id
-			for event_id in deferred
-			if int(by_name[event_id].attempts or 0) + 1 < MAX_ATTEMPTS
+			event_id for event_id in deferred if int(by_name[event_id].attempts or 0) + 1 < MAX_ATTEMPTS
 		]
 		if retry_ids:
 			attempt = max(int(by_name[event_id].attempts or 0) + 1 for event_id in retry_ids)
@@ -531,12 +537,14 @@ def _lock_status_projection_rows(events):
 	provider_ids = list(dict.fromkeys(provider_ids))
 	if not provider_ids:
 		return []
-	message_names = sorted(frappe.get_all(
-		"WhatsApp Core Message",
-		filters={"provider_message_id": ["in", provider_ids]},
-		pluck="name",
-		limit_page_length=len(provider_ids),
-	))
+	message_names = sorted(
+		frappe.get_all(
+			"WhatsApp Core Message",
+			filters={"provider_message_id": ["in", provider_ids]},
+			pluck="name",
+			limit_page_length=len(provider_ids),
+		)
+	)
 	if message_names:
 		frappe.db.sql(
 			"""
@@ -582,28 +590,26 @@ def process_event(event_id, projection_cache=None):
 			if event.status == "Pending":
 				enqueue_orphan_status_retry([event.name], attempt=event.attempts)
 			return {"status": "deferred", "projections": projections, "results": []}
-		created_messages = [
+		projected_messages = [
 			projection["name"]
 			for projection in projections
-			if projection.get("kind") == "message"
-			and projection.get("status") == "created"
-			and projection.get("name")
+			if projection.get("kind") == "message" and projection.get("name")
 		]
-		new_media_messages = (
+		media_messages = (
 			frappe.get_all(
 				"WhatsApp Core Message",
 				filters={
-					"name": ["in", created_messages],
-					"message_type": ["in", ["audio", "document", "image", "sticker", "video"]],
+					"name": ["in", projected_messages],
+					"message_type": ["in", ["audio", "document", "image", "sticker", "template", "video"]],
 				},
 				pluck="name",
-				limit_page_length=len(created_messages),
+				limit_page_length=len(projected_messages),
 			)
-			if created_messages
+			if projected_messages
 			else []
 		)
-		if new_media_messages:
-			enqueue_message_media_cache(new_media_messages, enqueue_after_commit=True)
+		if media_messages:
+			enqueue_message_media_cache(media_messages, enqueue_after_commit=True)
 		handlers = [
 			"frappe_whatsapp_core.core_event_handler.handle_core_event",
 			*(frappe.get_hooks("whatsapp_core_event_handlers") or []),
@@ -616,9 +622,7 @@ def process_event(event_id, projection_cache=None):
 				"WhatsApp Core Handler Run",
 				{"relay_event": event.name, "handler": handler_path, "status": "Completed"},
 				"name",
-			) or name_by_key(
-				"WhatsApp Core Handler Run", run_key, filters={"status": "Completed"}
-			):
+			) or name_by_key("WhatsApp Core Handler Run", run_key, filters={"status": "Completed"}):
 				results.append({"handler": handler_path, "status": "duplicate"})
 				continue
 			run = _start_handler_run(run_key, event.name, handler_path)
@@ -666,11 +670,9 @@ def _publish_batch_refresh(event_ids, results):
 		if isinstance(projection, dict)
 	]
 	publish_message_changes(projections)
-	publish_call_changes([
-		projection.get("name")
-		for projection in projections
-		if projection.get("kind") == "call"
-	])
+	publish_call_changes(
+		[projection.get("name") for projection in projections if projection.get("kind") == "call"]
+	)
 	publish_batch_notice([projection.get("kind") for projection in projections])
 
 
@@ -688,14 +690,16 @@ def _start_handler_run(run_key, event_id, handler_path):
 		run.error = ""
 		run.save(ignore_permissions=True)
 		return run
-	return frappe.get_doc({
-		"doctype": "WhatsApp Core Handler Run",
-		"run_key": run_key,
-		"relay_event": event_id,
-		"handler": handler_path,
-		"status": "Processing",
-		"started_at": now(),
-	}).insert(ignore_permissions=True)
+	return frappe.get_doc(
+		{
+			"doctype": "WhatsApp Core Handler Run",
+			"run_key": run_key,
+			"relay_event": event_id,
+			"handler": handler_path,
+			"status": "Processing",
+			"started_at": now(),
+		}
+	).insert(ignore_permissions=True)
 
 
 def retry_failed_events():

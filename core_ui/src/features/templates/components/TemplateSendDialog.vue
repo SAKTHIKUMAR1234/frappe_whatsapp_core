@@ -3,8 +3,9 @@
 	import Button from 'primevue/button'
 	import AppDialog from '@/components/AppDialog.vue'
 	import InputText from 'primevue/inputtext'
-	import { Send } from 'lucide-vue-next'
+	import { Paperclip, Send } from 'lucide-vue-next'
 	import TemplateSelect from '@/features/templates/components/TemplateSelect.vue'
+	import { call, errorMessage, uploadFile } from '@/services/frappe'
 
 	import {
 		buildTemplateComponents,
@@ -17,11 +18,14 @@
 		templates: { type: Array, default: () => [] },
 		loading: { type: Boolean, default: false },
 		initialTemplate: { type: String, default: '' },
+		conversation: { type: String, default: '' },
 	})
 	const emit = defineEmits(['update:visible', 'send'])
 	const selected = ref('')
 	const values = reactive({})
 	const validationError = ref('')
+	const uploadingKey = ref('')
+	const uploadedMedia = reactive({})
 	const availableTemplates = computed(() =>
 		props.templates.filter(
 			(template) => template.enabled !== 0 && template.approval_status !== 'REJECTED',
@@ -35,6 +39,7 @@
 
 	function resetValues() {
 		for (const key of Object.keys(values)) delete values[key]
+		for (const key of Object.keys(uploadedMedia)) delete uploadedMedia[key]
 		for (const descriptor of descriptors.value)
 			values[descriptor.key] = descriptor.example || ''
 		validationError.value = ''
@@ -50,6 +55,43 @@
 	)
 	watch(selected, resetValues)
 
+	function mediaAccept(type) {
+		return (
+			{
+				document: '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt',
+				image: 'image/*',
+				video: 'video/*',
+			}[type] || '*/*'
+		)
+	}
+
+	async function uploadTemplateMedia(descriptor, event) {
+		const file = event.target.files?.[0]
+		if (!file || !props.conversation) return
+		uploadingKey.value = descriptor.key
+		validationError.value = ''
+		try {
+			const stored = await uploadFile(file, true)
+			const uploaded = await call('frappe_whatsapp_core.outbound.upload_media', {
+				conversation_name: props.conversation,
+				file_url: stored.file_url,
+				media_type: descriptor.parameterType,
+			})
+			values[descriptor.key] = uploaded.media_id
+			uploadedMedia[descriptor.key] = {
+				file_url: uploaded.file_url,
+				filename: uploaded.filename || file.name,
+			}
+		} catch (error) {
+			values[descriptor.key] = ''
+			delete uploadedMedia[descriptor.key]
+			validationError.value = errorMessage(error, 'Unable to upload template media.')
+		} finally {
+			uploadingKey.value = ''
+			event.target.value = ''
+		}
+	}
+
 	function submit() {
 		if (!template.value) return
 		try {
@@ -58,6 +100,8 @@
 				template: template.value.name,
 				language_code: template.value.language_code || 'en',
 				components: buildTemplateComponents(descriptors.value, values),
+				local_file_url:
+					Object.values(uploadedMedia).find((item) => item?.file_url)?.file_url || '',
 			})
 		} catch (error) {
 			validationError.value = error?.message || 'Complete the required template values.'
@@ -78,14 +122,33 @@
 				<span>Template</span>
 				<TemplateSelect v-model="selected" :options="availableTemplates" />
 			</label>
-			<label v-for="descriptor in descriptors" :key="descriptor.key">
+			<div v-for="descriptor in descriptors" :key="descriptor.key" class="parameter-field">
 				<span>{{ descriptor.label }}</span>
+				<div v-if="descriptor.kind === 'media'" class="media-picker">
+					<label :for="`template-media-${descriptor.key}`" class="media-button">
+						<Paperclip :size="16" />
+						{{
+							uploadingKey === descriptor.key
+								? 'Uploading…'
+								: uploadedMedia[descriptor.key]?.filename || 'Choose file'
+						}}
+					</label>
+					<input
+						:id="`template-media-${descriptor.key}`"
+						type="file"
+						:accept="mediaAccept(descriptor.parameterType)"
+						:disabled="uploadingKey !== ''"
+						@change="uploadTemplateMedia(descriptor, $event)"
+					/>
+					<small>Stored privately in Core and uploaded securely to WhatsApp.</small>
+				</div>
 				<InputText
+					v-else
 					v-model="values[descriptor.key]"
 					:placeholder="descriptor.example || descriptor.label"
 					fluid
 				/>
-			</label>
+			</div>
 			<section v-if="template" class="template-preview">
 				<small>{{ template.template_name }} · {{ template.language_code }}</small>
 				<p>{{ preview || 'This template has no body preview.' }}</p>
@@ -94,7 +157,12 @@
 		</div>
 		<template #footer>
 			<Button label="Cancel" text @click="$emit('update:visible', false)" />
-			<Button label="Send template" :loading="loading" :disabled="!selected" @click="submit">
+			<Button
+				label="Send template"
+				:loading="loading"
+				:disabled="!selected || uploadingKey !== ''"
+				@click="submit"
+			>
 				<template #icon><Send :size="16" /></template>
 			</Button>
 		</template>
@@ -103,14 +171,16 @@
 
 <style scoped>
 	.template-form,
-	.template-form label {
+	.template-form label,
+	.parameter-field {
 		display: grid;
 		gap: 8px;
 	}
 	.template-form {
 		gap: 15px;
 	}
-	.template-form label > span {
+	.template-form label > span,
+	.parameter-field > span {
 		font-size: 12px;
 		font-weight: 700;
 	}
@@ -129,6 +199,32 @@
 		margin: 8px 0 0;
 		white-space: pre-wrap;
 		line-height: 1.5;
+	}
+	.media-picker {
+		display: grid;
+		gap: 6px;
+	}
+	.media-picker > input {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		opacity: 0;
+		pointer-events: none;
+	}
+	.media-button {
+		min-height: 42px;
+		padding: 9px 12px;
+		display: flex !important;
+		align-items: center;
+		gap: 8px !important;
+		border: 1px solid var(--wa-border);
+		border-radius: 9px;
+		background: var(--wa-surface);
+		cursor: pointer;
+	}
+	.media-picker small {
+		color: var(--wa-muted);
+		font-size: 11px;
 	}
 	.validation-error {
 		margin: 0;

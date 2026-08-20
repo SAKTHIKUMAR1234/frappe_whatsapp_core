@@ -10,6 +10,7 @@
 	"field_order": [
 		"team_name",
 		"icon",
+		"avatar",
 		"description",
 		"managed_source",
 		"enabled",
@@ -31,6 +32,11 @@
 			"fieldtype": "Icon",
 			"in_list_view": 1,
 			"label": "Icon"
+		},
+		{
+			"fieldname": "avatar",
+			"fieldtype": "Attach Image",
+			"label": "Team Image"
 		},
 		{
 			"fieldname": "description",

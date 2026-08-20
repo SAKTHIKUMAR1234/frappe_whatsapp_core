@@ -11,16 +11,18 @@
 	import {
 		Building2,
 		Headphones,
+		ImagePlus,
 		MessageCircleMore,
 		Plus,
 		Store,
+		Trash2,
 		UsersRound,
 	} from 'lucide-vue-next'
 	import { useToast } from 'primevue/usetoast'
 	import AsyncState from '@/components/AsyncState.vue'
 	import TeamContactTable from '@/features/teams/components/TeamContactTable.vue'
 	import TeamMemberTable from '@/features/teams/components/TeamMemberTable.vue'
-	import { call, errorMessage } from '@/services/frappe'
+	import { call, errorMessage, uploadFile } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
 	import { focusDialogControl } from '@/utils/focus'
@@ -36,9 +38,13 @@
 	const visible = ref(false)
 	const editingTeam = ref('')
 	const dialogRef = ref(null)
+	const avatarUploading = ref(false)
+	const avatarChanged = ref(false)
+	const avatarPreview = ref('')
 	const form = reactive({
 		team_name: '',
 		icon: 'users-round',
+		avatar: '',
 		description: '',
 		enabled: true,
 	})
@@ -81,14 +87,52 @@
 	}
 
 	function open(team = null) {
+		revokeAvatarPreview()
 		editingTeam.value = team?.name || ''
 		form.team_name = team?.team_name || ''
 		form.icon = team?.icon || 'users-round'
+		form.avatar = ''
+		avatarPreview.value = team?.avatar_url || ''
+		avatarChanged.value = false
 		form.description = team?.description || ''
 		form.enabled = team ? Boolean(team.enabled) : true
 		attempted.value = false
 		submitError.value = ''
 		visible.value = true
+	}
+
+	function revokeAvatarPreview() {
+		if (avatarPreview.value?.startsWith('blob:')) URL.revokeObjectURL(avatarPreview.value)
+		avatarPreview.value = ''
+	}
+
+	async function selectAvatar(event) {
+		const file = event.target.files?.[0]
+		if (!file) return
+		avatarUploading.value = true
+		try {
+			const stored = await uploadFile(file, true)
+			revokeAvatarPreview()
+			form.avatar = stored.file_url
+			avatarPreview.value = URL.createObjectURL(file)
+			avatarChanged.value = true
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Image upload failed',
+				detail: errorMessage(error),
+				life: 4500,
+			})
+		} finally {
+			avatarUploading.value = false
+			event.target.value = ''
+		}
+	}
+
+	function removeAvatar() {
+		revokeAvatarPreview()
+		form.avatar = ''
+		avatarChanged.value = true
 	}
 
 	async function save() {
@@ -97,12 +141,14 @@
 		if (!form.team_name.trim()) return
 		saving.value = true
 		try {
-			const saved = await call('frappe_whatsapp_core.workspace_api.upsert_team', {
+			const payload = {
 				team_name: form.team_name,
 				icon: form.icon,
 				description: form.description,
 				enabled: form.enabled ? 1 : 0,
-			})
+			}
+			if (avatarChanged.value) payload.avatar = form.avatar
+			const saved = await call('frappe_whatsapp_core.workspace_api.upsert_team', payload)
 			editingTeam.value = saved.name
 			visible.value = false
 			await load()
@@ -126,6 +172,7 @@
 	})
 	onUnmounted(() => {
 		window.clearTimeout(refreshTimer)
+		revokeAvatarPreview()
 		unsubscribe()
 	})
 </script>
@@ -152,7 +199,14 @@
 	<section v-if="!loading && !loadError && teams.length" class="team-grid">
 		<article v-for="team in teams" :key="team.name" class="surface-card team-card">
 			<header>
-				<span class="team-icon"><component :is="teamIcon(team.icon)" :size="20" /></span>
+				<span class="team-icon">
+					<img
+						v-if="team.avatar_url"
+						:src="team.avatar_url"
+						:alt="`${team.team_name} image`"
+					/>
+					<component v-else :is="teamIcon(team.icon)" :size="20" />
+				</span>
 				<Tag
 					:value="team.enabled ? 'Enabled' : 'Disabled'"
 					:severity="team.enabled ? 'success' : 'secondary'"
@@ -222,6 +276,36 @@
 				</span>
 			</template>
 		</Select>
+		<label>Custom image</label>
+		<div class="avatar-editor">
+			<span class="team-icon avatar-preview">
+				<img v-if="avatarPreview" :src="avatarPreview" alt="Team image preview" />
+				<component v-else :is="teamIcon(form.icon)" :size="20" />
+			</span>
+			<label for="team-avatar" class="avatar-upload">
+				<ImagePlus :size="16" />
+				{{ avatarUploading ? 'Uploading…' : 'Upload image' }}
+			</label>
+			<input
+				id="team-avatar"
+				type="file"
+				accept="image/png,image/jpeg,image/webp,image/gif"
+				:disabled="avatarUploading"
+				@change="selectAvatar"
+			/>
+			<Button
+				v-if="avatarPreview"
+				text
+				severity="danger"
+				label="Remove"
+				@click="removeAvatar"
+			>
+				<template #icon><Trash2 :size="15" /></template>
+			</Button>
+		</div>
+		<small class="field-help"
+			>PNG, JPEG, WebP or GIF, up to 5 MB. The icon remains the fallback.</small
+		>
 		<label for="team-description">Description</label
 		><Textarea id="team-description" v-model="form.description" rows="3" fluid />
 		<div v-if="editingTeam" class="assignment-sections">
@@ -287,6 +371,36 @@
 		border-radius: 12px;
 		color: var(--wa-success);
 		background: var(--wa-success-soft);
+	}
+	.team-icon img {
+		width: 100%;
+		height: 100%;
+		border-radius: inherit;
+		object-fit: cover;
+	}
+	.avatar-editor {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+	.avatar-editor > input {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		opacity: 0;
+		pointer-events: none;
+	}
+	.avatar-upload {
+		min-height: 38px;
+		padding: 8px 11px;
+		display: inline-flex;
+		align-items: center;
+		gap: 7px;
+		margin: 0;
+		border: 1px solid var(--wa-border);
+		border-radius: 9px;
+		background: var(--wa-surface);
+		cursor: pointer;
 	}
 	.team-card h2 {
 		margin: 18px 0 6px;

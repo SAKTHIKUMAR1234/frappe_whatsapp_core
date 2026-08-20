@@ -89,13 +89,7 @@ def resolve_recipient_phone(identity, context: dict | None = None) -> str:
 		)
 
 	phone_aliases = attributes.get("phone_aliases") or []
-	value = (
-		phone_aliases[-1]
-		if phone_aliases
-		else ""
-		if bsuid
-		else identity.normalized_value
-	)
+	value = phone_aliases[-1] if phone_aliases else "" if bsuid else identity.normalized_value
 	if paths:
 		resolved = frappe.get_attr(paths[0])(
 			identity=identity,
@@ -124,9 +118,7 @@ def _normalized_identity_phone(
 	record, but they may never redirect a WhatsApp identity to an unrelated row.
 	"""
 	context = context or {}
-	attributes = attributes if attributes is not None else _json_dict(
-		getattr(identity, "attributes", None)
-	)
+	attributes = attributes if attributes is not None else _json_dict(getattr(identity, "attributes", None))
 	default_country_code = str(
 		context.get("default_country_calling_code")
 		or frappe.conf.get("whatsapp_default_country_calling_code")
@@ -145,27 +137,19 @@ def _normalized_identity_phone(
 	known_numbers = _identity_phone_candidates(identity, attributes)
 	if not known_numbers or not known_numbers.intersection(phone_candidates(phone)):
 		frappe.throw(
-			"The resolved WhatsApp recipient phone number does not belong to this "
-			"WhatsApp identity",
+			"The resolved WhatsApp recipient phone number does not belong to this WhatsApp identity",
 			frappe.ValidationError,
 		)
 	return phone
 
 
 def _identity_phone_candidates(identity, attributes: dict | None = None) -> set[str]:
-	attributes = attributes if attributes is not None else _json_dict(
-		getattr(identity, "attributes", None)
-	)
+	attributes = attributes if attributes is not None else _json_dict(getattr(identity, "attributes", None))
 	values = list(attributes.get("phone_aliases") or [])
 	normalized_value = str(getattr(identity, "normalized_value", None) or "").strip()
 	if normalized_value and not is_business_scoped_user_id(normalized_value):
 		values.append(normalized_value)
-	return {
-		candidate
-		for value in values
-		for candidate in phone_candidates(value)
-		if candidate
-	}
+	return {candidate for value in values for candidate in phone_candidates(value) if candidate}
 
 
 def _linked_recipient_phone(identity, context: dict) -> str | None:
@@ -262,15 +246,9 @@ def outbound_state(conversation: str | None = None) -> dict:
 	if not status["account_count"]:
 		reasons.append("No Hub account is mapped")
 	conversation_channel = (
-		frappe.db.get_value("WhatsApp Core Conversation", conversation, "channel")
-		if conversation
-		else None
+		frappe.db.get_value("WhatsApp Core Conversation", conversation, "channel") if conversation else None
 	)
-	if (
-		conversation_channel
-		and status["account_count"]
-		and not outbound_ready(conversation_channel)
-	):
+	if conversation_channel and status["account_count"] and not outbound_ready(conversation_channel):
 		reasons.append("This conversation channel is not mapped to a Hub account")
 	context = {
 		"conversation": conversation,
@@ -282,15 +260,8 @@ def outbound_state(conversation: str | None = None) -> dict:
 		if result is False:
 			reasons.append("Business outbound preflight failed")
 		elif isinstance(result, dict) and not result.get("ready", False):
-			reasons.extend(
-				result.get("reasons")
-				or ["Business outbound preflight failed"]
-			)
-	text_allowed = (
-		_within_service_window(conversation)
-		if conversation
-		else False
-	)
+			reasons.extend(result.get("reasons") or ["Business outbound preflight failed"])
+	text_allowed = _within_service_window(conversation) if conversation else False
 	return {
 		**status,
 		"ready": not reasons,
@@ -329,11 +300,7 @@ def start_conversation(
 		)
 		if is_business_scoped_user_id(phone_number):
 			normalized = normalize_business_scoped_user_id(phone_number)
-			alias_type = (
-				"parent_user_id"
-				if is_parent_business_scoped_user_id(normalized)
-				else "user_id"
-			)
+			alias_type = "parent_user_id" if is_parent_business_scoped_user_id(normalized) else "user_id"
 			identity_doc = get_or_create_identity(
 				normalized,
 				scope=channel_doc.name,
@@ -466,16 +433,8 @@ def queue_direct_text_internal(
 			"body": body,
 			"source": source,
 			"direct_send_category": direct_send_category,
-			**(
-				{"direct_send_ttl_seconds": ttl_seconds}
-				if ttl_seconds is not None
-				else {}
-			),
-			**(
-				{"direct_send_template_name": template_name}
-				if template_name
-				else {}
-			),
+			**({"direct_send_ttl_seconds": ttl_seconds} if ttl_seconds is not None else {}),
+			**({"direct_send_template_name": template_name} if template_name else {}),
 		},
 		client_message_id=client_message_id,
 		enqueue_delivery=enqueue_delivery,
@@ -526,9 +485,7 @@ def queue_direct_interactive_internal(
 		payload = frappe.parse_json(payload)
 	if not isinstance(payload, dict):
 		frappe.throw("Direct Send payload must be an object", frappe.ValidationError)
-	normalized = _validate_direct_send_interactive(
-		_validate_rich_payload("interactive", payload)
-	)
+	normalized = _validate_direct_send_interactive(_validate_rich_payload("interactive", payload))
 	ttl_seconds = _direct_send_ttl_seconds(ttl_seconds, category)
 	template_name = _direct_send_template_name(template_name, category)
 	body = _rich_message_body("interactive", normalized).strip()[:4096]
@@ -540,16 +497,8 @@ def queue_direct_interactive_internal(
 			"payload": normalized,
 			"source": source,
 			"direct_send_category": category,
-			**(
-				{"direct_send_ttl_seconds": ttl_seconds}
-				if ttl_seconds is not None
-				else {}
-			),
-			**(
-				{"direct_send_template_name": template_name}
-				if template_name
-				else {}
-			),
+			**({"direct_send_ttl_seconds": ttl_seconds} if ttl_seconds is not None else {}),
+			**({"direct_send_template_name": template_name} if template_name else {}),
 		},
 		client_message_id=client_message_id,
 		enqueue_delivery=enqueue_delivery,
@@ -672,10 +621,7 @@ def upload_media_internal(
 	result = upload_meta_media(
 		settings.get_account_name(conversation.channel),
 		content,
-		content_type=(
-			mimetypes.guess_type(file_doc.file_name or "")[0]
-			or "application/octet-stream"
-		),
+		content_type=(mimetypes.guess_type(file_doc.file_name or "")[0] or "application/octet-stream"),
 		filename=file_doc.file_name or "file",
 	)
 	if not result.get("success") or not result.get("media_id"):
@@ -697,6 +643,7 @@ def queue_template(
 	components: list | str | None = None,
 	source: str = "Core UI",
 	client_message_id: str | None = None,
+	local_file_url: str | None = None,
 ) -> dict:
 	return queue_template_internal(
 		conversation_name,
@@ -705,6 +652,7 @@ def queue_template(
 		components,
 		source,
 		client_message_id=client_message_id,
+		local_file_url=local_file_url,
 	)
 
 
@@ -744,9 +692,7 @@ def queue_marketing_template(
 
 
 def _assert_marketing_preference(conversation_name):
-	identity_name = frappe.db.get_value(
-		"WhatsApp Core Conversation", conversation_name, "remote_identity"
-	)
+	identity_name = frappe.db.get_value("WhatsApp Core Conversation", conversation_name, "remote_identity")
 	if not identity_name:
 		frappe.throw("Conversation was not found", frappe.DoesNotExistError)
 	attributes = frappe.db.get_value("WhatsApp Core Identity", identity_name, "attributes") or {}
@@ -769,6 +715,7 @@ def queue_template_internal(
 	source: str = "Core",
 	*,
 	client_message_id: str | None = None,
+	local_file_url: str | None = None,
 	enqueue_delivery: bool = True,
 	_batch_context: dict | None = None,
 	_template_doc=None,
@@ -776,9 +723,7 @@ def queue_template_internal(
 	marketing_options: dict | None = None,
 	recipient_override: str | None = None,
 ) -> dict:
-	conversation_channel = frappe.db.get_value(
-		"WhatsApp Core Conversation", conversation_name, "channel"
-	)
+	conversation_channel = frappe.db.get_value("WhatsApp Core Conversation", conversation_name, "channel")
 	if not conversation_channel:
 		frappe.throw("Conversation was not found", frappe.DoesNotExistError)
 	template_doc = _template_doc or _approved_template(template, channel=conversation_channel)
@@ -794,19 +739,26 @@ def queue_template_internal(
 	if not isinstance(components, list):
 		frappe.throw("Template components must be a list")
 	_validate_template_send_parameters(template_doc, components)
-	language_code = (
-		str(language_code or "").strip()
-		or template_doc.language_code
-		or "en"
-	)
+	header_type = str(template_doc.header_type or "").strip().lower()
+	local_file = None
+	if local_file_url:
+		if header_type not in {"document", "image", "video"}:
+			frappe.throw(
+				"A local file can be retained only for a media-header template",
+				frappe.ValidationError,
+			)
+		local_file = _local_media_file(local_file_url, header_type)
+	language_code = str(language_code or "").strip() or template_doc.language_code or "en"
 	snapshot = template_message_snapshot(template_doc, components)
+	if local_file:
+		snapshot["header_media"] = local_file.file_url
 	transport_endpoint = _transport_endpoint(transport_endpoint)
 	if transport_endpoint == "marketing_messages" and str(template_doc.category or "").upper() != "MARKETING":
 		frappe.throw(
 			"Only approved MARKETING templates can use marketing_messages",
 			frappe.ValidationError,
 		)
-	return _queue_message(
+	message = _queue_message(
 		conversation_name,
 		"template",
 		snapshot.get("body") or snapshot.get("header") or template_doc.template_name,
@@ -831,6 +783,13 @@ def queue_template_internal(
 		_batch_context=_batch_context,
 		recipient_override=recipient_override,
 	)
+	if local_file:
+		local_file.attached_to_doctype = "WhatsApp Core Message"
+		local_file.attached_to_name = message.name
+		local_file.attached_to_field = None
+		local_file.is_private = 1
+		local_file.save(ignore_permissions=True)
+	return message
 
 
 def template_message_snapshot(template_doc, supplied_components: list | None = None) -> dict:
@@ -848,25 +807,11 @@ def template_message_snapshot(template_doc, supplied_components: list | None = N
 	buttons_definition = _template_component(definitions, "BUTTONS")
 
 	header_type = str(
-		getattr(template_doc, "header_type", "")
-		or header_definition.get("format")
-		or "TEXT"
+		getattr(template_doc, "header_type", "") or header_definition.get("format") or "TEXT"
 	).upper()
-	header = str(
-		getattr(template_doc, "header_content", "")
-		or header_definition.get("text")
-		or ""
-	).strip()
-	body = str(
-		getattr(template_doc, "body_text", "")
-		or body_definition.get("text")
-		or ""
-	).strip()
-	footer = str(
-		getattr(template_doc, "footer_text", "")
-		or footer_definition.get("text")
-		or ""
-	).strip()
+	header = str(getattr(template_doc, "header_content", "") or header_definition.get("text") or "").strip()
+	body = str(getattr(template_doc, "body_text", "") or body_definition.get("text") or "").strip()
+	footer = str(getattr(template_doc, "footer_text", "") or footer_definition.get("text") or "").strip()
 
 	header_parameters = _template_supplied_parameters(supplied, "header")
 	body_parameters = _template_supplied_parameters(supplied, "body")
@@ -890,11 +835,13 @@ def template_message_snapshot(template_doc, supplied_components: list | None = N
 		url = str(button.get("url") or "").strip()
 		if url:
 			url = _render_template_text(url, button_parameters)
-		buttons.append({
-			"label": label,
-			"type": button_type,
-			"url": url,
-		})
+		buttons.append(
+			{
+				"label": label,
+				"type": button_type,
+				"url": url,
+			}
+		)
 
 	media = None
 	if header_type in {"IMAGE", "VIDEO", "DOCUMENT"} and header_parameters:
@@ -918,8 +865,7 @@ def _template_component(components: list, component_type: str) -> dict:
 		(
 			component
 			for component in components
-			if isinstance(component, dict)
-			and str(component.get("type") or "").upper() == component_type
+			if isinstance(component, dict) and str(component.get("type") or "").upper() == component_type
 		),
 		{},
 	)
@@ -964,9 +910,7 @@ def _render_template_text(text: str, parameters: list[dict]) -> str:
 
 
 def _validate_template_send_parameters(template_doc, components: list[dict]) -> None:
-	parameter_format = str(
-		getattr(template_doc, "parameter_format", None) or "POSITIONAL"
-	).strip().upper()
+	parameter_format = str(getattr(template_doc, "parameter_format", None) or "POSITIONAL").strip().upper()
 	if parameter_format not in {"POSITIONAL", "NAMED"}:
 		frappe.throw("Template parameter format is invalid", frappe.ValidationError)
 	definitions = _json_list(getattr(template_doc, "components", None))
@@ -974,9 +918,7 @@ def _validate_template_send_parameters(template_doc, components: list[dict]) -> 
 		definition = _template_component(definitions, component_type.upper())
 		text = str(definition.get("text") or "")
 		numeric = re.findall(r"\{\{\s*\d+\s*\}\}", text)
-		expected = list(dict.fromkeys(
-			re.findall(r"\{\{\s*([a-z][a-z0-9_]*)\s*\}\}", text)
-		))
+		expected = list(dict.fromkeys(re.findall(r"\{\{\s*([a-z][a-z0-9_]*)\s*\}\}", text)))
 		if parameter_format == "POSITIONAL":
 			if expected:
 				frappe.throw(
@@ -1008,8 +950,7 @@ def _validate_template_send_parameters(template_doc, components: list[dict]) -> 
 			provided.append(name)
 		if len(provided) != len(set(provided)) or set(provided) != set(expected):
 			frappe.throw(
-				f"NAMED {component_type.upper()} parameters must exactly match: "
-				+ ", ".join(expected),
+				f"NAMED {component_type.upper()} parameters must exactly match: " + ", ".join(expected),
 				frappe.ValidationError,
 			)
 
@@ -1022,10 +963,7 @@ def _template_parameter_text(parameter) -> str:
 	if isinstance(parameter.get("currency"), dict):
 		currency = parameter["currency"]
 		return str(
-			currency.get("fallback_value")
-			or currency.get("amount_1000")
-			or currency.get("code")
-			or ""
+			currency.get("fallback_value") or currency.get("amount_1000") or currency.get("code") or ""
 		)
 	if isinstance(parameter.get("date_time"), dict):
 		return str(parameter["date_time"].get("fallback_value") or "")
@@ -1046,11 +984,7 @@ def queue_choice(
 		frappe.throw("Question cannot be empty")
 	if len(body) > 1024:
 		frappe.throw("Interactive question cannot exceed 1024 characters")
-	options = (
-		frappe.parse_json(options)
-		if isinstance(options, str)
-		else options
-	)
+	options = frappe.parse_json(options) if isinstance(options, str) else options
 	normalized_options = _normalize_choice_options(options)
 	button_label = str(button_label or "Choose").strip()
 	if len(button_label) > 20:
@@ -1200,10 +1134,9 @@ def queue_campaign_batch(campaign, recipients) -> dict:
 			""",
 			{"conversation_names": list(dict.fromkeys(conversation_names))},
 		)
-		publish_message_changes([
-			{"kind": "message", "status": "created", "name": name}
-			for name in message_names
-		])
+		publish_message_changes(
+			[{"kind": "message", "status": "created", "name": name} for name in message_names]
+		)
 
 	if message_names:
 		frappe.enqueue(
@@ -1297,21 +1230,21 @@ def deliver_queued_message_batch(message_names: list[str]) -> None:
 				or group_id
 				or resolve_recipient_phone(identity, context)
 			)
-			submissions.append({
-				"message": message,
-				"channel": message.channel,
-				"payload": _message_payload(
-					message,
-					recipient,
-					recipient_type="group" if group_id else "individual",
-				),
-				"idempotency_key": message.idempotency_key,
-				"endpoint": _message_transport_endpoint(message),
-			})
-		except Exception as exception:
-			preparation_failures.append(
-				(message.name, {"error": str(exception), "retryable": False})
+			submissions.append(
+				{
+					"message": message,
+					"channel": message.channel,
+					"payload": _message_payload(
+						message,
+						recipient,
+						recipient_type="group" if group_id else "individual",
+					),
+					"idempotency_key": message.idempotency_key,
+					"endpoint": _message_transport_endpoint(message),
+				}
 			)
+		except Exception as exception:
+			preparation_failures.append((message.name, {"error": str(exception), "retryable": False}))
 
 	# Everything above is read-only. End that database snapshot before the external
 	# request: Meta can deliver its callback while this HTTP request is still in
@@ -1329,15 +1262,17 @@ def deliver_queued_message_batch(message_names: list[str]) -> None:
 			_mark_failed(frappe._dict(name=message_name), failure)
 		return
 
-	hub_result = send_hub_batch([
-		{
-			"channel": item["channel"],
-			"payload": item["payload"],
-			"idempotency_key": item["idempotency_key"],
-			"endpoint": item["endpoint"],
-		}
-		for item in submissions
-	])
+	hub_result = send_hub_batch(
+		[
+			{
+				"channel": item["channel"],
+				"payload": item["payload"],
+				"idempotency_key": item["idempotency_key"],
+				"endpoint": item["endpoint"],
+			}
+			for item in submissions
+		]
+	)
 	# Hub settings are resolved from Frappe immediately before the HTTP request,
 	# which starts another read transaction. End it after the request for the same
 	# callback-before-response race handled by the single-message path.
@@ -1358,31 +1293,19 @@ def deliver_queued_message_batch(message_names: list[str]) -> None:
 		if (
 			hub_result.get("accepted")
 			and relay_result.get("success")
-			and (
-				item_status in {"completed", "sent"}
-				or relay_status == "sent"
-			)
+			and (item_status in {"completed", "sent"} or relay_status == "sent")
 		):
 			_mark_sent(message, relay_result.get("meta_message_id"))
 		elif (
 			hub_result.get("accepted")
 			and relay_result.get("success")
-			and (
-				item_status in {"queued", "duplicate"}
-				or relay_status == "queued"
-			)
+			and (item_status in {"queued", "duplicate"} or relay_status == "queued")
 		):
 			# JetStream now owns this durable work item. That is the WhatsApp
 			# client's single-tick boundary; the provider callback may later
 			# advance it to Delivered/Read or report a terminal failure.
 			_mark_sent(message, relay_result.get("meta_message_id"))
-		elif (
-			hub_result.get("accepted")
-			and (
-				item_status == "failed"
-				or relay_status == "failed"
-			)
-		):
+		elif hub_result.get("accepted") and (item_status == "failed" or relay_status == "failed"):
 			_mark_failed(message, relay_result)
 		else:
 			_record_retryable_submission(
@@ -1578,9 +1501,7 @@ def _queue_message(
 			"An approved template is required outside the 24-hour customer service window",
 			frappe.ValidationError,
 		)
-	if group_id and message_type not in {
-		"text", "image", "video", "audio", "document", "template"
-	}:
+	if group_id and message_type not in {"text", "image", "video", "audio", "document", "template"}:
 		frappe.throw(
 			f"{message_type.title()} messages are not supported by Meta Groups",
 			frappe.ValidationError,
@@ -1590,29 +1511,29 @@ def _queue_message(
 		message_type=message_type,
 		content=content,
 	)
-	message_key = hashlib.sha256(
-		f"{conversation.channel}:{local_id}".encode()
-	).hexdigest()
+	message_key = hashlib.sha256(f"{conversation.channel}:{local_id}".encode()).hexdigest()
 	try:
-		message = frappe.get_doc({
-			"doctype": "WhatsApp Core Message",
-			"message_key": message_key,
-			"idempotency_key": message_key,
-			"conversation": conversation.name,
-			"channel": conversation.channel,
-			"recipient_address": recipient_address,
-			"provider_message_id": local_id,
-			"direction": "Outbound",
-			"message_type": message_type,
-			"body": body,
-			"content": json.dumps(
-				expected_content,
-				separators=(",", ":"),
-				ensure_ascii=False,
-			),
-			"provider_timestamp": now_datetime(),
-			"delivery_status": "Queued",
-		}).insert(ignore_permissions=True)
+		message = frappe.get_doc(
+			{
+				"doctype": "WhatsApp Core Message",
+				"message_key": message_key,
+				"idempotency_key": message_key,
+				"conversation": conversation.name,
+				"channel": conversation.channel,
+				"recipient_address": recipient_address,
+				"provider_message_id": local_id,
+				"direction": "Outbound",
+				"message_type": message_type,
+				"body": body,
+				"content": json.dumps(
+					expected_content,
+					separators=(",", ":"),
+					ensure_ascii=False,
+				),
+				"provider_timestamp": now_datetime(),
+				"delivery_status": "Queued",
+			}
+		).insert(ignore_permissions=True)
 	except (frappe.DuplicateEntryError, frappe.UniqueValidationError):
 		if not client_message_id:
 			raise
@@ -1640,11 +1561,15 @@ def _queue_message(
 		_enqueue_message_delivery(message.name)
 	message_payload = _message_response(message)
 	if not batch_context:
-		publish_message_changes([{
-			"kind": "message",
-			"status": "created",
-			"name": message.name,
-		}])
+		publish_message_changes(
+			[
+				{
+					"kind": "message",
+					"status": "created",
+					"name": message.name,
+				}
+			]
+		)
 	return message_payload
 
 
@@ -1693,9 +1618,7 @@ def _validated_message_replay(
 
 def _message_response(message) -> dict:
 	payload = message.as_dict()
-	payload["sender_name"] = (
-		frappe.db.get_value("User", message.owner, "full_name") or message.owner
-	)
+	payload["sender_name"] = frappe.db.get_value("User", message.owner, "full_name") or message.owner
 	return payload
 
 
@@ -1728,12 +1651,7 @@ def _run_preflight_hooks(**context) -> None:
 		if result is False:
 			frappe.throw("Outbound business preflight failed")
 		if isinstance(result, dict) and not result.get("ready", False):
-			frappe.throw(
-				"; ".join(
-					result.get("reasons")
-					or ["Outbound business preflight failed"]
-				)
-			)
+			frappe.throw("; ".join(result.get("reasons") or ["Outbound business preflight failed"]))
 
 
 def _approved_template(template: str, *, channel: str | None = None):
@@ -1750,9 +1668,7 @@ def _approved_template(template: str, *, channel: str | None = None):
 				"WhatsApp Core Template", filters=filters, pluck="name", limit_page_length=2
 			)
 			if len(matches) > 1:
-				frappe.throw(
-					"Template identity is ambiguous; select its account-scoped record"
-				)
+				frappe.throw("Template identity is ambiguous; select its account-scoped record")
 			if matches:
 				record_name = matches[0]
 				break
@@ -1783,10 +1699,7 @@ def _message_payload(
 	)
 	if direct_send_category and (not direct_send_type_allowed or recipient_type != "individual"):
 		frappe.throw("Invalid durable Meta Direct Send message", frappe.ValidationError)
-	if (
-		direct_send_category == "authentication"
-		and is_business_scoped_user_id(recipient)
-	):
+	if direct_send_category == "authentication" and is_business_scoped_user_id(recipient):
 		frappe.throw(
 			"Authentication Direct Send requires a recipient phone number",
 			frappe.ValidationError,
@@ -1815,9 +1728,7 @@ def _message_payload(
 		if template_name:
 			payload["direct_send_config"] = {"template_name": template_name}
 	if message.message_type == "text":
-		if direct_send_category and (
-			content.get("preview_url") or content.get("context_message_id")
-		):
+		if direct_send_category and (content.get("preview_url") or content.get("context_message_id")):
 			frappe.throw(
 				"Direct Send text does not support previews or reply context",
 				frappe.ValidationError,
@@ -1860,9 +1771,7 @@ def _message_payload(
 		context_message_id = rich_payload.pop("context_message_id", None)
 		rich_payload.pop("local_file_url", None)
 		payload[message.message_type] = (
-			rich_payload.get("contacts")
-			if message.message_type == "contacts"
-			else rich_payload
+			rich_payload.get("contacts") if message.message_type == "contacts" else rich_payload
 		)
 		if context_message_id:
 			payload["context"] = {"message_id": context_message_id}
@@ -1939,11 +1848,8 @@ def _message_requires_phone(message) -> bool:
 
 
 def _content_requires_phone(message_type: str, content: dict) -> bool:
-	return (
-		message_type == "template" and _template_requires_phone(content)
-	) or (
-		_direct_send_category(content.get("direct_send_category"))
-		== "authentication"
+	return (message_type == "template" and _template_requires_phone(content)) or (
+		_direct_send_category(content.get("direct_send_category")) == "authentication"
 	)
 
 
@@ -2027,8 +1933,16 @@ def _validate_rich_payload(message_type: str, payload: dict) -> dict:
 	elif message_type == "interactive":
 		interactive_type = str(result.get("type") or "").strip()
 		if interactive_type not in {
-			"button", "cta_url", "list", "product", "product_list", "catalog_message",
-			"flow", "location_request_message", "address_message", "order_details",
+			"button",
+			"cta_url",
+			"list",
+			"product",
+			"product_list",
+			"catalog_message",
+			"flow",
+			"location_request_message",
+			"address_message",
+			"order_details",
 			"order_status",
 		}:
 			frappe.throw("Unsupported interactive message type", frappe.ValidationError)
@@ -2066,19 +1980,12 @@ def _validate_direct_send_interactive(payload: dict) -> dict:
 	return payload
 
 
-def _validate_direct_send_text_object(
-	value, label: str, *, maximum: int, required: bool
-) -> None:
+def _validate_direct_send_text_object(value, label: str, *, maximum: int, required: bool) -> None:
 	if not isinstance(value, dict):
 		frappe.throw(f"Direct Send {label} must be an object", frappe.ValidationError)
 	_allowed_keys(value, {"text"}, label)
 	text = value.get("text")
-	if (
-		not isinstance(text, str)
-		or text != text.strip()
-		or (required and not text)
-		or len(text) > maximum
-	):
+	if not isinstance(text, str) or text != text.strip() or (required and not text) or len(text) > maximum:
 		frappe.throw(
 			f"Direct Send {label} text must contain 1 to {maximum} characters",
 			frappe.ValidationError,
@@ -2181,12 +2088,7 @@ def _validate_direct_send_reply_action(action: dict) -> None:
 		if identifier in identifiers:
 			frappe.throw("Direct Send reply ids must be unique", frappe.ValidationError)
 		identifiers.add(identifier)
-		if (
-			not isinstance(title, str)
-			or title != title.strip()
-			or not title
-			or len(title) > 20
-		):
+		if not isinstance(title, str) or title != title.strip() or not title or len(title) > 20:
 			frappe.throw("Direct Send reply title must contain 1 to 20 characters", frappe.ValidationError)
 		if title in titles:
 			frappe.throw("Direct Send reply titles must be unique", frappe.ValidationError)
@@ -2204,12 +2106,7 @@ def _validate_direct_send_url(value, *, label: str) -> None:
 		parsed.port
 	except ValueError:
 		frappe.throw(f"{label} contains an invalid port", frappe.ValidationError)
-	if (
-		parsed.scheme != "https"
-		or not parsed.hostname
-		or parsed.username
-		or parsed.password
-	):
+	if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
 		frappe.throw(f"{label} must be an absolute HTTPS URL", frappe.ValidationError)
 	try:
 		ipaddress.ip_address(parsed.hostname)
@@ -2262,9 +2159,7 @@ def _mark_sent(message, provider_message_id: str | None) -> None:
 	# Updating the Document loaded before that network call would then either
 	# raise MariaDB 1020 (stale row) or regress Delivered/Read back to Sent.
 	# Keep this as one atomic, monotonic update against the current database row.
-	previous_status = frappe.db.get_value(
-		"WhatsApp Core Message", message.name, "delivery_status"
-	)
+	previous_status = frappe.db.get_value("WhatsApp Core Message", message.name, "delivery_status")
 	frappe.db.sql(
 		"""
 		UPDATE `tabWhatsApp Core Message`
@@ -2297,10 +2192,12 @@ def _mark_sent(message, provider_message_id: str | None) -> None:
 	if not current:
 		return
 	if current.delivery_status != previous_status:
-		enqueue_delivery_status_handlers({
-			"message_name": message.name,
-			"delivery_status": current.delivery_status,
-		})
+		enqueue_delivery_status_handlers(
+			{
+				"message_name": message.name,
+				"delivery_status": current.delivery_status,
+			}
+		)
 	if provider_message_id:
 		# Direct sends and durable relay-result callbacks share the same provider
 		# race. Wake receipts that arrived before this id was persisted.
@@ -2345,9 +2242,7 @@ def _mark_failed(message, failure: dict) -> None:
 		ensure_ascii=False,
 	)
 	# A late send failure cannot undo an already delivered/read receipt.
-	previous_status = frappe.db.get_value(
-		"WhatsApp Core Message", message.name, "delivery_status"
-	)
+	previous_status = frappe.db.get_value("WhatsApp Core Message", message.name, "delivery_status")
 	frappe.db.sql(
 		"""
 		UPDATE `tabWhatsApp Core Message`
@@ -2375,10 +2270,12 @@ def _mark_failed(message, failure: dict) -> None:
 	if not current:
 		return
 	if current.delivery_status != previous_status:
-		enqueue_delivery_status_handlers({
-			"message_name": message.name,
-			"delivery_status": current.delivery_status,
-		})
+		enqueue_delivery_status_handlers(
+			{
+				"message_name": message.name,
+				"delivery_status": current.delivery_status,
+			}
+		)
 	_reconcile_campaign_message(message.name)
 	_publish_status(current)
 
@@ -2395,11 +2292,15 @@ def _reconcile_campaign_message(message_name: str) -> None:
 
 
 def _publish_status(message) -> None:
-	publish_message_changes([{
-		"kind": "status",
-		"status": "updated",
-		"name": message.name,
-	}])
+	publish_message_changes(
+		[
+			{
+				"kind": "status",
+				"status": "updated",
+				"name": message.name,
+			}
+		]
+	)
 
 
 def _json_dict(value) -> dict:
@@ -2432,13 +2333,9 @@ def _normalize_choice_options(options) -> list[dict]:
 		if not label or not value:
 			frappe.throw(f"Choice option {index} requires a label and value")
 		if len(label) > 24:
-			frappe.throw(
-				f"Choice option {index} label cannot exceed 24 characters"
-			)
+			frappe.throw(f"Choice option {index} label cannot exceed 24 characters")
 		if len(value) > 200:
-			frappe.throw(
-				f"Choice option {index} value cannot exceed 200 characters"
-			)
+			frappe.throw(f"Choice option {index} value cannot exceed 200 characters")
 		if value in values:
 			frappe.throw(f"Choice option value is duplicated: {value}")
 		values.add(value)
@@ -2473,13 +2370,12 @@ def _interactive_payload(
 		"body": {"text": body},
 		"action": {
 			"button": button_label,
-			"sections": [{
-				"title": "Options",
-				"rows": [
-					{"id": option["value"], "title": option["label"]}
-					for option in options
-				],
-			}],
+			"sections": [
+				{
+					"title": "Options",
+					"rows": [{"id": option["value"], "title": option["label"]} for option in options],
+				}
+			],
 		},
 	}
 
