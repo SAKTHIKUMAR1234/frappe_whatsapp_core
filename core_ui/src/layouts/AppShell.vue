@@ -20,6 +20,7 @@
 	import { navigation } from '@/config/navigation'
 	import { useSessionStore } from '@/stores/session'
 	import { useCallingStore } from '@/stores/calling'
+	import { redirectToFrappeLogin } from '@/utils/frappeLogin'
 	import CallDock from '@/features/calling/components/CallDock.vue'
 	import { subscribeConnection } from '@/services/realtime'
 	import { onAuthExpired } from '@/services/frappe'
@@ -93,7 +94,7 @@
 			icon: 'pi pi-sign-out',
 			command: async () => {
 				await session.logout()
-				router.push({ name: 'login' })
+				redirectToFrappeLogin('/', { replace: false })
 			},
 		},
 	]
@@ -177,7 +178,7 @@
 		})
 		unsubscribeAuth = onAuthExpired(() => {
 			session.expire()
-			router.replace({ name: 'login', query: { redirect: route.fullPath, expired: '1' } })
+			redirectToFrappeLogin(route.fullPath)
 		})
 		if (session.boot?.modules?.includes('calling')) {
 			calling.initialize(session.boot?.site, session.user?.name)

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { call, login as loginRequest, logout as logoutRequest } from '@/services/frappe'
+import { call, logout as logoutRequest } from '@/services/frappe'
 
 export const useSessionStore = defineStore('core-session', () => {
 	const boot = ref(null)
@@ -24,11 +24,6 @@ export const useSessionStore = defineStore('core-session', () => {
 		}
 	}
 
-	async function login(email, password) {
-		await loginRequest(email, password)
-		return fetchBoot()
-	}
-
 	async function logout() {
 		try {
 			await logoutRequest()
@@ -48,7 +43,6 @@ export const useSessionStore = defineStore('core-session', () => {
 		authenticated,
 		user,
 		fetchBoot,
-		login,
 		logout,
 		expire,
 	}

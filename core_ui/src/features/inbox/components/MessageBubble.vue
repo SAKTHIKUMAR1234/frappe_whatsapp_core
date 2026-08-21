@@ -25,9 +25,12 @@
 	const emit = defineEmits(['reply', 'retry', 'menu', 'quote'])
 	let longPressTimer = null
 	let longPressOrigin = null
-	const readerOverlay = ref(null)
 	const mediaReady = ref(false)
 	const mediaFailed = ref(false)
+	const readerPanelOpen = ref(false)
+	const readerPanelRef = ref(null)
+	const readerTriggerRef = ref(null)
+	const readerPanelPosition = ref({ left: 8, top: 8, maxHeight: 270, below: true })
 
 	function openMenu(event) {
 		event.preventDefault()
@@ -200,6 +203,14 @@
 			.filter(Boolean)
 		return names.length ? `Still unread by ${names.join(', ')}` : readCoverageLabel.value
 	})
+	const exactReaders = computed(() => {
+		const rows = [...(props.message.read_by || []), ...props.readers].filter(
+			(reader) => reader?.user,
+		)
+		return [...new Map(rows.map((reader) => [reader.user, reader])).values()]
+	})
+	const waitingReaders = computed(() => readCoverage.value.unread_by || [])
+	const visibleReaderAvatars = computed(() => exactReaders.value.slice(0, 2))
 
 	function readerInitials(reader) {
 		const label = String(reader.display_name || reader.full_name || 'Team member').trim()
@@ -212,28 +223,63 @@
 		)
 	}
 
-	function readerTooltip(reader) {
+	function readerStatus(reader) {
 		const label = String(reader.display_name || reader.full_name || 'Team member').trim()
 		const readAt = reader.last_read_at || reader.read_at
 		const formatted = formatDateTime(readAt, '')
-		return `${label || 'Team member'} read through this message${formatted ? ` · ${formatted}` : ''}`
+		return formatted ? `${label} · ${formatted}` : label
 	}
 
-	function showReaderTooltip(event, reader) {
+	function closeReaderPanel() {
+		readerPanelOpen.value = false
+		document.removeEventListener('pointerdown', handleReaderPanelPointer)
+		document.removeEventListener('keydown', handleReaderPanelKey)
+		window.removeEventListener('resize', closeReaderPanel)
+		window.removeEventListener('scroll', closeReaderPanel, true)
+	}
+
+	function toggleReaderPanel(event) {
+		if (readerPanelOpen.value) {
+			closeReaderPanel()
+			return
+		}
 		const rect = event.currentTarget?.getBoundingClientRect?.()
 		if (!rect) return
-		const showAbove = rect.top > 76
-		readerOverlay.value = {
-			text: readerTooltip(reader),
-			left: Math.max(150, Math.min(window.innerWidth - 150, rect.left + rect.width / 2)),
-			top: showAbove ? rect.top - 8 : rect.bottom + 8,
-			showAbove,
+		const panelWidth = Math.min(280, window.innerWidth - 16)
+		const spaceAbove = Math.max(0, rect.top - 10)
+		const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - 10)
+		const below = spaceBelow >= 180 || spaceBelow >= spaceAbove
+		readerPanelPosition.value = {
+			left: Math.max(
+				8,
+				Math.min(window.innerWidth - panelWidth - 8, rect.right - panelWidth),
+			),
+			top: below ? rect.bottom + 6 : rect.top - 6,
+			maxHeight: Math.max(110, Math.min(270, below ? spaceBelow - 6 : spaceAbove - 6)),
+			below,
 		}
+		readerPanelOpen.value = true
+		document.addEventListener('pointerdown', handleReaderPanelPointer)
+		document.addEventListener('keydown', handleReaderPanelKey)
+		window.addEventListener('resize', closeReaderPanel)
+		window.addEventListener('scroll', closeReaderPanel, true)
 	}
 
-	function hideReaderTooltip() {
-		readerOverlay.value = null
+	function handleReaderPanelPointer(event) {
+		const readerTrigger = readerTriggerRef.value?.$el || readerTriggerRef.value
+		if (
+			readerTrigger?.contains?.(event.target) ||
+			readerPanelRef.value?.contains(event.target)
+		)
+			return
+		closeReaderPanel()
 	}
+
+	function handleReaderPanelKey(event) {
+		if (event.key === 'Escape') closeReaderPanel()
+	}
+
+	onBeforeUnmount(closeReaderPanel)
 
 	function markMediaReady() {
 		mediaReady.value = true
@@ -424,42 +470,73 @@
 			</span>
 		</footer>
 		<div
-			v-if="readers.length || hasReadCoverage"
+			v-if="exactReaders.length || hasReadCoverage"
 			class="message-readers"
-			aria-label="Team read status"
+			@pointerdown.stop
 		>
-			<span
-				v-if="hasReadCoverage"
-				:class="['read-coverage', { complete: readCoverage.complete }]"
+			<Button
+				ref="readerTriggerRef"
+				unstyled
+				class="reader-summary"
 				:title="readCoverageTooltip"
+				aria-label="Open team read details"
+				:aria-expanded="readerPanelOpen"
+				@click.stop="toggleReaderPanel"
 			>
-				<CheckCheck :size="11" />{{ readCoverageLabel }}
-			</span>
-			<span
-				v-for="reader in readers"
-				:key="reader.user"
-				class="reader-avatar"
-				:aria-label="readerTooltip(reader)"
-				tabindex="0"
-				@mouseenter="showReaderTooltip($event, reader)"
-				@mouseleave="hideReaderTooltip"
-				@focus="showReaderTooltip($event, reader)"
-				@blur="hideReaderTooltip"
-			>
-				<img v-if="reader.user_image" :src="reader.user_image" alt="" />
-				<em v-else>{{ readerInitials(reader) }}</em>
-			</span>
+				<span class="reader-stack" aria-hidden="true">
+					<span
+						v-for="reader in visibleReaderAvatars"
+						:key="reader.user"
+						class="reader-avatar"
+					>
+						<img v-if="reader.user_image" :src="reader.user_image" alt="" />
+						<em v-else>{{ readerInitials(reader) }}</em>
+					</span>
+				</span>
+				<span :class="['read-coverage', { complete: readCoverage.complete }]">
+					<CheckCheck :size="11" />{{
+						readCoverageLabel || `${exactReaders.length} read`
+					}}
+				</span>
+			</Button>
 		</div>
 	</article>
 	<Teleport to="body">
 		<div
-			v-if="readerOverlay"
-			class="reader-tooltip-overlay"
-			role="tooltip"
-			:class="{ below: !readerOverlay.showAbove }"
-			:style="{ left: `${readerOverlay.left}px`, top: `${readerOverlay.top}px` }"
+			v-if="readerPanelOpen"
+			ref="readerPanelRef"
+			:class="['reader-panel', { below: readerPanelPosition.below }]"
+			:style="{
+				left: `${readerPanelPosition.left}px`,
+				top: `${readerPanelPosition.top}px`,
+				maxHeight: `${readerPanelPosition.maxHeight}px`,
+			}"
+			role="dialog"
+			aria-label="Team read details"
 		>
-			{{ readerOverlay.text }}
+			<strong>Read by</strong>
+			<ul v-if="exactReaders.length">
+				<li v-for="reader in exactReaders" :key="reader.user">
+					<span class="reader-avatar">
+						<img v-if="reader.user_image" :src="reader.user_image" alt="" />
+						<em v-else>{{ readerInitials(reader) }}</em>
+					</span>
+					<span>{{ readerStatus(reader) }}</span>
+				</li>
+			</ul>
+			<small v-else>No team member has read this message yet.</small>
+			<template v-if="waitingReaders.length">
+				<strong>Waiting on</strong>
+				<ul>
+					<li v-for="reader in waitingReaders" :key="reader.user">
+						<span class="reader-avatar">
+							<img v-if="reader.user_image" :src="reader.user_image" alt="" />
+							<em v-else>{{ readerInitials(reader) }}</em>
+						</span>
+						<span>{{ reader.display_name || reader.full_name || 'Team member' }}</span>
+					</li>
+				</ul>
+			</template>
 		</div>
 	</Teleport>
 </template>
@@ -767,13 +844,27 @@
 	.message-readers {
 		position: absolute;
 		right: 7px;
-		bottom: -13px;
-		display: flex;
-		flex-direction: row-reverse;
-		padding-left: 5px;
+		bottom: -15px;
+		z-index: 3;
 	}
-	.message-readers > span {
-		position: relative;
+	.reader-summary {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		min-height: 26px;
+		padding: 2px 7px 2px 4px;
+		border: 1px solid var(--wa-border-soft);
+		border-radius: 999px;
+		background: var(--wa-surface);
+		box-shadow: 0 2px 8px rgba(16, 35, 29, 0.12);
+		cursor: pointer;
+		list-style: none;
+	}
+	.reader-stack {
+		display: flex;
+		padding-left: 4px;
+	}
+	.reader-avatar {
 		display: grid;
 		place-items: center;
 		width: 22px;
@@ -783,67 +874,86 @@
 		border-radius: 50%;
 		background: var(--wa-primary);
 		color: white;
-		box-shadow: 0 1px 4px rgba(16, 35, 29, 0.14);
-		cursor: help;
-		z-index: 1;
+		flex: 0 0 auto;
 	}
-	.message-readers > .read-coverage {
-		width: auto;
-		min-width: 22px;
-		padding: 0 7px;
-		border-radius: 999px;
-		background: var(--wa-surface);
+	.read-coverage {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
 		color: var(--wa-muted);
 		font-size: 9px;
 		font-weight: 750;
-		gap: 3px;
 		white-space: nowrap;
-		cursor: help;
 	}
-	.message-readers > .read-coverage.complete {
-		background: color-mix(in srgb, var(--wa-primary) 16%, var(--wa-surface));
+	.read-coverage.complete {
 		color: var(--wa-primary);
 	}
-	.message-readers > span:hover,
-	.message-readers > span:focus-visible {
-		z-index: 4;
+	.reader-summary:focus-visible {
 		outline: 2px solid color-mix(in srgb, var(--wa-primary) 42%, transparent);
 		outline-offset: 2px;
 	}
-	.reader-tooltip-overlay {
-		position: fixed;
-		z-index: 10050;
-		width: max-content;
-		max-width: min(300px, calc(100vw - 24px));
-		padding: 6px 8px;
-		border-radius: 6px;
-		background: var(--wa-text);
-		color: var(--wa-surface);
-		box-shadow: 0 3px 12px rgba(11, 20, 26, 0.22);
-		font-size: 11px;
-		font-style: normal;
-		font-weight: 600;
-		line-height: 1.35;
-		pointer-events: none;
-		transform: translate(-50%, -100%);
-		white-space: normal;
-	}
-	.reader-tooltip-overlay.below {
-		transform: translate(-50%, 0);
-	}
-	.message-readers img {
+	.reader-avatar img {
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
 		border-radius: 50%;
 	}
-	.message-readers em {
+	.reader-avatar em {
 		font-size: 8px;
 		font-style: normal;
 		font-weight: 800;
 	}
+	.reader-panel {
+		position: fixed;
+		z-index: 10050;
+		width: min(280px, calc(100vw - 28px));
+		display: grid;
+		gap: 8px;
+		padding: 11px;
+		overflow-y: auto;
+		border: 1px solid var(--wa-border);
+		border-radius: 10px;
+		background: var(--wa-surface);
+		box-shadow: 0 12px 32px rgba(11, 20, 26, 0.2);
+		color: var(--wa-text);
+		font-size: 11px;
+		transform: translateY(-100%);
+	}
+	.reader-panel.below {
+		transform: none;
+	}
+	.reader-panel strong {
+		font-size: 10px;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+	.reader-panel ul {
+		display: grid;
+		gap: 7px;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.reader-panel li {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		min-width: 0;
+	}
+	.reader-panel li > span:last-child {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.reader-panel .reader-avatar {
+		margin-left: 0;
+	}
+	.reader-panel small {
+		color: var(--wa-muted);
+	}
 	.message-bubble:has(.message-readers) {
-		margin-bottom: 13px;
+		margin-bottom: 15px;
 	}
 	.reply-button {
 		display: inline-flex;

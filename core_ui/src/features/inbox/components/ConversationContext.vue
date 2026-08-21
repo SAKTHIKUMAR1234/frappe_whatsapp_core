@@ -12,6 +12,7 @@
 		UserRoundCheck,
 	} from 'lucide-vue-next'
 	import Button from 'primevue/button'
+	import InternalCommentsPanel from '@/features/inbox/components/InternalCommentsPanel.vue'
 	import { useToast } from 'primevue/usetoast'
 	import { call, errorMessage, uploadFile } from '@/services/frappe'
 
@@ -21,7 +22,16 @@
 		folders: { type: Array, default: () => [] },
 	})
 
-	const emit = defineEmits(['status', 'refresh-summary', 'avatar-changed', 'folder'])
+	const emit = defineEmits([
+		'status',
+		'refresh-summary',
+		'avatar-changed',
+		'folder',
+		'comment-created',
+		'comment-updated',
+		'comment-deleted',
+		'comments-older',
+	])
 	const toast = useToast()
 	const avatarUploading = ref(false)
 	const teams = computed(() => {
@@ -161,6 +171,18 @@
 				<span v-if="!folders.length" class="empty-copy">No personal folders yet.</span>
 			</div>
 		</section>
+
+		<InternalCommentsPanel
+			:conversation="data.conversation?.name"
+			:comments="data.internal_comments || []"
+			:page="data.internal_comment_page || {}"
+			:current-user="data.current_user || ''"
+			:can-manage="canManage"
+			@created="$emit('comment-created', $event)"
+			@updated="$emit('comment-updated', $event)"
+			@deleted="$emit('comment-deleted', $event)"
+			@older="$emit('comments-older', $event)"
+		/>
 
 		<section class="ai-note">
 			<header>

@@ -24,6 +24,7 @@
 	import ContactMessageEditor from '@/features/inbox/components/ContactMessageEditor.vue'
 	import ConversationList from '@/features/inbox/components/ConversationList.vue'
 	import { filterAndRankConversations } from '@/features/inbox/utils/conversationSearch'
+	import { foldersMatch } from '@/features/inbox/utils/folderNavigation'
 	import InboxSidebarControls from '@/features/inbox/components/InboxSidebarControls.vue'
 	import InboxResizeHandle from '@/features/inbox/components/InboxResizeHandle.vue'
 	import MessageActionMenu from '@/features/inbox/components/MessageActionMenu.vue'
@@ -55,6 +56,11 @@
 	const team = ref(String(route.query.team || ''))
 	const folder = ref(String(route.query.folder || ''))
 	const folders = ref([])
+	const inboxNavigation = ref({
+		conversation_count: 0,
+		unread_count: 0,
+		unread_conversations: 0,
+	})
 	const folderDialog = ref(false)
 	const folderName = ref('')
 	const folderColor = ref('#22c55e')
@@ -138,6 +144,11 @@
 	let typingRefreshTimer = null
 	let messageSearchTimer = null
 	let conversationSearchTimer = null
+	let navigationRefreshTimer = null
+	let navigationIdleCallback = null
+	let unreadHydrationTimer = null
+	const pendingUnreadHydration = new Set()
+	const hydratedUnreadRows = new Set()
 	let presenceHeartbeatTimer = null
 	let presenceConversation = ''
 	const presenceClientId = browserPresenceId()
@@ -356,21 +367,26 @@
 		if (!silent) loading.value = true
 		listError.value = ''
 		try {
+			const includeUnread = listMode.value === 'unread'
 			const loaded = await call('frappe_whatsapp_core.inbox.conversation_page', {
 				limit: query ? 100 : 20,
 				team: team.value || null,
 				folder: folder.value || null,
 				search: query || null,
+				unread_only: listMode.value === 'unread' ? 1 : 0,
+				include_unread: includeUnread ? 1 : 0,
 			})
 			if (request !== listRequest) return
 			const currentUnread = new Map(
 				rows.value.map((row) => [row.name, Number(row.unread_count || 0)]),
 			)
-			rows.value = (loaded.rows || []).map((row) =>
-				clearedConversationBadges.has(row.name)
+			hydratedUnreadRows.clear()
+			rows.value = (loaded.rows || []).map((row) => {
+				if (includeUnread) hydratedUnreadRows.add(row.name)
+				return clearedConversationBadges.has(row.name)
 					? { ...row, unread_count: currentUnread.get(row.name) || 0 }
-					: row,
-			)
+					: row
+			})
 			conversationPage.value = loaded
 		} catch (error) {
 			if (request === listRequest)
@@ -385,6 +401,7 @@
 		loadingMoreRows.value = true
 		const request = listRequest
 		try {
+			const includeUnread = listMode.value === 'unread'
 			const loaded = await call('frappe_whatsapp_core.inbox.conversation_page', {
 				limit: search.value.trim() ? 100 : 20,
 				before: conversationPage.value.next_before,
@@ -392,10 +409,14 @@
 				team: team.value || null,
 				folder: folder.value || null,
 				search: search.value.trim() || null,
+				unread_only: listMode.value === 'unread' ? 1 : 0,
+				include_unread: includeUnread ? 1 : 0,
 			})
 			if (request !== listRequest) return
 			const known = new Set(rows.value.map((row) => row.name))
-			rows.value.push(...(loaded.rows || []).filter((row) => !known.has(row.name)))
+			const added = (loaded.rows || []).filter((row) => !known.has(row.name))
+			if (includeUnread) added.forEach((row) => hydratedUnreadRows.add(row.name))
+			rows.value.push(...added)
 			conversationPage.value = loaded
 		} catch (error) {
 			toast.add({
@@ -406,6 +427,38 @@
 			})
 		} finally {
 			loadingMoreRows.value = false
+		}
+	}
+
+	function queueUnreadHydration(names) {
+		for (const name of names || []) {
+			if (name && !hydratedUnreadRows.has(name)) pendingUnreadHydration.add(name)
+		}
+		window.clearTimeout(unreadHydrationTimer)
+		if (!pendingUnreadHydration.size) return
+		unreadHydrationTimer = window.setTimeout(hydrateUnreadCounts, 40)
+	}
+
+	async function hydrateUnreadCounts() {
+		const names = [...pendingUnreadHydration].slice(0, 100)
+		if (!names.length) return
+		for (const name of names) pendingUnreadHydration.delete(name)
+		try {
+			const counts = await call('frappe_whatsapp_core.inbox.conversation_unread_counts', {
+				conversations: names,
+			})
+			for (const name of names) {
+				const row = rows.value.find((item) => item.name === name)
+				if (!row) continue
+				if (!clearedConversationBadges.has(name))
+					row.unread_count = Number(counts?.[name] || 0)
+				hydratedUnreadRows.add(name)
+			}
+		} catch {
+			// Badge hydration is non-critical and retries when the row re-enters view.
+		} finally {
+			if (pendingUnreadHydration.size)
+				unreadHydrationTimer = window.setTimeout(hydrateUnreadCounts, 80)
 		}
 	}
 
@@ -893,6 +946,7 @@
 		const row = rows.value.find((item) => item.name === name)
 		if (row) row.unread_count = 0
 		clearedConversationBadges.add(name)
+		scheduleInboxNavigation()
 	}
 
 	function closeMobileConversation() {
@@ -1515,6 +1569,7 @@
 			return
 		}
 		if (!event?.conversation || !event.message) return
+		if (event.message.direction === 'Inbound') scheduleInboxNavigation()
 		const authoritativeRow = event.conversation_row
 			? upsertConversationRow(event.conversation_row)
 			: null
@@ -1558,12 +1613,16 @@
 		const matchesTeam =
 			!team.value ||
 			(row?.contact_teams || []).some((contactTeam) => contactTeam.name === team.value)
-		if (!matchesTeam || !folder.value) return matchesTeam
+		const matchesUnread = listMode.value !== 'unread' || Number(row?.unread_count || 0) > 0
+		if (!matchesTeam || !matchesUnread || !folder.value) return matchesTeam && matchesUnread
 		const selectedFolder = folders.value.find((item) => item.name === folder.value)
-		return (row?.contact_folders || []).some((contactFolder) =>
-			selectedFolder?.folder_type === 'Important' || folder.value === 'important'
-				? contactFolder.folder_type === 'Important'
-				: contactFolder.name === folder.value,
+		return (
+			matchesUnread &&
+			(row?.contact_folders || []).some((contactFolder) =>
+				selectedFolder?.folder_type === 'Important' || folder.value === 'important'
+					? contactFolder.folder_type === 'Important'
+					: contactFolder.name === folder.value,
+			)
 		)
 	}
 
@@ -1694,6 +1753,7 @@
 			return
 		}
 		if (event?.conversation_row) upsertConversationRow(event.conversation_row)
+		scheduleInboxNavigation()
 		if (event?.conversation !== selectedName.value || !detail.value || !event.user) return
 		const previous = (detail.value.readers || []).find((reader) => reader.user === event.user)
 		const staleCursor = previous && compareCursorPosition(event, previous) < 0
@@ -1732,6 +1792,47 @@
 		}
 	}
 
+	function upsertInternalComment(comment) {
+		if (!detail.value || comment?.conversation !== selectedName.value || !comment?.name) return
+		const comments = detail.value.internal_comments || []
+		const index = comments.findIndex((row) => row.name === comment.name)
+		if (index >= 0) comments.splice(index, 1, { ...comments[index], ...comment })
+		else comments.push(comment)
+		comments.sort(
+			(left, right) =>
+				String(left.creation || '').localeCompare(String(right.creation || '')) ||
+				String(left.name || '').localeCompare(String(right.name || '')),
+		)
+		detail.value.internal_comments = comments
+	}
+
+	function deleteInternalComment(name) {
+		if (!detail.value || !name) return
+		detail.value.internal_comments = (detail.value.internal_comments || []).filter(
+			(comment) => comment.name !== name,
+		)
+	}
+
+	function prependOlderComments(page) {
+		if (!detail.value) return
+		const known = new Set((detail.value.internal_comments || []).map((row) => row.name))
+		detail.value.internal_comments = [
+			...(page?.rows || []).filter((row) => !known.has(row.name)),
+			...(detail.value.internal_comments || []),
+		]
+		detail.value.internal_comment_page = {
+			has_more: Boolean(page?.has_more),
+			next_before: page?.next_before || null,
+			next_before_name: page?.next_before_name || null,
+		}
+	}
+
+	function applyInternalComment(event) {
+		if (event?.conversation !== selectedName.value || !detail.value) return
+		if (event.status === 'deleted') deleteInternalComment(event.comment?.name)
+		else upsertInternalComment(event.comment)
+	}
+
 	function mergeCommittedMessage(message, { allowAppend = true } = {}) {
 		if (!detail.value || !message || message.conversation !== selectedName.value) return
 		if (message.message_type === 'reaction') {
@@ -1758,6 +1859,7 @@
 
 	function refreshCommittedBatch(event) {
 		pendingBatchEvents.push(event || {})
+		scheduleInboxNavigation()
 		// Coalesce one bounded window without postponing refresh indefinitely
 		// while a high-volume account is receiving continuous events.
 		if (batchRefreshTimer !== null) return
@@ -1977,9 +2079,17 @@
 		}
 	}
 
-	async function loadFolders() {
+	async function loadFolders({ silent = false } = {}) {
 		try {
-			folders.value = await call('frappe_whatsapp_core.customer_workspace.contact_folders')
+			const navigation = await call(
+				'frappe_whatsapp_core.customer_workspace.inbox_navigation',
+			)
+			folders.value = navigation.folders || []
+			inboxNavigation.value = {
+				conversation_count: Number(navigation.conversation_count || 0),
+				unread_count: Number(navigation.unread_count || 0),
+				unread_conversations: Number(navigation.unread_conversations || 0),
+			}
 			if (
 				folder.value &&
 				folder.value !== 'important' &&
@@ -1988,13 +2098,31 @@
 				folder.value = ''
 			}
 		} catch (error) {
-			toast.add({
-				severity: 'warn',
-				summary: 'Personal folders unavailable',
-				detail: errorMessage(error),
-				life: 4000,
-			})
+			if (!silent)
+				toast.add({
+					severity: 'warn',
+					summary: 'Personal folders unavailable',
+					detail: errorMessage(error),
+					life: 4000,
+				})
 		}
+	}
+
+	function scheduleInboxNavigation() {
+		window.clearTimeout(navigationRefreshTimer)
+		if (navigationIdleCallback && 'cancelIdleCallback' in window)
+			window.cancelIdleCallback(navigationIdleCallback)
+		navigationRefreshTimer = window.setTimeout(() => {
+			const refresh = () => loadFolders({ silent: true })
+			if ('requestIdleCallback' in window)
+				navigationIdleCallback = window.requestIdleCallback(refresh, { timeout: 1200 })
+			else navigationIdleCallback = window.setTimeout(refresh, 0)
+		}, 320)
+	}
+
+	async function refreshInbox() {
+		await loadRows()
+		scheduleInboxNavigation()
 	}
 
 	async function createContactFolder() {
@@ -2005,7 +2133,12 @@
 				'frappe_whatsapp_core.customer_workspace.create_contact_folder',
 				{ folder_name: folderName.value, color: folderColor.value },
 			)
-			folders.value.push(created)
+			folders.value.push({
+				conversation_count: 0,
+				unread_count: 0,
+				unread_conversations: 0,
+				...created,
+			})
 			folderName.value = ''
 			folderDialog.value = false
 			toast.add({
@@ -2037,7 +2170,9 @@
 			const canonical =
 				result.folder_details ||
 				folders.value.find((item) => item.name === result.folder) ||
-				folders.value.find((item) => item.folder_type === selectedFolder.folder_type) ||
+				(selectedFolder.folder_type === 'Important'
+					? folders.value.find((item) => item.folder_type === 'Important')
+					: null) ||
 				selectedFolder
 			applyFolderMembership(identity, canonical, enabled)
 		} catch (error) {
@@ -2054,11 +2189,7 @@
 		if (!identity || !canonical?.name) return
 		let folderMatched = false
 		folders.value = folders.value.map((item) => {
-			if (
-				item.name !== canonical.name &&
-				(!canonical.folder_type || item.folder_type !== canonical.folder_type)
-			)
-				return item
+			if (!foldersMatch(item, canonical)) return item
 			folderMatched = true
 			return { ...item, ...canonical }
 		})
@@ -2066,16 +2197,14 @@
 		const apply = (target) => {
 			if (!target || target.remote_identity !== identity) return
 			const current = (target.contact_folders || []).filter(
-				(item) =>
-					item.name !== canonical.name && item.folder_type !== canonical.folder_type,
+				(item) => !foldersMatch(item, canonical),
 			)
 			target.contact_folders = enabled ? [...current, canonical] : current
 		}
 		rows.value.forEach(apply)
 		if (detail.value?.identity?.name === identity) {
 			const current = (detail.value.contact_folders || []).filter(
-				(item) =>
-					item.name !== canonical.name && item.folder_type !== canonical.folder_type,
+				(item) => !foldersMatch(item, canonical),
 			)
 			detail.value.contact_folders = enabled ? [...current, canonical] : current
 		}
@@ -2202,10 +2331,7 @@
 		window.clearTimeout(conversationSearchTimer)
 		conversationSearchTimer = window.setTimeout(() => loadRows({ silent: true }), 220)
 	})
-	watch(team, async () => {
-		await loadRows()
-	})
-	watch(folder, async () => {
+	watch([team, folder, listMode], async () => {
 		await loadRows()
 	})
 	watch(viewMode, (mode) => localStorage.setItem('whatsapp:conversation-view', mode))
@@ -2215,7 +2341,8 @@
 		window.addEventListener('blur', handleReadVisibilityChange)
 		document.addEventListener('visibilitychange', handleReadVisibilityChange)
 		document.addEventListener('visibilitychange', handlePresenceVisibilityChange)
-		await Promise.all([loadFolders(), loadRows()])
+		await loadRows()
+		scheduleInboxNavigation()
 		clearConversationBadge(selectedName.value)
 		if (selectedName.value) await loadDetail(selectedName.value)
 		enterConversationPresence(selectedName.value)
@@ -2230,6 +2357,7 @@
 			subscribe(site, 'whatsapp_core_contact', refreshDirectoryPresentations),
 			subscribe(site, 'whatsapp_core_team', refreshDirectoryPresentations),
 			subscribe(site, 'whatsapp_core_contact_folder', refreshContactFolders),
+			subscribe(site, 'whatsapp_core_internal_comment', applyInternalComment),
 			subscribeConnection(site, async (status) => {
 				if (status !== 'connected') return
 				if (!realtimeConnectedOnce) {
@@ -2253,6 +2381,11 @@
 		rememberMessageScroll()
 		clearTimeout(messageSearchTimer)
 		clearTimeout(conversationSearchTimer)
+		clearTimeout(navigationRefreshTimer)
+		clearTimeout(unreadHydrationTimer)
+		clearTimeout(navigationIdleCallback)
+		if (navigationIdleCallback && 'cancelIdleCallback' in window)
+			window.cancelIdleCallback(navigationIdleCallback)
 		leaveConversationPresence()
 		stopTypingSession()
 		window.clearTimeout(batchRefreshTimer)
@@ -2282,9 +2415,10 @@
 					v-model:team="team"
 					v-model:folder="folder"
 					:folders="folders"
+					:unread-conversations="inboxNavigation.unread_conversations"
 					:loading="loading"
 					:can-manage="canManage"
-					@refresh="loadRows"
+					@refresh="refreshInbox"
 					@new-chat="openNewChat"
 					@new-folder="folderDialog = true"
 				/>
@@ -2310,6 +2444,7 @@
 					@select="selectConversation"
 					@scroll-position="rememberListScroll"
 					@load-more="loadMoreRows"
+					@visible="queueUnreadHydration"
 				/>
 				<div v-if="loadingMoreRows" class="older-loading">Loading conversations…</div>
 			</aside>
@@ -2547,6 +2682,10 @@
 				@refresh-summary="refreshContactSummary"
 				@avatar-changed="refreshDirectoryPresentations"
 				@folder="setContactFolder"
+				@comment-created="upsertInternalComment"
+				@comment-updated="upsertInternalComment"
+				@comment-deleted="deleteInternalComment"
+				@comments-older="prependOlderComments"
 			/>
 		</section>
 
@@ -2822,7 +2961,7 @@
 	.list-panel {
 		min-height: 0;
 		display: grid;
-		grid-template-rows: auto auto auto minmax(0, 1fr);
+		grid-template-rows: auto auto auto auto minmax(0, 1fr);
 		overflow: hidden;
 		border-right: 1px solid var(--wa-border);
 	}

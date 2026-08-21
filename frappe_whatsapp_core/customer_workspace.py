@@ -71,7 +71,17 @@ def _important_folder(*, create: bool = False):
 @require_core_access()
 def contact_folders() -> list[dict]:
 	"""Return the current user's private folders and contact counts."""
-	user = frappe.session.user
+	return _folder_rows(frappe.session.user)
+
+
+@frappe.whitelist()
+@require_core_access()
+def inbox_navigation() -> dict:
+	"""Return Telegram-style inbox tabs with exact permission-scoped unread badges."""
+	return _inbox_navigation(frappe.session.user)
+
+
+def _folder_rows(user: str) -> list[dict]:
 	rows = frappe.db.sql(
 		"""
 		SELECT
@@ -105,6 +115,91 @@ def contact_folders() -> list[dict]:
 	for row in result:
 		row["contact_count"] = cint(row.get("contact_count"))
 	return result
+
+
+def _inbox_navigation(user: str) -> dict:
+	folders = _folder_rows(user)
+	conditions, values = conversation_conditions("conversation")
+	values["navigation_user"] = user
+	where = " AND ".join(conditions)
+	# Materialise the exact unread ledger once, then reuse its per-conversation
+	# projection for both the global and folder badges. The previous implementation
+	# repeated this expensive projection once for totals and again for folders.
+	conversation_rows = frappe.db.sql(
+		f"""
+		SELECT conversation.name, conversation.remote_identity
+		FROM `tabWhatsApp Core Conversation` AS conversation
+		WHERE {where}
+		""",
+		values,
+		as_dict=True,
+	)
+	unread_rows = frappe.db.sql(
+		f"""
+		SELECT message.conversation, COUNT(*) AS unread_count
+		FROM `tabWhatsApp Core Conversation` AS conversation
+		JOIN `tabWhatsApp Core Message` AS message
+			ON message.conversation = conversation.name
+		LEFT JOIN `tabWhatsApp Core Message Read` AS message_read
+			ON message_read.message = message.name
+			AND message_read.user = %(navigation_user)s
+		WHERE {where}
+			AND message.direction = 'Inbound'
+			AND message.message_type != 'reaction'
+			AND message_read.name IS NULL
+		GROUP BY message.conversation
+		""",
+		values,
+		as_dict=True,
+	)
+	unread_by_conversation = {row.conversation: cint(row.unread_count) for row in unread_rows}
+	items = frappe.db.sql(
+		"""
+		SELECT item.folder, item.identity
+		FROM `tabWhatsApp Core Contact Folder Item` AS item
+		JOIN `tabWhatsApp Core Contact Folder` AS folder
+			ON folder.name = item.folder AND folder.user = %(navigation_user)s
+		WHERE item.user = %(navigation_user)s
+		""",
+		{"navigation_user": user},
+		as_dict=True,
+	)
+	folders_by_identity: dict[str, set[str]] = {}
+	for item in items:
+		folders_by_identity.setdefault(item.identity, set()).add(item.folder)
+	count_by_folder = {
+		folder["name"]: {
+			"conversation_count": 0,
+			"unread_count": 0,
+			"unread_conversations": 0,
+		}
+		for folder in folders
+	}
+	total_unread = 0
+	total_unread_conversations = 0
+	for conversation in conversation_rows:
+		unread_count = unread_by_conversation.get(conversation.name, 0)
+		has_unread = int(unread_count > 0)
+		total_unread += unread_count
+		total_unread_conversations += has_unread
+		for folder_name in folders_by_identity.get(conversation.remote_identity, ()):
+			if folder_name not in count_by_folder:
+				continue
+			counts = count_by_folder[folder_name]
+			counts["conversation_count"] += 1
+			counts["unread_count"] += unread_count
+			counts["unread_conversations"] += has_unread
+	for folder in folders:
+		counts = count_by_folder.get(folder["name"]) or {}
+		folder["conversation_count"] = cint(counts.get("conversation_count"))
+		folder["unread_count"] = cint(counts.get("unread_count"))
+		folder["unread_conversations"] = cint(counts.get("unread_conversations"))
+	return {
+		"folders": folders,
+		"conversation_count": len(conversation_rows),
+		"unread_count": total_unread,
+		"unread_conversations": total_unread_conversations,
+	}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -201,16 +296,20 @@ def set_contact_folder(identity: str, folder: str, enabled=1) -> dict:
 		}).insert(ignore_permissions=True)
 	elif not cint(enabled) and item_name:
 		frappe.delete_doc("WhatsApp Core Contact Folder Item", item_name, ignore_permissions=True)
-	folder_details = {
-		"name": row.name,
-		"folder_name": row.folder_name,
-		"folder_type": row.folder_type,
-		"color": row.color,
-		"contact_count": frappe.db.count(
-			"WhatsApp Core Contact Folder Item",
-			{"folder": row.name, "user": frappe.session.user},
-		),
-	}
+	navigation = _inbox_navigation(frappe.session.user)
+	folder_details = next(
+		(folder for folder in navigation["folders"] if folder["name"] == row.name),
+		{
+			"name": row.name,
+			"folder_name": row.folder_name,
+			"folder_type": row.folder_type,
+			"color": row.color,
+			"contact_count": 0,
+			"conversation_count": 0,
+			"unread_count": 0,
+			"unread_conversations": 0,
+		},
+	)
 	conversation_names = frappe.get_list(
 		"WhatsApp Core Conversation",
 		filters={"remote_identity": identity},

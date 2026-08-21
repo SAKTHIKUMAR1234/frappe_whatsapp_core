@@ -13,8 +13,10 @@
 		Phone,
 		PhoneCall,
 		PhoneMissed,
+		RefreshCw,
 		Send,
 		ShieldCheck,
+		ShieldOff,
 	} from 'lucide-vue-next'
 	import AppDialog from '@/components/AppDialog.vue'
 	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
@@ -47,9 +49,25 @@
 	)
 	const visibleError = computed(() => {
 		if (localError.value) return localError.value
+		if (calling.workspace.available === false) return ''
 		if (!calling.error) return ''
 		return 'Calling is temporarily unavailable. Ask a WhatsApp Manager to check the Hub connection.'
 	})
+	const callingUnavailable = computed(
+		() => !calling.loading && calling.workspace.available === false,
+	)
+	const unavailableTitle = computed(() =>
+		calling.workspace.configured === false
+			? 'Connect WhatsApp Integration to use calling'
+			: 'WhatsApp calling is not available for this account',
+	)
+	const unavailableCopy = computed(
+		() =>
+			calling.error ||
+			(calling.workspace.configured === false
+				? 'Complete the Core-to-Hub connection first, then recheck availability.'
+				: 'Meta has not made calling available for this phone number. Recheck after permissions or account settings change.'),
+	)
 
 	function statusLabelFor(callRow) {
 		const value = String(callRow?.status || '').toLowerCase()
@@ -196,8 +214,28 @@
 		</div>
 		<div v-if="calling.notice" class="banner success-banner">{{ calling.notice }}</div>
 
+		<section v-if="callingUnavailable" class="surface-card availability-card" role="status">
+			<span class="availability-icon"><ShieldOff :size="25" /></span>
+			<div>
+				<strong>{{ unavailableTitle }}</strong>
+				<p>{{ unavailableCopy }}</p>
+				<small>
+					Availability is checked directly against Meta. Existing call history remains
+					below.
+				</small>
+			</div>
+			<Button
+				label="Recheck availability"
+				outlined
+				:loading="calling.loading"
+				@click="calling.load()"
+			>
+				<template #icon><RefreshCw :size="15" /></template>
+			</Button>
+		</section>
+
 		<section
-			v-if="!calling.callingEnabled && calling.workspace.available"
+			v-else-if="!calling.callingEnabled && calling.workspace.available"
 			class="surface-card activation-card"
 		>
 			<div class="feature-icon"><ShieldCheck :size="25" /></div>
@@ -218,7 +256,7 @@
 			<small v-else>Ask a WhatsApp Manager to enable calling once.</small>
 		</section>
 
-		<div class="calling-grid">
+		<div v-if="!callingUnavailable" class="calling-grid">
 			<section class="surface-card dialer-card">
 				<div class="section-heading">
 					<div class="feature-icon"><PhoneCall :size="23" /></div>
@@ -474,6 +512,32 @@
 		color: var(--wa-muted);
 		font-size: 12px;
 	}
+	.availability-card {
+		display: grid;
+		grid-template-columns: 46px minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 15px;
+		padding: 20px;
+		border-color: color-mix(in srgb, var(--wa-warning) 28%, var(--wa-border));
+		background: color-mix(in srgb, var(--wa-warning) 6%, var(--wa-surface));
+	}
+	.availability-icon {
+		display: grid;
+		place-items: center;
+		width: 46px;
+		height: 46px;
+		border-radius: 14px;
+		color: var(--wa-warning);
+		background: color-mix(in srgb, var(--wa-warning) 13%, transparent);
+	}
+	.availability-card p,
+	.availability-card small {
+		display: block;
+		margin: 4px 0 0;
+		color: var(--wa-muted);
+		font-size: 12px;
+		line-height: 1.5;
+	}
 	.feature-icon {
 		width: 42px;
 		height: 42px;
@@ -711,7 +775,11 @@
 		.activation-card {
 			grid-template-columns: 42px 1fr;
 		}
-		.activation-card > :last-child {
+		.availability-card {
+			grid-template-columns: 42px 1fr;
+		}
+		.activation-card > :last-child,
+		.availability-card > :last-child {
 			grid-column: 1 / -1;
 		}
 		.dialer-actions > * {

@@ -292,7 +292,7 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		self.assertIn("newChat.mode === 'template' && !newChat.template", inbox)
 		self.assertNotIn("Start and queue", inbox)
 
-	def test_reader_tooltip_uses_a_viewport_overlay_and_formatted_identity(self):
+	def test_reader_details_use_a_viewport_panel_and_formatted_identities(self):
 		bubble = (
 			Path(__file__).resolve().parents[2]
 			/ "core_ui"
@@ -304,9 +304,10 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		).read_text()
 		self.assertIn('<Teleport to="body">', bubble)
 		self.assertIn("formatDateTime(readAt, '')", bubble)
-		self.assertIn("reader-tooltip-overlay", bubble)
-		self.assertNotIn('data-tooltip="readerTooltip(reader)"', bubble)
-		self.assertNotIn(':title="readerTooltip(reader)"', bubble)
+		self.assertIn("reader-panel", bubble)
+		self.assertIn('role="dialog"', bubble)
+		self.assertIn("Waiting on", bubble)
+		self.assertNotIn("reader-tooltip-overlay", bubble)
 
 	def test_document_references_use_shared_link_components(self):
 		ui_root = Path(__file__).resolve().parents[2] / "core_ui" / "src"

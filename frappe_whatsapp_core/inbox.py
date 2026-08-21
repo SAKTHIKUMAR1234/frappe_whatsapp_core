@@ -7,6 +7,7 @@ import json
 import re
 
 import frappe
+from frappe.utils import cint
 
 from frappe_whatsapp_core.ai_summaries import attach_message_insights, get_identity_summary
 from frappe_whatsapp_core.contact_presentation import (
@@ -42,6 +43,8 @@ def conversations(
 	team: str | None = None,
 	folder: str | None = None,
 	search: str | None = None,
+	unread_only=0,
+	include_unread=1,
 ) -> list[dict]:
 	limit = max(1, min(int(limit), 500))
 	return _conversation_page(
@@ -50,6 +53,8 @@ def conversations(
 		team=team,
 		folder=folder,
 		search=search,
+		unread_only=unread_only,
+		include_unread=include_unread,
 	)[0]
 
 
@@ -63,6 +68,8 @@ def conversation_page(
 	team: str | None = None,
 	folder: str | None = None,
 	search: str | None = None,
+	unread_only=0,
+	include_unread=1,
 ) -> dict:
 	"""Return a stable cursor page for the virtualized conversation list."""
 	limit = max(1, min(int(limit or 20), 100))
@@ -74,6 +81,8 @@ def conversation_page(
 		team=team,
 		folder=folder,
 		search=search,
+		unread_only=unread_only,
+		include_unread=include_unread,
 	)
 	oldest = rows[-1] if has_more and rows else None
 	return {
@@ -93,8 +102,24 @@ def _conversation_page(
 	team: str | None = None,
 	folder: str | None = None,
 	search: str | None = None,
+	unread_only=0,
+	include_unread=1,
 ) -> tuple[list[dict], bool]:
 	conditions, values = conversation_conditions("conversation")
+	if cint(unread_only):
+		conditions.append(
+			"""EXISTS (
+				SELECT 1 FROM `tabWhatsApp Core Message` AS unread_filter_message
+				LEFT JOIN `tabWhatsApp Core Message Read` AS unread_filter_read
+					ON unread_filter_read.message = unread_filter_message.name
+					AND unread_filter_read.user = %(unread_filter_user)s
+				WHERE unread_filter_message.conversation = conversation.name
+					AND unread_filter_message.direction = 'Inbound'
+					AND unread_filter_message.message_type != 'reaction'
+					AND unread_filter_read.name IS NULL
+			)"""
+		)
+		values["unread_filter_user"] = frappe.session.user
 	_add_conversation_search(
 		conditions,
 		values,
@@ -187,7 +212,34 @@ def _conversation_page(
 	)
 	has_more = len(rows) > limit
 	rows = rows[:limit]
-	return _enrich_conversation_rows(rows), has_more
+	return _enrich_conversation_rows(rows, include_unread=bool(cint(include_unread))), has_more
+
+
+@frappe.whitelist()
+@require_core_access()
+def conversation_unread_counts(conversations) -> dict[str, int]:
+	"""Hydrate unread badges for a small, permission-scoped visible list window."""
+	if isinstance(conversations, str):
+		try:
+			conversations = json.loads(conversations)
+		except (TypeError, ValueError):
+			conversations = [conversations]
+	names = list(dict.fromkeys(str(name or "").strip() for name in (conversations or [])))
+	names = [name for name in names if name][:100]
+	if not names:
+		return {}
+	conditions, values = conversation_conditions("conversation")
+	conditions.append("conversation.name IN %(requested_conversations)s")
+	values["requested_conversations"] = tuple(names)
+	visible = frappe.db.sql(
+		f"""SELECT conversation.name
+		FROM `tabWhatsApp Core Conversation` AS conversation
+		WHERE {" AND ".join(conditions)}""",
+		values,
+		pluck=True,
+	)
+	counts = _unread_counts(visible) if visible else {}
+	return {name: cint(counts.get(name)) for name in visible}
 
 
 def _add_conversation_search(
@@ -521,9 +573,11 @@ def conversation(name: str, message_limit: int = 30) -> dict:
 	attach_message_reactions(messages, doc.name)
 	attach_message_readers(messages)
 	from frappe_whatsapp_core.customer_workspace import attach_read_coverage, folders_for_identities
+	from frappe_whatsapp_core.internal_comments import _comment_page
 
 	expected_readers = attach_read_coverage(messages, doc.name)
 	contact_folders = folders_for_identities([identity.name]).get(identity.name, [])
+	internal_comment_page = _comment_page(doc.name)
 	bookmarks = (
 		set(
 			frappe.get_all(
@@ -558,6 +612,11 @@ def conversation(name: str, message_limit: int = 30) -> dict:
 		"contact_summary": get_identity_summary(identity.name),
 		"readers": readers,
 		"expected_readers": expected_readers,
+		"current_user": frappe.session.user,
+		"internal_comments": internal_comment_page["rows"],
+		"internal_comment_page": {
+			key: value for key, value in internal_comment_page.items() if key != "rows"
+		},
 		"outbound": outbound_state(doc.name),
 		"templates": frappe.get_all(
 			"WhatsApp Core Template",

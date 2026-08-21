@@ -11,11 +11,22 @@ from frappe_whatsapp_core.conversation_presence import (
 from frappe_whatsapp_core.customer_workspace import (
 	attach_read_coverage,
 	create_contact_folder,
+	inbox_navigation,
 	operations_dashboard,
 	set_contact_folder,
 )
 from frappe_whatsapp_core.identity import contact_options
-from frappe_whatsapp_core.inbox import conversation_page, conversations
+from frappe_whatsapp_core.inbox import (
+	conversation_page,
+	conversation_unread_counts,
+	conversations,
+)
+from frappe_whatsapp_core.internal_comments import (
+	add_comment,
+	comment_page,
+	delete_comment,
+	update_comment,
+)
 from frappe_whatsapp_core.permissions import assert_call_access, assert_conversation_access
 from frappe_whatsapp_core.realtime import (
 	conversation_recipients,
@@ -152,6 +163,30 @@ class TestTeamContactAccess(FrappeTestCase):
 		self.assertIn(self.conversation.name, {row["name"] for row in rows})
 		self.assertNotIn(self.open_conversation.name, {row["name"] for row in rows})
 
+	def test_visible_rows_can_lazy_hydrate_permission_scoped_unread_counts(self):
+		frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": f"lazy-unread-{frappe.generate_hash(length=10).lower()}",
+			"provider_message_id": f"wamid.lazy-unread-{frappe.generate_hash(length=10).lower()}",
+			"conversation": self.conversation.name,
+			"channel": self.conversation.channel,
+			"remote_identity": self.identity.name,
+			"direction": "Inbound",
+			"message_type": "text",
+			"body": "Lazy unread badge",
+			"content": {"text": {"body": "Lazy unread badge"}},
+			"provider_timestamp": now_datetime(),
+			"delivery_status": "Received",
+		}).insert(ignore_permissions=True)
+		frappe.set_user(self.member)
+		page = conversation_page(limit=20, include_unread=0)
+		row = next(row for row in page["rows"] if row["name"] == self.conversation.name)
+		self.assertEqual(row["unread_count"], 0)
+		counts = conversation_unread_counts(
+			[self.conversation.name, self.open_conversation.name]
+		)
+		self.assertEqual(counts, {self.conversation.name: 1})
+
 	def test_manager_can_search_inbox_by_fuzzy_name_candidate(self):
 		self.identity.db_set("display_value", "Mohammed Anas")
 		rows = conversation_page(search="Mohamad Anas", limit=100)["rows"]
@@ -163,11 +198,29 @@ class TestTeamContactAccess(FrappeTestCase):
 		self.assertNotIn(self.open_conversation.name, {row["name"] for row in rows})
 
 	def test_private_folder_filters_only_the_current_users_visible_contacts(self):
+		frappe.set_user("Administrator")
+		frappe.get_doc({
+			"doctype": "WhatsApp Core Message",
+			"message_key": f"folder-unread-{frappe.generate_hash(length=10).lower()}",
+			"provider_message_id": f"wamid.folder-unread-{frappe.generate_hash(length=10).lower()}",
+			"conversation": self.conversation.name,
+			"channel": self.conversation.channel,
+			"remote_identity": self.identity.name,
+			"direction": "Inbound",
+			"message_type": "text",
+			"body": "Unread folder message",
+			"content": {"text": {"body": "Unread folder message"}},
+			"provider_timestamp": now_datetime(),
+			"delivery_status": "Received",
+		}).insert(ignore_permissions=True)
 		frappe.set_user(self.member)
 		folder = create_contact_folder("Priority customers", "#7c3aed")
 		with patch("frappe_whatsapp_core.customer_workspace.frappe.publish_realtime") as publish:
 			result = set_contact_folder(self.identity.name, folder["name"], enabled=1)
 		self.assertEqual(result["folder_details"]["contact_count"], 1)
+		self.assertEqual(result["folder_details"]["conversation_count"], 1)
+		self.assertEqual(result["folder_details"]["unread_conversations"], 1)
+		self.assertEqual(result["folder_details"]["unread_count"], 1)
 		self.assertEqual(result["folder_details"]["folder_name"], "Priority customers")
 		payload = publish.call_args.args[1]
 		self.assertEqual(payload["folder_details"]["name"], folder["name"])
@@ -175,6 +228,15 @@ class TestTeamContactAccess(FrappeTestCase):
 		rows = conversation_page(folder=folder["name"], limit=20)["rows"]
 		self.assertEqual({row["name"] for row in rows}, {self.conversation.name})
 		self.assertEqual(rows[0]["contact_folders"][0]["folder_name"], "Priority customers")
+		unread_rows = conversation_page(unread_only=1, limit=20)["rows"]
+		self.assertEqual({row["name"] for row in unread_rows}, {self.conversation.name})
+		navigation = inbox_navigation()
+		self.assertEqual(navigation["conversation_count"], 1)
+		self.assertEqual(navigation["unread_conversations"], 1)
+		self.assertEqual(navigation["unread_count"], 1)
+		priority = next(row for row in navigation["folders"] if row["name"] == folder["name"])
+		self.assertEqual(priority["conversation_count"], 1)
+		self.assertEqual(priority["unread_conversations"], 1)
 
 		frappe.set_user(self.outsider)
 		with self.assertRaises(frappe.DoesNotExistError):
@@ -229,6 +291,42 @@ class TestTeamContactAccess(FrappeTestCase):
 		self.assertIn(self.member, users)
 		self.assertNotIn(self.outsider, users)
 		self.assertTrue(all(not item.kwargs["after_commit"] for item in publish.call_args_list))
+
+	def test_internal_comments_are_team_only_editable_and_realtime_scoped(self):
+		frappe.set_user(self.member)
+		with patch("frappe_whatsapp_core.realtime.frappe.publish_realtime") as publish:
+			created = add_comment(self.conversation.name, "Customer requested a callback tomorrow.")
+
+		self.assertEqual(created["user"], self.member)
+		self.assertEqual(comment_page(self.conversation.name)["rows"][0]["name"], created["name"])
+		users = {item.kwargs.get("user") for item in publish.call_args_list}
+		self.assertIn(self.member, users)
+		self.assertNotIn(self.outsider, users)
+		self.assertTrue(
+			frappe.has_permission(
+				"WhatsApp Core Internal Comment",
+				"read",
+				doc=frappe.get_doc("WhatsApp Core Internal Comment", created["name"]),
+			)
+		)
+
+		updated = update_comment(created["name"], "Callback is confirmed for tomorrow.")
+		self.assertEqual(updated["content"], "Callback is confirmed for tomorrow.")
+
+		frappe.set_user(self.outsider)
+		with self.assertRaises(frappe.PermissionError):
+			comment_page(self.conversation.name)
+		with self.assertRaises(frappe.PermissionError):
+			update_comment(created["name"], "Out-of-scope edit")
+		self.assertNotIn(
+			created["name"],
+			frappe.get_list("WhatsApp Core Internal Comment", pluck="name"),
+		)
+
+		frappe.set_user("Administrator")
+		result = delete_comment(created["name"])
+		self.assertTrue(result["success"])
+		self.assertFalse(frappe.db.exists("WhatsApp Core Internal Comment", created["name"]))
 
 	def test_operator_presence_is_ephemeral_and_rejects_out_of_scope_users(self):
 		client_id = f"browser_{frappe.generate_hash(length=16)}"

@@ -1,13 +1,8 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
+import { redirectToFrappeLogin } from '@/utils/frappeLogin'
 
 const routes = [
-	{
-		path: '/login',
-		name: 'login',
-		component: () => import('@/views/LoginView.vue'),
-		meta: { public: true },
-	},
 	{
 		path: '/access-denied',
 		name: 'access-denied',
@@ -145,15 +140,14 @@ router.beforeEach(async (to) => {
 		try {
 			await session.fetchBoot()
 		} catch {
-			if (to.name !== 'login')
-				return { name: 'login', query: { redirect: to.fullPath, unavailable: '1' } }
+			redirectToFrappeLogin(to.fullPath)
+			return false
 		}
 	}
 	if (!to.meta.public && !session.authenticated) {
-		return { name: 'login', query: { redirect: to.fullPath } }
+		redirectToFrappeLogin(to.fullPath)
+		return false
 	}
-	if (to.name === 'login' && session.authenticated)
-		return { name: session.boot?.default_module || 'inbox' }
 	if (to.meta.module && !session.boot?.modules?.includes(to.meta.module)) {
 		return { name: session.boot?.default_module || 'inbox' }
 	}

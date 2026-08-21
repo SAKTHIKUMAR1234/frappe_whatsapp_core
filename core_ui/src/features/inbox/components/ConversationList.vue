@@ -11,7 +11,7 @@
 		restoreScroll: { type: Number, default: 0 },
 	})
 
-	const emit = defineEmits(['select', 'scroll-position', 'load-more'])
+	const emit = defineEmits(['select', 'scroll-position', 'load-more', 'visible'])
 	const list = ref(null)
 	const scrollTop = ref(0)
 	const viewportHeight = ref(600)
@@ -51,6 +51,16 @@
 		})),
 	)
 	const spacerHeight = computed(() => props.rows.length * itemHeight)
+
+	watch(
+		visibleRows,
+		(items) =>
+			emit(
+				'visible',
+				items.map((item) => item.row.name),
+			),
+		{ immediate: true },
+	)
 
 	function updateViewport() {
 		viewportHeight.value = Math.max(list.value?.clientHeight || 0, itemHeight)
