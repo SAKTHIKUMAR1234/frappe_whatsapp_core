@@ -95,6 +95,18 @@
 	const messageMenuPosition = ref({ x: 0, y: 0 })
 	const messageInfo = ref(null)
 	const messageInfoOpen = ref(false)
+	const messageInfoReaders = computed(() => {
+		const rows = (messageInfo.value?.read_by || []).filter((reader) => reader?.user)
+		return [...new Map(rows.map((reader) => [reader.user, reader])).values()]
+	})
+	const messageInfoReaderUsers = computed(
+		() => new Set(messageInfoReaders.value.map((reader) => reader.user)),
+	)
+	const messageInfoWaitingReaders = computed(() =>
+		(messageInfo.value?.read_coverage?.unread_by || []).filter(
+			(reader) => !messageInfoReaderUsers.value.has(reader.user),
+		),
+	)
 	const quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🙏']
 	const richDialog = ref(false)
 	const richDialogRef = ref(null)
@@ -2899,6 +2911,35 @@
 					<span>WhatsApp message ID</span>
 					<strong>{{ messageInfo.provider_message_id || 'Pending assignment' }}</strong>
 				</div>
+				<section class="message-info-readers">
+					<header>
+						<strong>Read by</strong>
+						<small>{{ messageInfoReaders.length }} team members</small>
+					</header>
+					<ul v-if="messageInfoReaders.length">
+						<li v-for="reader in messageInfoReaders" :key="reader.user">
+							<span>{{
+								reader.display_name || reader.full_name || 'Team member'
+							}}</span>
+							<small>{{ formatInfoTime(reader.read_at) }}</small>
+						</li>
+					</ul>
+					<p v-else>No team member has read this message yet.</p>
+				</section>
+				<section class="message-info-readers waiting">
+					<header>
+						<strong>Not read by</strong>
+						<small>{{ messageInfoWaitingReaders.length }} team members</small>
+					</header>
+					<ul v-if="messageInfoWaitingReaders.length">
+						<li v-for="reader in messageInfoWaitingReaders" :key="reader.user">
+							<span>{{
+								reader.display_name || reader.full_name || 'Team member'
+							}}</span>
+						</li>
+					</ul>
+					<p v-else>Everyone responsible for this conversation has read it.</p>
+				</section>
 			</div>
 			<template #footer>
 				<Button label="Close" @click="messageInfoOpen = false" />
@@ -3270,6 +3311,61 @@
 	}
 	.message-info-id {
 		grid-column: 1 / -1;
+	}
+	.message-info-grid > .message-info-readers {
+		grid-column: 1 / -1;
+		padding: 0;
+		overflow: hidden;
+	}
+	.message-info-readers header {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 10px;
+		padding: 10px 11px;
+		border-bottom: 1px solid var(--wa-border-soft);
+	}
+	.message-info-readers header strong,
+	.message-info-readers header small {
+		display: block;
+		margin: 0;
+	}
+	.message-info-readers header small,
+	.message-info-readers li small,
+	.message-info-readers p {
+		color: var(--wa-muted);
+		font-size: 11px;
+	}
+	.message-info-readers ul {
+		max-height: 170px;
+		margin: 0;
+		padding: 0;
+		overflow-y: auto;
+		list-style: none;
+	}
+	.message-info-readers li {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		padding: 8px 11px;
+		border-bottom: 1px solid var(--wa-border-soft);
+	}
+	.message-info-readers li:last-child {
+		border-bottom: 0;
+	}
+	.message-info-readers li span {
+		min-width: 0;
+		margin: 0;
+		overflow: hidden;
+		color: var(--wa-text);
+		font-size: 12px;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.message-info-readers p {
+		margin: 0;
+		padding: 11px;
 	}
 	@media (max-width: 1120px) {
 		.inbox-workbench.context-open {

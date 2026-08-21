@@ -189,7 +189,7 @@
 		return [...groups.values()]
 	})
 	const readCoverage = computed(() => props.message.read_coverage || {})
-	const exactReaders = computed(() => {
+	const cursorReaders = computed(() => {
 		// Message.read_by is the durable audit ledger: once an operator reads a
 		// message they remain in that ledger forever. Rendering it here put a
 		// reader badge under every historical message. `readers` is deliberately
@@ -198,15 +198,24 @@
 		const rows = props.readers.filter((reader) => reader?.user)
 		return [...new Map(rows.map((reader) => [reader.user, reader])).values()]
 	})
-	const exactReaderUsers = computed(
-		() => new Set(exactReaders.value.map((reader) => reader.user)),
+	const messageReaders = computed(() => {
+		// The detail panel answers the exact per-message audit question. Include
+		// the optimistic cursor rows as well so a just-read message never appears
+		// under both Read by and Waiting on while its save event is in flight.
+		const rows = [...(props.message.read_by || []), ...cursorReaders.value].filter(
+			(reader) => reader?.user,
+		)
+		return [...new Map(rows.map((reader) => [reader.user, reader])).values()]
+	})
+	const messageReaderUsers = computed(
+		() => new Set(messageReaders.value.map((reader) => reader.user)),
 	)
 	const waitingReaders = computed(() =>
 		(readCoverage.value.unread_by || []).filter(
-			(reader) => !exactReaderUsers.value.has(reader.user),
+			(reader) => !messageReaderUsers.value.has(reader.user),
 		),
 	)
-	const visibleReaderAvatars = computed(() => exactReaders.value.slice(0, 2))
+	const visibleReaderAvatars = computed(() => cursorReaders.value.slice(0, 2))
 
 	function readerInitials(reader) {
 		const label = String(reader.display_name || reader.full_name || 'Team member').trim()
@@ -463,7 +472,7 @@
 				<component :is="statusIcon(message.delivery_status)" :size="13" />
 			</span>
 		</footer>
-		<div v-if="exactReaders.length" class="message-readers" @pointerdown.stop>
+		<div v-if="cursorReaders.length" class="message-readers" @pointerdown.stop>
 			<Button
 				ref="readerTriggerRef"
 				unstyled
@@ -483,7 +492,7 @@
 					</span>
 				</span>
 				<span :class="['read-coverage', { complete: readCoverage.complete }]">
-					<CheckCheck :size="11" />Seen by {{ exactReaders.length }}
+					<CheckCheck :size="11" />Seen by {{ cursorReaders.length }}
 				</span>
 			</Button>
 		</div>
@@ -503,8 +512,8 @@
 			@pointerdown.stop
 		>
 			<strong>Read by</strong>
-			<ul v-if="exactReaders.length">
-				<li v-for="reader in exactReaders" :key="reader.user">
+			<ul v-if="messageReaders.length">
+				<li v-for="reader in messageReaders" :key="reader.user">
 					<span class="reader-avatar">
 						<img v-if="reader.user_image" :src="reader.user_image" alt="" />
 						<em v-else>{{ readerInitials(reader) }}</em>
