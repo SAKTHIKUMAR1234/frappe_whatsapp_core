@@ -2487,10 +2487,13 @@
 						:teams="detailTeams"
 						:status="detail.conversation.status"
 						:viewers="conversationViewers"
+						:folders="folders"
+						:contact-folders="detail.contact_folders || []"
 						:context-open="contextOpen"
 						:view-mode="viewMode"
 						@back="closeMobileConversation"
 						@search="toggleMessageSearch"
+						@folder="setContactFolder"
 						@toggle-context="contextOpen = !contextOpen"
 						@update:view-mode="viewMode = $event"
 					/>

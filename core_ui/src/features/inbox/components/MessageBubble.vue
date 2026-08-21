@@ -189,27 +189,23 @@
 		return [...groups.values()]
 	})
 	const readCoverage = computed(() => props.message.read_coverage || {})
-	const hasReadCoverage = computed(() => Number(readCoverage.value.expected || 0) > 0)
-	const readCoverageLabel = computed(() => {
-		if (!hasReadCoverage.value) return ''
-		if (readCoverage.value.complete) return 'Read by team'
-		return `${Number(readCoverage.value.read || 0)}/${Number(readCoverage.value.expected)} read`
-	})
-	const readCoverageTooltip = computed(() => {
-		if (readCoverage.value.complete)
-			return 'Every responsible team member has read this message'
-		const names = (readCoverage.value.unread_by || [])
-			.map((reader) => reader.display_name || reader.user)
-			.filter(Boolean)
-		return names.length ? `Still unread by ${names.join(', ')}` : readCoverageLabel.value
-	})
 	const exactReaders = computed(() => {
-		const rows = [...(props.message.read_by || []), ...props.readers].filter(
-			(reader) => reader?.user,
-		)
+		// Message.read_by is the durable audit ledger: once an operator reads a
+		// message they remain in that ledger forever. Rendering it here put a
+		// reader badge under every historical message. `readers` is deliberately
+		// supplied by InboxView from each operator's latest conversation cursor,
+		// so one operator is rendered below one message only.
+		const rows = props.readers.filter((reader) => reader?.user)
 		return [...new Map(rows.map((reader) => [reader.user, reader])).values()]
 	})
-	const waitingReaders = computed(() => readCoverage.value.unread_by || [])
+	const exactReaderUsers = computed(
+		() => new Set(exactReaders.value.map((reader) => reader.user)),
+	)
+	const waitingReaders = computed(() =>
+		(readCoverage.value.unread_by || []).filter(
+			(reader) => !exactReaderUsers.value.has(reader.user),
+		),
+	)
 	const visibleReaderAvatars = computed(() => exactReaders.value.slice(0, 2))
 
 	function readerInitials(reader) {
@@ -235,7 +231,6 @@
 		document.removeEventListener('pointerdown', handleReaderPanelPointer)
 		document.removeEventListener('keydown', handleReaderPanelKey)
 		window.removeEventListener('resize', closeReaderPanel)
-		window.removeEventListener('scroll', closeReaderPanel, true)
 	}
 
 	function toggleReaderPanel(event) {
@@ -262,7 +257,6 @@
 		document.addEventListener('pointerdown', handleReaderPanelPointer)
 		document.addEventListener('keydown', handleReaderPanelKey)
 		window.addEventListener('resize', closeReaderPanel)
-		window.addEventListener('scroll', closeReaderPanel, true)
 	}
 
 	function handleReaderPanelPointer(event) {
@@ -469,16 +463,11 @@
 				<component :is="statusIcon(message.delivery_status)" :size="13" />
 			</span>
 		</footer>
-		<div
-			v-if="exactReaders.length || hasReadCoverage"
-			class="message-readers"
-			@pointerdown.stop
-		>
+		<div v-if="exactReaders.length" class="message-readers" @pointerdown.stop>
 			<Button
 				ref="readerTriggerRef"
 				unstyled
 				class="reader-summary"
-				:title="readCoverageTooltip"
 				aria-label="Open team read details"
 				:aria-expanded="readerPanelOpen"
 				@click.stop="toggleReaderPanel"
@@ -494,9 +483,7 @@
 					</span>
 				</span>
 				<span :class="['read-coverage', { complete: readCoverage.complete }]">
-					<CheckCheck :size="11" />{{
-						readCoverageLabel || `${exactReaders.length} read`
-					}}
+					<CheckCheck :size="11" />Seen by {{ exactReaders.length }}
 				</span>
 			</Button>
 		</div>
@@ -513,6 +500,7 @@
 			}"
 			role="dialog"
 			aria-label="Team read details"
+			@pointerdown.stop
 		>
 			<strong>Read by</strong>
 			<ul v-if="exactReaders.length">

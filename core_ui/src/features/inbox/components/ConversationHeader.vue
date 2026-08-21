@@ -1,7 +1,18 @@
 <script setup>
-	import { computed } from 'vue'
+	import { computed, ref } from 'vue'
 	import Button from 'primevue/button'
-	import { ChevronLeft, MessagesSquare, PanelRight, Search, Sparkles } from 'lucide-vue-next'
+	import Popover from 'primevue/popover'
+	import {
+		Check,
+		ChevronLeft,
+		Folder,
+		FolderPlus,
+		MessagesSquare,
+		PanelRight,
+		Search,
+		Sparkles,
+		Star,
+	} from 'lucide-vue-next'
 
 	const props = defineProps({
 		displayName: { type: String, default: '' },
@@ -10,11 +21,25 @@
 		teams: { type: Array, default: () => [] },
 		status: { type: String, default: '' },
 		viewers: { type: Array, default: () => [] },
+		folders: { type: Array, default: () => [] },
+		contactFolders: { type: Array, default: () => [] },
 		contextOpen: { type: Boolean, default: false },
 		viewMode: { type: String, default: 'chat' },
 	})
 
-	defineEmits(['back', 'search', 'toggle-context', 'update:view-mode'])
+	const emit = defineEmits(['back', 'search', 'folder', 'toggle-context', 'update:view-mode'])
+	const folderPopover = ref(null)
+	const selectedFolders = computed(
+		() => new Set(props.contactFolders.map((folder) => folder.name)),
+	)
+
+	function toggleFolderPicker(event) {
+		folderPopover.value?.toggle(event)
+	}
+
+	function toggleFolder(folder) {
+		emit('folder', { folder, enabled: !selectedFolders.value.has(folder.name) })
+	}
 
 	function initials() {
 		return (props.displayName || 'WA').slice(0, 2).toUpperCase()
@@ -87,6 +112,19 @@
 				>
 			</div>
 			<span class="conversation-status">{{ status }}</span>
+			<Button
+				text
+				rounded
+				:aria-label="
+					selectedFolders.size
+						? `Manage folders (${selectedFolders.size} selected)`
+						: 'Add this chat to a folder'
+				"
+				aria-haspopup="dialog"
+				@click="toggleFolderPicker"
+			>
+				<FolderPlus :size="17" />
+			</Button>
 			<Button text rounded aria-label="Search this conversation" @click="$emit('search')">
 				<Search :size="17" />
 			</Button>
@@ -101,6 +139,30 @@
 				<PanelRight :size="17" />
 			</Button>
 		</div>
+		<Popover ref="folderPopover" class="conversation-folder-popover">
+			<div class="folder-picker" aria-label="Add chat to folders">
+				<header>
+					<strong>My folders</strong>
+					<small>Select where this chat should appear.</small>
+				</header>
+				<Button
+					v-for="folder in folders"
+					:key="folder.name"
+					unstyled
+					:class="['folder-option', { selected: selectedFolders.has(folder.name) }]"
+					:aria-pressed="selectedFolders.has(folder.name)"
+					@click="toggleFolder(folder)"
+				>
+					<Star v-if="folder.folder_type === 'Important'" :size="15" />
+					<Folder v-else :size="15" :style="{ color: folder.color || undefined }" />
+					<span>{{ folder.folder_name }}</span>
+					<Check v-if="selectedFolders.has(folder.name)" :size="15" />
+				</Button>
+				<p v-if="!folders.length">
+					Create a folder from the <strong>New</strong> button above the chat list first.
+				</p>
+			</div>
+		</Popover>
 	</header>
 </template>
 
@@ -226,6 +288,66 @@
 		display: flex;
 		align-items: center;
 		gap: 6px;
+	}
+	:global(.conversation-folder-popover.p-popover) {
+		border: 1px solid var(--wa-border);
+		background: var(--wa-surface);
+		box-shadow: 0 14px 36px rgba(11, 20, 26, 0.2);
+	}
+	:global(.conversation-folder-popover .p-popover-content) {
+		padding: 0;
+	}
+	.folder-picker {
+		width: min(270px, calc(100vw - 28px));
+		max-height: 330px;
+		display: grid;
+		gap: 4px;
+		padding: 8px;
+		overflow-y: auto;
+		color: var(--wa-text);
+	}
+	.folder-picker header {
+		display: grid;
+		gap: 3px;
+		padding: 6px 7px 8px;
+	}
+	.folder-picker header small,
+	.folder-picker p {
+		color: var(--wa-muted);
+		font-size: 11px;
+	}
+	.folder-picker p {
+		margin: 0;
+		padding: 9px;
+		line-height: 1.45;
+	}
+	.folder-option {
+		min-height: 38px;
+		display: grid;
+		grid-template-columns: 20px minmax(0, 1fr) 20px;
+		align-items: center;
+		gap: 7px;
+		padding: 7px 9px;
+		border: 0;
+		border-radius: 8px;
+		color: var(--wa-text);
+		background: transparent;
+		font: inherit;
+		font-size: 12px;
+		text-align: left;
+		cursor: pointer;
+	}
+	.folder-option:hover,
+	.folder-option.selected {
+		background: var(--wa-surface-muted);
+	}
+	.folder-option.selected {
+		color: var(--wa-primary);
+	}
+	.folder-option span {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.view-switch {
 		display: inline-flex;
