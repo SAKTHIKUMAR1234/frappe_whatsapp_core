@@ -2907,10 +2907,6 @@
 						messageInfo.sender_name || messageInfo.owner || 'Team member'
 					}}</strong>
 				</div>
-				<div class="message-info-id">
-					<span>WhatsApp message ID</span>
-					<strong>{{ messageInfo.provider_message_id || 'Pending assignment' }}</strong>
-				</div>
 				<section class="message-info-readers">
 					<header>
 						<strong>Read by</strong>
@@ -3309,9 +3305,6 @@
 		overflow-wrap: anywhere;
 		font-size: 13px;
 	}
-	.message-info-id {
-		grid-column: 1 / -1;
-	}
 	.message-info-grid > .message-info-readers {
 		grid-column: 1 / -1;
 		padding: 0;
@@ -3413,9 +3406,6 @@
 		.message-info-grid {
 			width: 100%;
 			grid-template-columns: 1fr;
-		}
-		.message-info-id {
-			grid-column: auto;
 		}
 	}
 	@keyframes mobile-chat-in {
