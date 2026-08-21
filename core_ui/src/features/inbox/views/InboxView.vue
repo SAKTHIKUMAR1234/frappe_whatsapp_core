@@ -7,12 +7,20 @@
 	import Select from 'primevue/select'
 	import Skeleton from 'primevue/skeleton'
 	import { useToast } from 'primevue/usetoast'
-	import { MessageSquarePlus, ArrowDown, Search, ShieldAlert, X } from 'lucide-vue-next'
+	import {
+		MessageSquarePlus,
+		ArrowDown,
+		FolderPlus,
+		Search,
+		ShieldAlert,
+		X,
+	} from 'lucide-vue-next'
 
 	import ConversationHeader from '@/features/inbox/components/ConversationHeader.vue'
 	import CallTimelineEvent from '@/features/inbox/components/CallTimelineEvent.vue'
 	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
 	import ConversationContext from '@/features/inbox/components/ConversationContext.vue'
+	import ConversationSummaryPanel from '@/features/inbox/components/ConversationSummaryPanel.vue'
 	import ContactMessageEditor from '@/features/inbox/components/ContactMessageEditor.vue'
 	import ConversationList from '@/features/inbox/components/ConversationList.vue'
 	import { filterAndRankConversations } from '@/features/inbox/utils/conversationSearch'
@@ -44,7 +52,13 @@
 	const richSending = ref(false)
 	const search = ref('')
 	const listMode = ref('all')
-	const team = ref('')
+	const team = ref(String(route.query.team || ''))
+	const folder = ref(String(route.query.folder || ''))
+	const folders = ref([])
+	const folderDialog = ref(false)
+	const folderName = ref('')
+	const folderColor = ref('#22c55e')
+	const savingFolder = ref(false)
 	const rows = ref([])
 	const conversationViewers = ref([])
 	const conversationPage = ref({ has_more: false })
@@ -60,6 +74,8 @@
 		return [...new Map(values.filter(Boolean).map((item) => [item.name, item])).values()]
 	})
 	const contextOpen = ref(false)
+	const viewMode = ref(localStorage.getItem('whatsapp:conversation-view') || 'chat')
+	const summaryRefreshing = ref(false)
 	const messagePage = ref({ has_more: false, has_more_newer: false })
 	const loadingNewer = ref(false)
 	const messageSearchOpen = ref(false)
@@ -343,6 +359,7 @@
 			const loaded = await call('frappe_whatsapp_core.inbox.conversation_page', {
 				limit: query ? 100 : 20,
 				team: team.value || null,
+				folder: folder.value || null,
 				search: query || null,
 			})
 			if (request !== listRequest) return
@@ -373,6 +390,7 @@
 				before: conversationPage.value.next_before,
 				before_name: conversationPage.value.next_before_name,
 				team: team.value || null,
+				folder: folder.value || null,
 				search: search.value.trim() || null,
 			})
 			if (request !== listRequest) return
@@ -1536,9 +1554,17 @@
 		}
 	}
 
-	function conversationMatchesTeam(row) {
-		if (!team.value) return true
-		return (row?.contact_teams || []).some((contactTeam) => contactTeam.name === team.value)
+	function conversationMatchesFilters(row) {
+		const matchesTeam =
+			!team.value ||
+			(row?.contact_teams || []).some((contactTeam) => contactTeam.name === team.value)
+		if (!matchesTeam || !folder.value) return matchesTeam
+		const selectedFolder = folders.value.find((item) => item.name === folder.value)
+		return (row?.contact_folders || []).some((contactFolder) =>
+			selectedFolder?.folder_type === 'Important' || folder.value === 'important'
+				? contactFolder.folder_type === 'Important'
+				: contactFolder.name === folder.value,
+		)
 	}
 
 	function sortConversationRows() {
@@ -1553,7 +1579,7 @@
 	function upsertConversationRow(incoming) {
 		if (!incoming?.name) return null
 		const existing = rows.value.find((row) => row.name === incoming.name)
-		if (!conversationMatchesTeam(incoming)) {
+		if (!conversationMatchesFilters(incoming)) {
 			if (existing) rows.value = rows.value.filter((row) => row.name !== incoming.name)
 			return null
 		}
@@ -1931,6 +1957,7 @@
 	async function refreshContactSummary() {
 		const identity = detail.value?.identity?.name
 		if (!identity) return
+		summaryRefreshing.value = true
 		try {
 			const summary = await call('frappe_whatsapp_core.frontend_api.contact_summary', {
 				identity,
@@ -1945,7 +1972,155 @@
 				detail: errorMessage(error, 'Unable to refresh the contact summary.'),
 				life: 5000,
 			})
+		} finally {
+			summaryRefreshing.value = false
 		}
+	}
+
+	async function loadFolders() {
+		try {
+			folders.value = await call('frappe_whatsapp_core.customer_workspace.contact_folders')
+			if (
+				folder.value &&
+				folder.value !== 'important' &&
+				!folders.value.some((item) => item.name === folder.value)
+			) {
+				folder.value = ''
+			}
+		} catch (error) {
+			toast.add({
+				severity: 'warn',
+				summary: 'Personal folders unavailable',
+				detail: errorMessage(error),
+				life: 4000,
+			})
+		}
+	}
+
+	async function createContactFolder() {
+		if (!folderName.value.trim()) return
+		savingFolder.value = true
+		try {
+			const created = await call(
+				'frappe_whatsapp_core.customer_workspace.create_contact_folder',
+				{ folder_name: folderName.value, color: folderColor.value },
+			)
+			folders.value.push(created)
+			folderName.value = ''
+			folderDialog.value = false
+			toast.add({
+				severity: 'success',
+				summary: 'Contact folder created',
+				detail: 'Open a customer and add it from My folders.',
+				life: 3500,
+			})
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Folder not created',
+				detail: errorMessage(error),
+				life: 4500,
+			})
+		} finally {
+			savingFolder.value = false
+		}
+	}
+
+	async function setContactFolder({ folder: selectedFolder, enabled }) {
+		const identity = detail.value?.identity?.name
+		if (!identity || !selectedFolder?.name) return
+		try {
+			const result = await call(
+				'frappe_whatsapp_core.customer_workspace.set_contact_folder',
+				{ identity, folder: selectedFolder.name, enabled: enabled ? 1 : 0 },
+			)
+			const canonical =
+				result.folder_details ||
+				folders.value.find((item) => item.name === result.folder) ||
+				folders.value.find((item) => item.folder_type === selectedFolder.folder_type) ||
+				selectedFolder
+			applyFolderMembership(identity, canonical, enabled)
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Folder not updated',
+				detail: errorMessage(error),
+				life: 4500,
+			})
+		}
+	}
+
+	function applyFolderMembership(identity, canonical, enabled) {
+		if (!identity || !canonical?.name) return
+		let folderMatched = false
+		folders.value = folders.value.map((item) => {
+			if (
+				item.name !== canonical.name &&
+				(!canonical.folder_type || item.folder_type !== canonical.folder_type)
+			)
+				return item
+			folderMatched = true
+			return { ...item, ...canonical }
+		})
+		if (!folderMatched) folders.value.push(canonical)
+		const apply = (target) => {
+			if (!target || target.remote_identity !== identity) return
+			const current = (target.contact_folders || []).filter(
+				(item) =>
+					item.name !== canonical.name && item.folder_type !== canonical.folder_type,
+			)
+			target.contact_folders = enabled ? [...current, canonical] : current
+		}
+		rows.value.forEach(apply)
+		if (detail.value?.identity?.name === identity) {
+			const current = (detail.value.contact_folders || []).filter(
+				(item) =>
+					item.name !== canonical.name && item.folder_type !== canonical.folder_type,
+			)
+			detail.value.contact_folders = enabled ? [...current, canonical] : current
+		}
+		if (folder.value && !enabled)
+			rows.value = rows.value.filter((row) => conversationMatchesFilters(row))
+	}
+
+	async function refreshContactFolders(event) {
+		if (event?.identity && event?.folder_details) {
+			applyFolderMembership(event.identity, event.folder_details, Boolean(event.enabled))
+			if (event.enabled && folder.value) {
+				const matchesActiveFolder =
+					folder.value === event.folder_details.name ||
+					(folder.value === 'important' &&
+						event.folder_details.folder_type === 'Important')
+				if (matchesActiveFolder) {
+					await Promise.all(
+						(event.conversations || [])
+							.filter(
+								(conversation) =>
+									!rows.value.some((row) => row.name === conversation),
+							)
+							.map((conversation) => hydrateConversationRow(conversation)),
+					)
+				}
+			}
+			return
+		}
+		await loadFolders()
+		if (!event?.identity) return
+		const affected = rows.value.filter((row) => row.remote_identity === event.identity)
+		let updatedFolders = null
+		for (const row of affected) {
+			try {
+				const updated = await call('frappe_whatsapp_core.inbox.conversation_summary', {
+					name: row.name,
+				})
+				updatedFolders = updated?.contact_folders || updatedFolders
+				upsertConversationRow(updated)
+			} catch {
+				// Access can change between the notification and this targeted refresh.
+			}
+		}
+		if (detail.value?.identity?.name === event.identity)
+			detail.value.contact_folders = updatedFolders || detail.value.contact_folders || []
 	}
 
 	async function scrollToBottom(smooth = false) {
@@ -2030,13 +2205,17 @@
 	watch(team, async () => {
 		await loadRows()
 	})
+	watch(folder, async () => {
+		await loadRows()
+	})
+	watch(viewMode, (mode) => localStorage.setItem('whatsapp:conversation-view', mode))
 	onMounted(async () => {
 		window.addEventListener('keydown', handleGlobalKeydown)
 		window.addEventListener('focus', handleReadVisibilityChange)
 		window.addEventListener('blur', handleReadVisibilityChange)
 		document.addEventListener('visibilitychange', handleReadVisibilityChange)
 		document.addEventListener('visibilitychange', handlePresenceVisibilityChange)
-		await loadRows()
+		await Promise.all([loadFolders(), loadRows()])
 		clearConversationBadge(selectedName.value)
 		if (selectedName.value) await loadDetail(selectedName.value)
 		enterConversationPresence(selectedName.value)
@@ -2050,6 +2229,7 @@
 			subscribe(site, 'whatsapp_core_batch_committed', refreshCommittedBatch),
 			subscribe(site, 'whatsapp_core_contact', refreshDirectoryPresentations),
 			subscribe(site, 'whatsapp_core_team', refreshDirectoryPresentations),
+			subscribe(site, 'whatsapp_core_contact_folder', refreshContactFolders),
 			subscribeConnection(site, async (status) => {
 				if (status !== 'connected') return
 				if (!realtimeConnectedOnce) {
@@ -2100,10 +2280,13 @@
 					v-model:search="search"
 					v-model:mode="listMode"
 					v-model:team="team"
+					v-model:folder="folder"
+					:folders="folders"
 					:loading="loading"
 					:can-manage="canManage"
 					@refresh="loadRows"
 					@new-chat="openNewChat"
+					@new-folder="folderDialog = true"
 				/>
 				<div v-if="loading" class="list-skeleton" aria-label="Loading conversations">
 					<div v-for="index in 7" :key="index" class="conversation-skeleton">
@@ -2170,170 +2353,188 @@
 						:status="detail.conversation.status"
 						:viewers="conversationViewers"
 						:context-open="contextOpen"
+						:view-mode="viewMode"
 						@back="closeMobileConversation"
 						@search="toggleMessageSearch"
 						@toggle-context="contextOpen = !contextOpen"
+						@update:view-mode="viewMode = $event"
 					/>
-					<div v-if="messageSearchOpen" class="message-search-bar">
-						<Search :size="15" />
-						<InputText
-							ref="messageSearchInput"
-							v-model="messageSearch"
-							placeholder="Search messages in this conversation"
-						/>
-						<Button
-							text
-							rounded
-							aria-label="Close message search"
-							@click="closeMessageSearch"
-						>
-							<X :size="15" />
-						</Button>
-					</div>
-					<MessageStreamViewport ref="stream" @scroll="handleStreamScroll">
-						<div v-if="messageSearch.trim()" class="search-results">
-							<div v-if="messageSearching" class="older-loading">Searching…</div>
-							<div v-else-if="!messageSearchRows.length" class="search-empty">
-								No matching messages
-							</div>
-							<MessageBubble
-								v-for="message in messageSearchRows"
-								:key="message.name"
-								:message="message"
-								:message-index="providerMessageMap"
-								:contact-name="detail.display_name"
-								:readers="readersByMessage.get(message.name) || []"
-								@reply="selectReply"
-								@quote="openQuotedMessage"
-								@retry="retryMessage"
-								@menu="openMessageMenu"
+					<ConversationSummaryPanel
+						v-if="viewMode === 'summary'"
+						:data="detail"
+						:can-manage="canManage"
+						:loading="summaryRefreshing"
+						@refresh="refreshContactSummary"
+					/>
+					<template v-else>
+						<div v-if="messageSearchOpen" class="message-search-bar">
+							<Search :size="15" />
+							<InputText
+								ref="messageSearchInput"
+								v-model="messageSearch"
+								placeholder="Search messages in this conversation"
 							/>
-						</div>
-						<template v-else>
-							<div v-if="loadingOlder" class="older-loading">
-								Loading older messages…
-							</div>
 							<Button
-								v-else-if="messagePage.has_more"
-								class="older-loading older-button"
-								unstyled
-								@click="loadOlderMessages"
+								text
+								rounded
+								aria-label="Close message search"
+								@click="closeMessageSearch"
 							>
-								Load older messages
+								<X :size="15" />
 							</Button>
-							<details v-for="topic in topics" :key="topic.name" class="topic-group">
-								<summary>
-									<span>
-										<small>{{ topic.category || 'AI topic' }}</small>
-										<strong>{{ topic.title }}</strong>
-										<p>
-											{{
-												topic.summary || 'Open to review grouped messages.'
-											}}
-										</p>
-									</span>
-									<em>{{ topic.message_count }} messages</em>
-								</summary>
-								<div class="topic-messages">
-									<MessageBubble
-										v-for="message in topic.messageRows"
-										:key="message.name"
-										:message="message"
-										:message-index="providerMessageMap"
-										:contact-name="detail.display_name"
-										:readers="readersByMessage.get(message.name) || []"
-										@reply="selectReply"
-										@quote="openQuotedMessage"
-										@retry="retryMessage"
-										@menu="openMessageMenu"
-									/>
-								</div>
-							</details>
-							<div v-if="timelineItems.length" class="ungrouped">
-								<div v-if="topics.length" class="section-label">
-									Recent conversation activity
-								</div>
-								<template v-for="item in timelineItems" :key="item.key">
-									<CallTimelineEvent
-										v-if="item.kind === 'call'"
-										:call="item.value"
-									/>
-									<MessageBubble
-										v-else
-										:message="item.value"
-										:message-index="providerMessageMap"
-										:contact-name="detail.display_name"
-										:readers="readersByMessage.get(item.value.name) || []"
-										@reply="selectReply"
-										@quote="openQuotedMessage"
-										@retry="retryMessage"
-										@menu="openMessageMenu"
-									/>
-								</template>
-							</div>
-							<Button
-								v-if="messagePage.has_more_newer"
-								class="older-loading older-button newer-button"
-								unstyled
-								:disabled="loadingNewer"
-								@click="loadNewerMessages"
-							>
-								{{
-									loadingNewer
-										? 'Loading newer messages…'
-										: 'Load newer messages'
-								}}
-							</Button>
-						</template>
-					</MessageStreamViewport>
-					<Button
-						v-if="messagePage.has_more_newer || !atMessageBottom || hasUnseenMessages"
-						class="new-messages-button"
-						unstyled
-						:data-unseen="hasUnseenMessages ? 'true' : 'false'"
-						:disabled="jumpingToLatest"
-						:aria-label="
-							hasUnseenMessages || messagePage.has_more_newer
-								? 'Jump to new messages'
-								: 'Scroll to bottom'
-						"
-						@click="loadLatestMessages"
-					>
-						<ArrowDown :size="15" />
-						{{
-							jumpingToLatest
-								? 'Loading latest…'
-								: hasUnseenMessages || messagePage.has_more_newer
-									? 'New messages'
-									: 'Scroll to bottom'
-						}}
-					</Button>
-					<MessageComposer
-						v-if="textReady"
-						v-model="draft"
-						:reply-to="replyTo"
-						@send="sendText"
-						@emoji="addEmoji"
-						@media="richDialog = true"
-						@cancel-reply="replyTo = null"
-						@typing="noteTyping"
-						@blur="stopTypingSession"
-					/>
-					<footer v-else class="template-gate">
-						<ShieldAlert :size="18" />
-						<div>
-							<strong>Template required</strong>
-							<span>{{
-								detail.outbound.reasons?.join(' · ') ||
-								'The 24-hour service window is closed.'
-							}}</span>
 						</div>
+						<MessageStreamViewport ref="stream" @scroll="handleStreamScroll">
+							<div v-if="messageSearch.trim()" class="search-results">
+								<div v-if="messageSearching" class="older-loading">Searching…</div>
+								<div v-else-if="!messageSearchRows.length" class="search-empty">
+									No matching messages
+								</div>
+								<MessageBubble
+									v-for="message in messageSearchRows"
+									:key="message.name"
+									:message="message"
+									:message-index="providerMessageMap"
+									:contact-name="detail.display_name"
+									:readers="readersByMessage.get(message.name) || []"
+									@reply="selectReply"
+									@quote="openQuotedMessage"
+									@retry="retryMessage"
+									@menu="openMessageMenu"
+								/>
+							</div>
+							<template v-else>
+								<div v-if="loadingOlder" class="older-loading">
+									Loading older messages…
+								</div>
+								<Button
+									v-else-if="messagePage.has_more"
+									class="older-loading older-button"
+									unstyled
+									@click="loadOlderMessages"
+								>
+									Load older messages
+								</Button>
+								<details
+									v-for="topic in topics"
+									:key="topic.name"
+									class="topic-group"
+								>
+									<summary>
+										<span>
+											<small>{{ topic.category || 'AI topic' }}</small>
+											<strong>{{ topic.title }}</strong>
+											<p>
+												{{
+													topic.summary ||
+													'Open to review grouped messages.'
+												}}
+											</p>
+										</span>
+										<em>{{ topic.message_count }} messages</em>
+									</summary>
+									<div class="topic-messages">
+										<MessageBubble
+											v-for="message in topic.messageRows"
+											:key="message.name"
+											:message="message"
+											:message-index="providerMessageMap"
+											:contact-name="detail.display_name"
+											:readers="readersByMessage.get(message.name) || []"
+											@reply="selectReply"
+											@quote="openQuotedMessage"
+											@retry="retryMessage"
+											@menu="openMessageMenu"
+										/>
+									</div>
+								</details>
+								<div v-if="timelineItems.length" class="ungrouped">
+									<div v-if="topics.length" class="section-label">
+										Recent conversation activity
+									</div>
+									<template v-for="item in timelineItems" :key="item.key">
+										<CallTimelineEvent
+											v-if="item.kind === 'call'"
+											:call="item.value"
+										/>
+										<MessageBubble
+											v-else
+											:message="item.value"
+											:message-index="providerMessageMap"
+											:contact-name="detail.display_name"
+											:readers="readersByMessage.get(item.value.name) || []"
+											@reply="selectReply"
+											@quote="openQuotedMessage"
+											@retry="retryMessage"
+											@menu="openMessageMenu"
+										/>
+									</template>
+								</div>
+								<Button
+									v-if="messagePage.has_more_newer"
+									class="older-loading older-button newer-button"
+									unstyled
+									:disabled="loadingNewer"
+									@click="loadNewerMessages"
+								>
+									{{
+										loadingNewer
+											? 'Loading newer messages…'
+											: 'Load newer messages'
+									}}
+								</Button>
+							</template>
+						</MessageStreamViewport>
 						<Button
-							label="Choose template"
-							:loading="richSending"
-							@click="templateDialog = true"
+							v-if="
+								messagePage.has_more_newer || !atMessageBottom || hasUnseenMessages
+							"
+							class="new-messages-button"
+							unstyled
+							:data-unseen="hasUnseenMessages ? 'true' : 'false'"
+							:disabled="jumpingToLatest"
+							:aria-label="
+								hasUnseenMessages || messagePage.has_more_newer
+									? 'Jump to new messages'
+									: 'Scroll to bottom'
+							"
+							@click="loadLatestMessages"
+						>
+							<ArrowDown :size="15" />
+							{{
+								jumpingToLatest
+									? 'Loading latest…'
+									: hasUnseenMessages || messagePage.has_more_newer
+										? 'New messages'
+										: 'Scroll to bottom'
+							}}
+						</Button>
+						<MessageComposer
+							v-if="textReady"
+							v-model="draft"
+							:reply-to="replyTo"
+							@send="sendText"
+							@emoji="addEmoji"
+							@media="richDialog = true"
+							@cancel-reply="replyTo = null"
+							@typing="noteTyping"
+							@blur="stopTypingSession"
 						/>
-					</footer>
+						<footer v-else class="template-gate">
+							<ShieldAlert :size="18" />
+							<div>
+								<strong>Template required</strong>
+								<span>{{
+									detail.outbound.reasons?.join(' · ') ||
+									'The 24-hour service window is closed.'
+								}}</span>
+							</div>
+							<Button
+								label="Choose template"
+								:loading="richSending"
+								@click="templateDialog = true"
+							/>
+						</footer>
+					</template>
 				</template>
 			</main>
 
@@ -2341,11 +2542,41 @@
 				v-if="detail && contextOpen"
 				:data="detail"
 				:can-manage="canManage"
+				:folders="folders"
 				@status="updateStatus"
 				@refresh-summary="refreshContactSummary"
 				@avatar-changed="refreshDirectoryPresentations"
+				@folder="setContactFolder"
 			/>
 		</section>
+
+		<AppDialog v-model:visible="folderDialog" modal header="Create contact folder">
+			<div class="dialog-form folder-dialog-form">
+				<div class="folder-dialog-icon"><FolderPlus :size="21" /></div>
+				<label>
+					Folder name
+					<InputText
+						v-model="folderName"
+						maxlength="80"
+						placeholder="For example: Priority customers"
+					/>
+				</label>
+				<label>
+					Folder colour
+					<input v-model="folderColor" type="color" aria-label="Folder colour" />
+				</label>
+				<small>Folders are private to your user and never change team access.</small>
+			</div>
+			<template #footer>
+				<Button label="Cancel" text @click="folderDialog = false" />
+				<Button
+					label="Create folder"
+					:loading="savingFolder"
+					:disabled="!folderName.trim()"
+					@click="createContactFolder"
+				/>
+			</template>
+		</AppDialog>
 
 		<TemplateSendDialog
 			v-if="detail"
@@ -2831,6 +3062,26 @@
 		width: min(480px, 80vw);
 		display: grid;
 		gap: 14px;
+	}
+	.folder-dialog-form {
+		width: min(420px, 80vw);
+	}
+	.folder-dialog-icon {
+		display: grid;
+		place-items: center;
+		width: 44px;
+		height: 44px;
+		border-radius: 13px;
+		color: var(--wa-primary);
+		background: var(--wa-primary-soft);
+	}
+	.folder-dialog-form input[type='color'] {
+		width: 100%;
+		height: 42px;
+		padding: 4px;
+		border: 1px solid var(--wa-border);
+		border-radius: 9px;
+		background: var(--wa-surface-muted);
 	}
 	.dialog-form label {
 		display: grid;

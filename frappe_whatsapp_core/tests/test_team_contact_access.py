@@ -8,6 +8,12 @@ from frappe_whatsapp_core.conversation_presence import (
 	_presence_key,
 	update_conversation_presence,
 )
+from frappe_whatsapp_core.customer_workspace import (
+	attach_read_coverage,
+	create_contact_folder,
+	operations_dashboard,
+	set_contact_folder,
+)
 from frappe_whatsapp_core.identity import contact_options
 from frappe_whatsapp_core.inbox import conversation_page, conversations
 from frappe_whatsapp_core.permissions import assert_call_access, assert_conversation_access
@@ -17,8 +23,8 @@ from frappe_whatsapp_core.realtime import (
 	publish_conversation_presence,
 	publish_message_changes,
 )
-from frappe_whatsapp_core.workspace_api import upsert_team
 from frappe_whatsapp_core.template_catalog import sync_template_projection
+from frappe_whatsapp_core.workspace_api import upsert_team
 
 
 class TestTeamContactAccess(FrappeTestCase):
@@ -155,6 +161,40 @@ class TestTeamContactAccess(FrappeTestCase):
 		rows = conversation_page(search="Access Tem", limit=100)["rows"]
 		self.assertIn(self.conversation.name, {row["name"] for row in rows})
 		self.assertNotIn(self.open_conversation.name, {row["name"] for row in rows})
+
+	def test_private_folder_filters_only_the_current_users_visible_contacts(self):
+		frappe.set_user(self.member)
+		folder = create_contact_folder("Priority customers", "#7c3aed")
+		with patch("frappe_whatsapp_core.customer_workspace.frappe.publish_realtime") as publish:
+			result = set_contact_folder(self.identity.name, folder["name"], enabled=1)
+		self.assertEqual(result["folder_details"]["contact_count"], 1)
+		self.assertEqual(result["folder_details"]["folder_name"], "Priority customers")
+		payload = publish.call_args.args[1]
+		self.assertEqual(payload["folder_details"]["name"], folder["name"])
+		self.assertEqual(payload["conversations"], [self.conversation.name])
+		rows = conversation_page(folder=folder["name"], limit=20)["rows"]
+		self.assertEqual({row["name"] for row in rows}, {self.conversation.name})
+		self.assertEqual(rows[0]["contact_folders"][0]["folder_name"], "Priority customers")
+
+		frappe.set_user(self.outsider)
+		with self.assertRaises(frappe.DoesNotExistError):
+			conversation_page(folder=folder["name"], limit=20)
+
+	def test_team_dashboard_is_scoped_to_the_current_operator(self):
+		frappe.set_user(self.member)
+		result = operations_dashboard()
+		teams = {row["name"]: row for row in result["teams"]}
+		self.assertEqual(set(teams), {self.team["name"]})
+		self.assertEqual(teams[self.team["name"]]["contact_count"], 1)
+		self.assertEqual(result["metrics"]["conversations"], 1)
+
+	def test_message_read_coverage_tracks_the_whole_responsible_team(self):
+		message = {"read_by": [{"user": self.member}]}
+		expected = attach_read_coverage([message], self.conversation.name)
+		self.assertEqual({row["user"] for row in expected}, {self.member})
+		self.assertEqual(message["read_coverage"]["read"], 1)
+		self.assertEqual(message["read_coverage"]["expected"], 1)
+		self.assertTrue(message["read_coverage"]["complete"])
 
 	@patch("frappe_whatsapp_core.inbox.search_presented_identities")
 	def test_manager_can_search_business_presented_contact_name(self, presented_search):

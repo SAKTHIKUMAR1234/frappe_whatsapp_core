@@ -185,6 +185,21 @@
 		}
 		return [...groups.values()]
 	})
+	const readCoverage = computed(() => props.message.read_coverage || {})
+	const hasReadCoverage = computed(() => Number(readCoverage.value.expected || 0) > 0)
+	const readCoverageLabel = computed(() => {
+		if (!hasReadCoverage.value) return ''
+		if (readCoverage.value.complete) return 'Read by team'
+		return `${Number(readCoverage.value.read || 0)}/${Number(readCoverage.value.expected)} read`
+	})
+	const readCoverageTooltip = computed(() => {
+		if (readCoverage.value.complete)
+			return 'Every responsible team member has read this message'
+		const names = (readCoverage.value.unread_by || [])
+			.map((reader) => reader.display_name || reader.user)
+			.filter(Boolean)
+		return names.length ? `Still unread by ${names.join(', ')}` : readCoverageLabel.value
+	})
 
 	function readerInitials(reader) {
 		const label = String(reader.display_name || reader.full_name || 'Team member').trim()
@@ -408,7 +423,18 @@
 				<component :is="statusIcon(message.delivery_status)" :size="13" />
 			</span>
 		</footer>
-		<div v-if="readers.length" class="message-readers" aria-label="Read by team members">
+		<div
+			v-if="readers.length || hasReadCoverage"
+			class="message-readers"
+			aria-label="Team read status"
+		>
+			<span
+				v-if="hasReadCoverage"
+				:class="['read-coverage', { complete: readCoverage.complete }]"
+				:title="readCoverageTooltip"
+			>
+				<CheckCheck :size="11" />{{ readCoverageLabel }}
+			</span>
 			<span
 				v-for="reader in readers"
 				:key="reader.user"
@@ -760,6 +786,23 @@
 		box-shadow: 0 1px 4px rgba(16, 35, 29, 0.14);
 		cursor: help;
 		z-index: 1;
+	}
+	.message-readers > .read-coverage {
+		width: auto;
+		min-width: 22px;
+		padding: 0 7px;
+		border-radius: 999px;
+		background: var(--wa-surface);
+		color: var(--wa-muted);
+		font-size: 9px;
+		font-weight: 750;
+		gap: 3px;
+		white-space: nowrap;
+		cursor: help;
+	}
+	.message-readers > .read-coverage.complete {
+		background: color-mix(in srgb, var(--wa-primary) 16%, var(--wa-surface));
+		color: var(--wa-primary);
 	}
 	.message-readers > span:hover,
 	.message-readers > span:focus-visible {

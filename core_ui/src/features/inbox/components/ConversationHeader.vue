@@ -1,7 +1,7 @@
 <script setup>
 	import { computed } from 'vue'
 	import Button from 'primevue/button'
-	import { ChevronLeft, PanelRight, Search } from 'lucide-vue-next'
+	import { ChevronLeft, MessagesSquare, PanelRight, Search, Sparkles } from 'lucide-vue-next'
 
 	const props = defineProps({
 		displayName: { type: String, default: '' },
@@ -11,9 +11,10 @@
 		status: { type: String, default: '' },
 		viewers: { type: Array, default: () => [] },
 		contextOpen: { type: Boolean, default: false },
+		viewMode: { type: String, default: 'chat' },
 	})
 
-	defineEmits(['back', 'search', 'toggle-context'])
+	defineEmits(['back', 'search', 'toggle-context', 'update:view-mode'])
 
 	function initials() {
 		return (props.displayName || 'WA').slice(0, 2).toUpperCase()
@@ -69,6 +70,22 @@
 			</span>
 		</div>
 		<div class="chat-heading-actions">
+			<div class="view-switch" role="group" aria-label="Conversation view">
+				<Button
+					unstyled
+					:class="{ active: viewMode === 'chat' }"
+					aria-label="Chat view"
+					@click="$emit('update:view-mode', 'chat')"
+					><MessagesSquare :size="14" /><span>Chat</span></Button
+				>
+				<Button
+					unstyled
+					:class="{ active: viewMode === 'summary' }"
+					aria-label="Summary view"
+					@click="$emit('update:view-mode', 'summary')"
+					><Sparkles :size="14" /><span>Summary</span></Button
+				>
+			</div>
 			<span class="conversation-status">{{ status }}</span>
 			<Button text rounded aria-label="Search this conversation" @click="$emit('search')">
 				<Search :size="17" />
@@ -210,6 +227,30 @@
 		align-items: center;
 		gap: 6px;
 	}
+	.view-switch {
+		display: inline-flex;
+		padding: 3px;
+		border: 1px solid var(--wa-border);
+		border-radius: 999px;
+		background: var(--wa-surface);
+	}
+	.view-switch button {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 5px 8px;
+		border: 0;
+		border-radius: 999px;
+		color: var(--wa-muted);
+		background: transparent;
+		font: inherit;
+		font-size: 11px;
+		cursor: pointer;
+	}
+	.view-switch button.active {
+		color: var(--wa-primary);
+		background: var(--wa-primary-soft);
+	}
 	@media (max-width: 760px) {
 		.chat-heading {
 			min-width: 0;
@@ -219,6 +260,9 @@
 			display: inline-flex;
 		}
 		.conversation-status {
+			display: none;
+		}
+		.view-switch button span {
 			display: none;
 		}
 	}

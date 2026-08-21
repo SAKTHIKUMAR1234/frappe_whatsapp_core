@@ -3,7 +3,8 @@
 	import IconField from 'primevue/iconfield'
 	import InputIcon from 'primevue/inputicon'
 	import InputText from 'primevue/inputtext'
-	import { MessageSquarePlus, RefreshCw, Search } from 'lucide-vue-next'
+	import Select from 'primevue/select'
+	import { FolderPlus, MessageSquarePlus, RefreshCw, Search, Star } from 'lucide-vue-next'
 	import TeamSelect from '@/features/teams/components/TeamSelect.vue'
 
 	defineProps({
@@ -12,9 +13,25 @@
 		search: { type: String, default: '' },
 		mode: { type: String, default: 'all' },
 		team: { type: String, default: '' },
+		folder: { type: String, default: '' },
+		folders: { type: Array, default: () => [] },
 	})
 
-	defineEmits(['refresh', 'new-chat', 'update:search', 'update:mode', 'update:team'])
+	const emit = defineEmits([
+		'refresh',
+		'new-chat',
+		'new-folder',
+		'update:search',
+		'update:mode',
+		'update:team',
+		'update:folder',
+	])
+
+	function showAllConversations() {
+		emit('update:mode', 'all')
+		emit('update:team', '')
+		emit('update:folder', '')
+	}
 </script>
 
 <template>
@@ -57,7 +74,7 @@
 				:class="['filter-button', { active: mode === 'all' }]"
 				:outlined="mode !== 'all'"
 				size="small"
-				@click="$emit('update:mode', 'all')"
+				@click="showAllConversations"
 			/>
 			<Button
 				label="Unread"
@@ -66,6 +83,55 @@
 				size="small"
 				@click="$emit('update:mode', 'unread')"
 			/>
+			<Button
+				:class="[
+					'filter-button',
+					'important-filter',
+					{
+						active:
+							folder &&
+							folders.find((item) => item.name === folder)?.folder_type ===
+								'Important',
+					},
+				]"
+				:outlined="
+					!folder ||
+					folders.find((item) => item.name === folder)?.folder_type !== 'Important'
+				"
+				size="small"
+				aria-label="Important contacts"
+				@click="
+					$emit(
+						'update:folder',
+						folder &&
+							folders.find((item) => item.name === folder)?.folder_type ===
+								'Important'
+							? ''
+							: folders.find((item) => item.folder_type === 'Important')?.name ||
+									'important',
+					)
+				"
+				><template #icon><Star :size="14" /></template>Important</Button
+			>
+			<Select
+				:model-value="folder"
+				:options="folders.filter((item) => item.folder_type === 'Custom')"
+				option-label="folder_name"
+				option-value="name"
+				show-clear
+				class="folder-filter"
+				placeholder="My folders"
+				aria-label="Filter by personal folder"
+				@update:model-value="$emit('update:folder', $event || '')"
+			/>
+			<Button
+				text
+				rounded
+				class="folder-add"
+				aria-label="Create contact folder"
+				@click="$emit('new-folder')"
+				><FolderPlus :size="15"
+			/></Button>
 			<TeamSelect
 				:model-value="team"
 				class="team-filter"
@@ -158,6 +224,24 @@
 		flex: 0 0 auto;
 		border-radius: 999px;
 		background: var(--wa-surface-muted);
+	}
+	.folder-filter {
+		width: auto;
+		min-width: 116px;
+		min-height: 34px;
+		flex: 0 0 auto;
+		border-radius: 999px;
+		background: var(--wa-surface-muted);
+	}
+	.folder-filter :deep(.p-select-label) {
+		padding-block: 6px;
+		font-size: 13px;
+	}
+	.folder-add {
+		flex: 0 0 auto;
+	}
+	.important-filter :deep(svg) {
+		fill: currentColor;
 	}
 	.team-filter :deep(.p-select-label),
 	.team-filter :deep(.p-autocomplete-input) {

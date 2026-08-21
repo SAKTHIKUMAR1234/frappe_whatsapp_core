@@ -14,6 +14,10 @@ by hand.
 For the shortest role-based installation and daily-use path, start with
 [Getting started](docs/getting-started.md).
 
+For the v2 customer-operations workspace—team workload, private contact
+folders, Important contacts, read coverage, and Chat/Summary views—read
+[Customer operations](docs/customer-operations.md).
+
 Core `2.0.0` is part of the versioned WhatsApp product release. Read
 [Product releases](docs/product-releases.md) before upgrading Core and Hub.
 

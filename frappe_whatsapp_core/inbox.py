@@ -40,6 +40,7 @@ def conversations(
 	limit: int = 250,
 	category: str | None = None,
 	team: str | None = None,
+	folder: str | None = None,
 	search: str | None = None,
 ) -> list[dict]:
 	limit = max(1, min(int(limit), 500))
@@ -47,6 +48,7 @@ def conversations(
 		limit=limit,
 		category=category,
 		team=team,
+		folder=folder,
 		search=search,
 	)[0]
 
@@ -59,6 +61,7 @@ def conversation_page(
 	before_name: str | None = None,
 	category: str | None = None,
 	team: str | None = None,
+	folder: str | None = None,
 	search: str | None = None,
 ) -> dict:
 	"""Return a stable cursor page for the virtualized conversation list."""
@@ -69,6 +72,7 @@ def conversation_page(
 		before_name=before_name,
 		category=category,
 		team=team,
+		folder=folder,
 		search=search,
 	)
 	oldest = rows[-1] if has_more and rows else None
@@ -87,6 +91,7 @@ def _conversation_page(
 	before_name: str | None = None,
 	category: str | None = None,
 	team: str | None = None,
+	folder: str | None = None,
 	search: str | None = None,
 ) -> tuple[list[dict], bool]:
 	conditions, values = conversation_conditions("conversation")
@@ -123,6 +128,15 @@ def _conversation_page(
 			)"""
 		)
 		values["team"] = team
+	from frappe_whatsapp_core.customer_workspace import folder_filter_condition
+
+	folder_condition, folder_values = folder_filter_condition(
+		folder,
+		identity_expression="conversation.remote_identity",
+	)
+	if folder_condition:
+		conditions.append(folder_condition)
+		values.update(folder_values)
 	category = str(category or "").strip()
 	if category:
 		conditions.append(
@@ -342,6 +356,9 @@ def _enrich_conversation_rows(
 	identity_aliases = _identity_search_aliases(identity_names)
 	teams = _team_presentations({row.assigned_team for row in rows if row.assigned_team})
 	contact_teams = _identity_team_presentations(identity_names)
+	from frappe_whatsapp_core.customer_workspace import folders_for_identities
+
+	contact_folders = folders_for_identities(identity_names, user=user)
 	presentations = present_identity_names(identity_names, context={"surface": "inbox_list"})
 	latest_messages = _latest_messages(conversation_names)
 	latest_calls = _latest_calls(conversation_names)
@@ -376,6 +393,7 @@ def _enrich_conversation_rows(
 				**row,
 				"assigned_team_details": teams.get(row.assigned_team),
 				"contact_teams": contact_teams.get(row.remote_identity, []),
+				"contact_folders": contact_folders.get(row.remote_identity, []),
 				"display_name": display_name,
 				"phone_number": presentation.get("secondary_text") or "",
 				"identity_status": identity.get("status") or "",
@@ -502,6 +520,10 @@ def conversation(name: str, message_limit: int = 30) -> dict:
 	_attach_template_snapshots(messages)
 	attach_message_reactions(messages, doc.name)
 	attach_message_readers(messages)
+	from frappe_whatsapp_core.customer_workspace import attach_read_coverage, folders_for_identities
+
+	expected_readers = attach_read_coverage(messages, doc.name)
+	contact_folders = folders_for_identities([identity.name]).get(identity.name, [])
 	bookmarks = (
 		set(
 			frappe.get_all(
@@ -522,6 +544,7 @@ def conversation(name: str, message_limit: int = 30) -> dict:
 		"conversation": doc.as_dict(),
 		"assigned_team_details": assigned_team,
 		"contact_teams": contact_teams,
+		"contact_folders": contact_folders,
 		"identity": identity.as_dict(),
 		"display_name": presentation.get("display_name") or identity.normalized_value,
 		"contact_presentation": presentation,
@@ -534,6 +557,7 @@ def conversation(name: str, message_limit: int = 30) -> dict:
 		"topics": list_topics(doc.name),
 		"contact_summary": get_identity_summary(identity.name),
 		"readers": readers,
+		"expected_readers": expected_readers,
 		"outbound": outbound_state(doc.name),
 		"templates": frappe.get_all(
 			"WhatsApp Core Template",

@@ -81,7 +81,7 @@ def bootstrap():
 		]
 	else:
 		if can_use_inbox:
-			modules.extend(["inbox", "calling"])
+			modules.extend(["inbox", "dashboard", "calling"])
 	return {
 		"authenticated": True,
 		"authorized": authorized,
@@ -265,20 +265,11 @@ def _transport_status_payload():
 
 
 @frappe.whitelist()
-@require_core_access(manage=True)
+@require_core_access()
 def dashboard():
-	return {
-		"metrics": {
-			"open_conversations": frappe.db.count("WhatsApp Core Conversation", {"status": "Open"}),
-			"active_campaigns": frappe.db.count(
-				"WhatsApp Core Campaign", {"status": ["in", ["Prepared", "Scheduled", "Running"]]}
-			),
-			"approved_templates": frappe.db.count(
-				"WhatsApp Core Template", {"approval_status": "APPROVED", "enabled": 1}
-			),
-			"failed_messages": frappe.db.count("WhatsApp Core Message", {"delivery_status": "Failed"}),
-		},
-	}
+	from frappe_whatsapp_core.customer_workspace import operations_dashboard
+
+	return operations_dashboard()
 
 
 @frappe.whitelist()

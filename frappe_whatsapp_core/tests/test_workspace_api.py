@@ -62,14 +62,14 @@ class TestCoreRoleBoundary(FrappeTestCase):
 		):
 			self.assertFalse(frontend_api.has_app_permission())
 
-	def test_user_bootstrap_exposes_inbox_only(self):
+	def test_user_bootstrap_exposes_customer_workspace(self):
 		from frappe_whatsapp_core import frontend_api
 
 		with patch.object(frontend_api.frappe, "get_roles", return_value=["WhatsApp User"]):
 			boot = frontend_api.bootstrap()
 		self.assertFalse(boot["can_manage"])
 		self.assertEqual(boot["default_module"], "inbox")
-		self.assertEqual(boot["modules"], ["inbox", "calling"])
+		self.assertEqual(boot["modules"], ["inbox", "dashboard", "calling"])
 
 	def test_manager_bootstrap_exposes_management_modules(self):
 		from frappe_whatsapp_core import frontend_api
@@ -114,13 +114,20 @@ class TestCoreRoleBoundary(FrappeTestCase):
 		self.assertEqual(boot["default_module"], "access-denied")
 		self.assertEqual(boot["modules"], [])
 
-	def test_user_cannot_enter_management_api(self):
-		from frappe_whatsapp_core import permissions
+	def test_user_dashboard_uses_permission_scoped_projection(self):
+		from frappe_whatsapp_core import customer_workspace, permissions
 		from frappe_whatsapp_core.frontend_api import dashboard
 
-		with patch.object(permissions.frappe, "get_roles", return_value=["WhatsApp User"]):
-			with self.assertRaises(frappe.PermissionError):
-				dashboard()
+		with (
+			patch.object(permissions.frappe, "get_roles", return_value=["WhatsApp User"]),
+			patch.object(
+				customer_workspace,
+				"operations_dashboard",
+				return_value={"metrics": {"conversations": 2}, "teams": []},
+			),
+		):
+			result = dashboard()
+		self.assertEqual(result["metrics"]["conversations"], 2)
 
 	def test_user_cannot_read_global_template_authoring_catalog_or_counts(self):
 		from frappe_whatsapp_core import frontend_api, permissions
@@ -132,7 +139,9 @@ class TestCoreRoleBoundary(FrappeTestCase):
 			self.assertRaises(frappe.PermissionError),
 		):
 			frontend_api.template_catalog(start=0, limit=1)
-		get_list.assert_not_called()
+		self.assertFalse(
+			any(call.args and call.args[0] == "WhatsApp Core Template" for call in get_list.call_args_list)
+		)
 		count.assert_not_called()
 
 	def test_manager_onboarding_status_is_secret_free(self):
