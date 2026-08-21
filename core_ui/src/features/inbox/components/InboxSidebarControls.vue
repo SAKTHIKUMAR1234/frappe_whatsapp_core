@@ -54,15 +54,15 @@
 		<div class="filter-row" role="group" aria-label="Conversation filters">
 			<Button
 				label="All"
+				:class="['filter-button', { active: mode === 'all' }]"
 				:outlined="mode !== 'all'"
-				:severity="mode === 'all' ? 'success' : 'secondary'"
 				size="small"
 				@click="$emit('update:mode', 'all')"
 			/>
 			<Button
 				label="Unread"
+				:class="['filter-button', { active: mode === 'unread' }]"
 				:outlined="mode !== 'unread'"
-				:severity="mode === 'unread' ? 'success' : 'secondary'"
 				size="small"
 				@click="$emit('update:mode', 'unread')"
 			/>
@@ -132,6 +132,24 @@
 		min-height: 34px;
 		padding-inline: 13px;
 		border-radius: 999px;
+		border-color: var(--wa-border);
+		color: var(--wa-muted);
+		background: transparent;
+		transition:
+			color 360ms var(--wa-motion-standard),
+			border-color 360ms var(--wa-motion-standard),
+			background-color 360ms var(--wa-motion-standard),
+			transform 360ms var(--wa-motion-standard);
+	}
+	.filter-row :deep(.filter-button:hover) {
+		border-color: color-mix(in srgb, var(--wa-primary) 55%, var(--wa-border));
+		color: var(--wa-text);
+		transform: translateY(-1px);
+	}
+	.filter-row :deep(.filter-button.active) {
+		border-color: var(--wa-primary);
+		color: #07161c;
+		background: var(--wa-primary);
 	}
 	.team-filter {
 		width: auto;

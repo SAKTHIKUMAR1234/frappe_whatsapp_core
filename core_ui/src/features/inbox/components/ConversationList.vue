@@ -159,8 +159,8 @@
 						}}</span>
 						<Tag
 							v-if="item.row.unread_count"
+							class="unread-count"
 							:value="item.row.unread_count"
-							severity="success"
 							rounded
 						/>
 					</span>
@@ -323,6 +323,12 @@
 	.preview {
 		color: var(--wa-muted);
 		font-size: 13.5px;
+	}
+	.unread-count {
+		min-width: 24px;
+		justify-content: center;
+		color: #07161c;
+		background: var(--wa-primary);
 	}
 	.empty {
 		min-height: 300px;

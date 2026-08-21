@@ -168,12 +168,9 @@
 
 	onMounted(() => {
 		const savedTheme = localStorage.getItem('whatsapp:theme')
-		applyTheme(
-			savedTheme
-				? savedTheme === 'dark'
-				: window.matchMedia('(prefers-color-scheme: dark)').matches,
-			false,
-		)
+		// The Andrometiq dark workspace is the product default. An explicit user
+		// preference still wins and remains local to that browser.
+		applyTheme(savedTheme ? savedTheme === 'dark' : true, false)
 		window.addEventListener('keydown', handleShortcut)
 		unsubscribeConnection = subscribeConnection(session.boot?.site, (status) => {
 			realtimeStatus.value = status
@@ -336,7 +333,9 @@
 
 			<main :class="['content', { flush: flushContent }]">
 				<RouterView v-slot="{ Component, route: activeRoute }">
-					<component :is="Component" :key="routeComponentKey(activeRoute)" />
+					<Transition name="workspace">
+						<component :is="Component" :key="routeComponentKey(activeRoute)" />
+					</Transition>
 				</RouterView>
 			</main>
 		</div>
@@ -386,6 +385,7 @@
 		height: 100dvh;
 		display: flex;
 		overflow: hidden;
+		background: var(--wa-bg);
 	}
 	.sidebar {
 		position: fixed;
@@ -399,14 +399,14 @@
 		border-right: 1px solid var(--wa-border);
 		z-index: 30;
 		overflow: hidden;
-		box-shadow: 8px 0 28px rgb(15 23 42 / 2%);
+		box-shadow: 8px 0 28px rgb(0 0 0 / 8%);
 		transition:
 			width 280ms cubic-bezier(0.22, 1, 0.36, 1),
 			box-shadow 280ms ease;
 	}
 	.sidebar.expanded {
 		width: 236px;
-		box-shadow: 14px 0 36px rgb(15 23 42 / 10%);
+		box-shadow: 18px 0 48px rgb(0 0 0 / 18%);
 	}
 	.sidebar-scrim {
 		display: none;
@@ -425,7 +425,7 @@
 		place-items: center;
 		flex: 0 0 30px;
 		border: 0;
-		border-radius: 7px;
+		border-radius: var(--wa-radius-control);
 		color: var(--wa-muted);
 		background: transparent;
 		cursor: pointer;
@@ -451,9 +451,9 @@
 		place-items: center;
 		width: 38px;
 		height: 38px;
-		border-radius: 8px;
+		border-radius: var(--wa-radius-card);
 		background: transparent;
-		box-shadow: 0 7px 18px color-mix(in srgb, var(--wa-green) 24%, transparent);
+		box-shadow: 0 0 24px color-mix(in srgb, var(--wa-primary) 20%, transparent);
 		flex: 0 0 38px;
 	}
 	.brand > div:last-child,
@@ -488,6 +488,7 @@
 	.brand strong {
 		color: var(--wa-text);
 		font-size: 15px;
+		letter-spacing: -0.02em;
 	}
 	.brand span {
 		color: var(--wa-muted);
@@ -548,7 +549,7 @@
 		justify-content: center;
 		gap: 0;
 		align-items: center;
-		border-radius: 6px;
+		border-radius: var(--wa-radius-control);
 		color: var(--wa-text);
 		font-size: 13px;
 		font-weight: 600;
@@ -571,6 +572,7 @@
 	.nav-item:hover {
 		color: var(--wa-text);
 		background: var(--wa-surface-muted);
+		transform: translateX(2px);
 	}
 	.nav-item.active {
 		color: var(--wa-primary);
@@ -582,7 +584,7 @@
 		left: 2px;
 		width: 3px;
 		height: 20px;
-		border-radius: 999px;
+		border-radius: 1px;
 		background: var(--wa-primary);
 		box-shadow: 0 0 12px color-mix(in srgb, var(--wa-primary) 42%, transparent);
 	}
@@ -637,9 +639,9 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		background: color-mix(in srgb, var(--wa-surface) 94%, transparent);
+		background: color-mix(in srgb, var(--wa-surface) 84%, transparent);
 		border-bottom: 1px solid var(--wa-border);
-		backdrop-filter: blur(16px);
+		backdrop-filter: blur(18px) saturate(120%);
 	}
 	.global-search {
 		width: min(490px, 48vw);
@@ -648,7 +650,7 @@
 		gap: 10px;
 		padding: 9px 12px;
 		border: 1px solid var(--wa-border);
-		border-radius: 6px;
+		border-radius: var(--wa-radius-control);
 		color: var(--wa-muted);
 		background: var(--wa-surface-muted);
 		cursor: pointer;
@@ -662,7 +664,7 @@
 	.global-search kbd {
 		padding: 2px 6px;
 		border: 1px solid var(--wa-border-soft);
-		border-radius: 5px;
+		border-radius: 2px;
 		background: var(--wa-surface);
 		color: var(--wa-muted);
 		font-size: 12px;
@@ -696,7 +698,7 @@
 		gap: 11px;
 		align-items: center;
 		border: 0;
-		border-radius: 10px;
+		border-radius: var(--wa-radius-control);
 		background: transparent;
 		color: var(--wa-text);
 		text-align: left;
@@ -712,7 +714,7 @@
 		height: 38px;
 		display: grid;
 		place-items: center;
-		border-radius: 10px;
+		border-radius: var(--wa-radius-control);
 		color: var(--wa-primary);
 		background: var(--wa-surface);
 		border: 1px solid var(--wa-border);
@@ -752,7 +754,7 @@
 		place-items: center;
 		width: 34px;
 		height: 34px;
-		border-radius: 10px;
+		border-radius: var(--wa-radius-card);
 		background: var(--wa-primary-soft);
 		color: var(--wa-primary);
 		font-size: 12px;
@@ -781,15 +783,46 @@
 		overflow: auto;
 		background:
 			radial-gradient(
-				circle at 88% 4%,
-				color-mix(in srgb, var(--wa-primary) 7%, transparent),
-				transparent 30%
+				circle at 91% -8%,
+				color-mix(in srgb, var(--wa-primary) 17%, transparent),
+				transparent 34%
+			),
+			linear-gradient(
+				color-mix(in srgb, var(--wa-border-soft) 36%, transparent) 1px,
+				transparent 1px
+			),
+			linear-gradient(
+				90deg,
+				color-mix(in srgb, var(--wa-border-soft) 36%, transparent) 1px,
+				transparent 1px
 			),
 			var(--wa-bg);
+		background-size:
+			auto,
+			64px 64px,
+			64px 64px,
+			auto;
 	}
 	.content.flush {
 		padding: 0;
 		background: var(--wa-surface);
+	}
+	.workspace-enter-active,
+	.workspace-leave-active {
+		transition:
+			opacity 360ms var(--wa-motion-standard),
+			transform 420ms var(--wa-motion-standard),
+			filter 420ms var(--wa-motion-standard);
+	}
+	.workspace-enter-from {
+		opacity: 0;
+		transform: translateY(8px);
+		filter: blur(2px);
+	}
+	.workspace-leave-to {
+		opacity: 0;
+		transform: translateY(-4px);
+		filter: blur(1px);
 	}
 	@media (min-width: 901px) {
 		.inbox-shell .topbar {

@@ -115,19 +115,27 @@
 		min-height: 100vh;
 		display: grid;
 		grid-template-columns: 1.15fr 0.85fr;
-		background: var(--wa-surface);
+		color-scheme: dark;
+		color: #eaeef4;
+		background: #1a1d20;
 	}
 	.login-art {
 		position: relative;
 		display: flex;
 		flex-direction: column;
 		justify-content: center;
-		padding: 80px;
+		padding: clamp(48px, 7vw, 100px);
 		overflow: hidden;
 		color: white;
 		background:
-			radial-gradient(circle at 20% 10%, #268f70 0, transparent 30%),
-			linear-gradient(145deg, #102f26, #071c16);
+			radial-gradient(circle at 16% 12%, rgb(63 182 222 / 22%) 0, transparent 31%),
+			linear-gradient(rgb(57 64 71 / 26%) 1px, transparent 1px),
+			linear-gradient(90deg, rgb(57 64 71 / 26%) 1px, transparent 1px), #121517;
+		background-size:
+			auto,
+			64px 64px,
+			64px 64px,
+			auto;
 	}
 	.login-art:after {
 		content: '';
@@ -136,11 +144,11 @@
 		height: 520px;
 		right: -220px;
 		bottom: -220px;
-		border: 1px solid #3d695a;
+		border: 1px solid rgb(63 182 222 / 42%);
 		border-radius: 50%;
 		box-shadow:
-			0 0 0 80px #173e321f,
-			0 0 0 160px #173e3215;
+			0 0 0 80px rgb(63 182 222 / 7%),
+			0 0 0 160px rgb(63 182 222 / 4%);
 	}
 	.art-copy {
 		max-width: 620px;
@@ -152,27 +160,28 @@
 		height: 53px;
 		display: grid;
 		place-items: center;
-		border-radius: 17px;
+		border-radius: 7px;
 		background: transparent;
 		margin-bottom: 25px;
 	}
 	.art-copy > span {
-		color: #8dbdad;
+		color: #3fb6de;
 		text-transform: uppercase;
 		letter-spacing: 0.13em;
 		font-size: 11px;
 		font-weight: 800;
 	}
 	.art-copy h1 {
-		font-size: 46px;
-		line-height: 1.08;
-		letter-spacing: -1.5px;
+		font-size: clamp(42px, 4.3vw, 66px);
+		line-height: 1.02;
+		letter-spacing: -0.04em;
+		font-weight: 800;
 		margin: 14px 0 18px;
 	}
 	.art-copy p {
 		max-width: 520px;
-		color: #a9c5bb;
-		font-size: 15px;
+		color: #9aa6b2;
+		font-size: 16px;
 		line-height: 1.7;
 	}
 	.art-flow {
@@ -185,25 +194,29 @@
 	}
 	.art-flow div {
 		padding: 9px 14px;
-		border: 1px solid #41685b;
-		border-radius: 10px;
-		color: #d4e7df;
-		background: #183b30;
+		border: 1px solid #394047;
+		border-radius: 2px;
+		color: #eaeef4;
+		background: rgb(26 29 32 / 82%);
 		font-size: 11px;
 		font-weight: 700;
 	}
 	.art-flow i {
 		width: 34px;
 		height: 1px;
-		background: #5d8779;
+		background: #3fb6de;
 	}
 	.login-panel {
 		display: grid;
 		place-items: center;
 		padding: 40px;
+		border-left: 1px solid #2b3035;
+		background:
+			radial-gradient(circle at 100% 0, rgb(63 182 222 / 9%), transparent 38%), #1a1d20;
 	}
 	.login-panel form {
 		width: min(390px, 100%);
+		animation: login-form-in 950ms cubic-bezier(0.16, 1, 0.3, 1) both;
 	}
 	form h2 {
 		font-size: 30px;
@@ -211,7 +224,7 @@
 	}
 	form > p {
 		margin: 0 0 30px;
-		color: #78857f;
+		color: #9aa6b2;
 		font-size: 13px;
 	}
 	label {
@@ -244,8 +257,42 @@
 		display: block;
 		margin-top: 22px;
 		text-align: center;
-		color: #9aa49f;
+		color: #7f8993;
 		font-size: 12px;
+	}
+	.login-panel :deep(.p-inputtext),
+	.login-panel :deep(.p-password-input) {
+		border-color: #394047;
+		border-radius: 3px;
+		color: #eaeef4;
+		background: #15181b;
+	}
+	.login-panel :deep(.p-inputtext:focus),
+	.login-panel :deep(.p-password-input:focus) {
+		border-color: #3fb6de;
+		box-shadow: 0 0 0 2px rgb(63 182 222 / 18%);
+	}
+	.login-panel :deep(.p-button) {
+		border-color: #087fa8;
+		border-radius: 3px;
+		background: #087fa8;
+		transition:
+			transform 450ms cubic-bezier(0.16, 1, 0.3, 1),
+			background-color 450ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	.login-panel :deep(.p-button:hover) {
+		transform: translateY(-1px);
+		background: #0a90bd;
+	}
+	@keyframes login-form-in {
+		from {
+			opacity: 0;
+			transform: translateY(12px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
 	}
 	@media (max-width: 800px) {
 		.login-page {

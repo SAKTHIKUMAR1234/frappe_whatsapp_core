@@ -13,17 +13,35 @@
 		aria-hidden="true"
 		focusable="false"
 	>
-		<rect width="64" height="64" rx="17" fill="#087c72" />
+		<rect x="1" y="1" width="62" height="62" rx="7" fill="#121517" stroke="#394047" />
 		<path
-			d="M15 15h28c5 0 9 4 9 9v13c0 5-4 9-9 9H29l-11 7 3-7h-6c-5 0-9-4-9-9V24c0-5 4-9 9-9Z"
-			fill="#f4fffb"
+			d="M20 20h24c3.3 0 6 2.7 6 6v12c0 3.3-2.7 6-6 6H31l-9 6 2.2-6H20c-3.3 0-6-2.7-6-6V26c0-3.3 2.7-6 6-6Z"
+			fill="#eaeef4"
 		/>
-		<path d="M45 22h4c5 0 9 4 9 9v8c0 4-3 8-7 9l2 5-9-6" fill="#53e2b4" />
-		<path d="M21 31h20M31 24v14" stroke="#087c72" stroke-width="3" stroke-linecap="round" />
-		<circle cx="21" cy="31" r="4" fill="#16b692" />
-		<circle cx="41" cy="31" r="4" fill="#16b692" />
-		<circle cx="31" cy="24" r="4" fill="#087c72" />
-		<circle cx="31" cy="38" r="4" fill="#087c72" />
+		<ellipse
+			cx="32"
+			cy="32"
+			rx="24"
+			ry="9"
+			fill="none"
+			stroke="#3fb6de"
+			stroke-width="2"
+			transform="rotate(-25 32 32)"
+		/>
+		<ellipse
+			cx="32"
+			cy="32"
+			rx="24"
+			ry="9"
+			fill="none"
+			stroke="#3fb6de"
+			stroke-width="1.5"
+			opacity=".65"
+			transform="rotate(55 32 32)"
+		/>
+		<circle cx="50" cy="18" r="3" fill="#65c8e8" />
+		<path d="M24 32h16M32 25v14" stroke="#087fa8" stroke-width="3" stroke-linecap="square" />
+		<circle cx="32" cy="32" r="3.5" fill="#3fb6de" />
 	</svg>
 </template>
 
