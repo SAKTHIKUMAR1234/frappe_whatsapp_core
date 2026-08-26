@@ -1036,9 +1036,18 @@ def inbound_message_body(message_type: str, content) -> str:
 			return _flow_response_summary(response)
 	if message_type == "location":
 		return str(content.get("name") or content.get("address") or f"Location: {content.get('latitude')}, {content.get('longitude')}")
+	if message_type == "order":
+		items = content.get("product_items") or []
+		return f"Order: {len(items)} {'item' if len(items) == 1 else 'items'}"
+	if message_type == "referral":
+		return str(content.get("headline") or content.get("body") or "[Referral]")
+	if message_type in {"poll", "poll_creation", "poll_response"}:
+		return str(content.get("question") or content.get("name") or "[Poll]")
 	if message_type == "system":
 		system_type = str(content.get("type") or "").replace("_", " ").strip()
 		return system_type.title() if system_type else "[System update]"
+	if message_type in {"unknown", "unsupported"}:
+		return "[Unsupported message]"
 	return str(content.get("body") or f"[{message_type.replace('_', ' ').title()}]")
 
 

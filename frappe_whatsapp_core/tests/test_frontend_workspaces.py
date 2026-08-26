@@ -338,6 +338,22 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		self.assertEqual(settings["ai_summary"]["batch_size"], 100)
 		self.assertEqual(settings["ai_summary"]["max_media_mb"], 50)
 
+	def test_ai_activation_boundary_is_created_once_per_enabled_period(self):
+		action = frappe.db.get_value("I2A Action", {"enabled": 1}, "name")
+		if not action:
+			self.skipTest("No enabled I2A Action is available on the local test site")
+		with patch(
+			"frappe_whatsapp_core.frontend_api._i2a_schema_available",
+			return_value=True,
+		):
+			save_ai_summary_settings(enabled=0, action="")
+			first = save_ai_summary_settings(enabled=1, action=action)["ai_summary"]
+			second = save_ai_summary_settings(enabled=1, action=action)["ai_summary"]
+			self.assertTrue(first["enabled_from"])
+			self.assertEqual(first["enabled_from"], second["enabled_from"])
+			disabled = save_ai_summary_settings(enabled=0, action="")["ai_summary"]
+			self.assertFalse(disabled["enabled_from"])
+
 	def test_i2a_schema_probe_short_circuits_when_frappe_tools_is_absent(self):
 		with (
 			patch(
@@ -385,6 +401,8 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		self.assertIn("User", {row.name for row in doctypes})
 		fields = contact_source_fields("User")
 		self.assertIn("mobile_no", {row["value"] for row in fields["phone_fields"]})
+		self.assertIn("first_name", {row["value"] for row in fields["filter_fields"]})
+		self.assertNotIn("Password", {row["fieldtype"] for row in fields["filter_fields"]})
 		source = save_contact_source({
 			"source_key": f"ui.user.{self.suffix}",
 			"display_name": "UI Users",

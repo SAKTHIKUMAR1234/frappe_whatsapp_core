@@ -12,9 +12,11 @@ from frappe_whatsapp_core.delivery import (
 	enqueue_delivery_status_handlers,
 )
 from frappe_whatsapp_core.dispatcher import (
+	MAX_IMMEDIATE_PROJECTION_BATCH_SIZE,
 	enqueue_waiting_status_events,
 	enqueue_event,
 	enqueue_event_batch,
+	project_realtime_event_batch,
 	process_event_batch,
 )
 from frappe_whatsapp_core.permissions import require_transport_access
@@ -401,7 +403,13 @@ def receive_one(payload):
 		enqueue_after_commit=True,
 		serialization_key=event.get("conversation_key") or doc.name,
 	)
-	return {"status": "queued", "event_id": event_id, "immediate": False}
+	projected = _project_small_realtime_batch([doc.name])
+	return {
+		"status": "queued",
+		"event_id": event_id,
+		"immediate": False,
+		"projected": projected,
+	}
 
 
 def receive_batch(payloads):
@@ -434,7 +442,9 @@ def receive_batch(payloads):
 
 	status_ids = []
 	deferred_ids = []
+	realtime_ids = []
 	deferred_groups = {}
+	projected_count = 0
 	if new_items:
 		named_new_items = [
 			(frappe.generate_hash(length=10), event_id, event, canonical_payload)
@@ -467,6 +477,7 @@ def receive_batch(payloads):
 				status_ids.append(record_name)
 			else:
 				deferred_ids.append(record_name)
+				realtime_ids.append(record_name)
 				serialization_key = event.get("conversation_key") or record_name
 				deferred_groups.setdefault(serialization_key, []).append(record_name)
 
@@ -489,6 +500,9 @@ def receive_batch(payloads):
 		else:
 			deferred_ids.extend(status_ids)
 
+		if realtime_ids and len(realtime_ids) <= MAX_IMMEDIATE_PROJECTION_BATCH_SIZE:
+			projected_count = _project_small_realtime_batch(realtime_ids)
+
 		for serialization_key, group_ids in deferred_groups.items():
 			enqueue_event_batch(
 				group_ids,
@@ -509,8 +523,31 @@ def receive_batch(payloads):
 		"duplicates": len(payloads) - len(new_items),
 		"event_ids": [item[0] for item in new_items],
 		"immediate": immediate_count,
+		"projected": projected_count,
 		"deferred": len(deferred_ids),
 	}
+
+
+def _project_small_realtime_batch(event_ids) -> int:
+	"""Best-effort inbox projection isolated from the durable ingress boundary."""
+	if not event_ids or len(event_ids) > MAX_IMMEDIATE_PROJECTION_BATCH_SIZE:
+		return 0
+	savepoint = "whatsapp_core_immediate_projection"
+	frappe.db.savepoint(savepoint)
+	try:
+		results = project_realtime_event_batch(event_ids)
+		return sum(result.get("status") == "projected" for result in results)
+	except frappe.QueryDeadlockError:
+		# A deadlock invalidates the transaction. Let the relay retry the complete
+		# ingress request instead of acknowledging an uncertain durable boundary.
+		raise
+	except Exception:
+		frappe.db.rollback(save_point=savepoint)
+		frappe.log_error(
+			title="WhatsApp immediate projection deferred",
+			message=frappe.get_traceback(),
+		)
+		return 0
 
 
 def _is_status_event(event: dict) -> bool:

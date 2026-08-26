@@ -23,6 +23,7 @@
 		"webrtc_turn_credential",
 		"section_ai_summaries",
 		"enable_ai_summaries",
+		"ai_summaries_enabled_from",
 		"summary_i2a_action",
 		"summary_rollup_i2a_action",
 		"summary_batch_size",
@@ -131,6 +132,13 @@
 			"fieldname": "enable_ai_summaries",
 			"fieldtype": "Check",
 			"label": "Enable Incremental AI Summaries"
+		},
+		{
+			"fieldname": "ai_summaries_enabled_from",
+			"fieldtype": "Datetime",
+			"hidden": 1,
+			"label": "AI Summaries Enabled From",
+			"read_only": 1
 		},
 		{
 			"description": "Optional enabled I2A Action name. Used only when Frappe Tools is installed.",

@@ -117,7 +117,22 @@ def mark_conversation_read(conversation: str, message: str | None = None) -> dic
 			"recorded": 0,
 		}
 	recorded = _record_message_reads(conversation, [target], frappe.session.user)
-	return _advance_conversation_cursor(conversation, target, recorded)
+	read_state = _advance_conversation_cursor(conversation, target, recorded)
+	read_state["last_opened_at"] = _mark_conversation_opened(conversation)
+	return read_state
+
+
+def _mark_conversation_opened(conversation: str):
+	"""Move the unread badge baseline without manufacturing reads for old messages."""
+	opened_at = now_datetime()
+	frappe.db.set_value(
+		"WhatsApp Core Conversation Read",
+		{"conversation": conversation, "user": frappe.session.user},
+		"last_opened_at",
+		opened_at,
+		update_modified=False,
+	)
+	return opened_at
 
 
 def _advance_conversation_cursor(conversation: str, target, recorded: list[str]) -> dict:
@@ -157,11 +172,11 @@ def _advance_conversation_cursor(conversation: str, target, recorded: list[str])
 		f"""
 		INSERT INTO `tabWhatsApp Core Conversation Read` (
 			name, creation, modified, modified_by, owner, docstatus, idx,
-			read_key, conversation, user, last_read_message, last_read_at,
+			read_key, conversation, user, last_opened_at, last_read_message, last_read_at,
 			last_read_creation
 		) VALUES (
 			%(name)s, %(changed_at)s, %(changed_at)s, %(user)s, %(user)s, 0, 0,
-			%(read_key)s, %(conversation)s, %(user)s, %(message)s, %(read_at)s,
+			%(read_key)s, %(conversation)s, %(user)s, NULL, %(message)s, %(read_at)s,
 			%(read_creation)s
 		)
 		ON DUPLICATE KEY UPDATE
@@ -193,6 +208,7 @@ def _advance_conversation_cursor(conversation: str, target, recorded: list[str])
 		[
 			"conversation",
 			"user",
+			"last_opened_at",
 			"last_read_message",
 			"last_read_at",
 			"last_read_creation",
@@ -361,6 +377,7 @@ def _read_state(doc, messages: list[str] | None = None) -> dict:
 	return {
 		"conversation": doc.conversation,
 		"user": doc.user,
+		"last_opened_at": _get(doc, "last_opened_at"),
 		"last_read_message": doc.last_read_message,
 		"last_read_at": doc.last_read_at,
 		"last_read_creation": doc.last_read_creation,

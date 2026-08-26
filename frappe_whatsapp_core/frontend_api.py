@@ -7,7 +7,7 @@ import io
 import re
 
 import frappe
-from frappe.utils import cint
+from frappe.utils import cint, now_datetime
 
 from frappe_whatsapp_core.ai_summaries import (
 	get_identity_summary,
@@ -938,6 +938,7 @@ def settings_workspace():
 		"default_country_calling_code": settings.default_country_calling_code or "91",
 		"ai_summary": {
 			"enabled": bool(settings.enable_ai_summaries),
+			"enabled_from": settings.ai_summaries_enabled_from,
 			"action": settings.summary_i2a_action or "",
 			"batch_size": settings.summary_batch_size or 100,
 			"max_media_mb": settings.summary_max_media_mb or 15,
@@ -994,6 +995,7 @@ def _contact_sources() -> list[dict]:
 			"phone_field",
 			"display_name_field",
 			"entity_type_field",
+			"filter_fields",
 			"filters",
 		],
 		order_by="priority asc, display_name asc",
@@ -1033,7 +1035,10 @@ def contact_source_fields(source_doctype: str) -> dict:
 	}
 	fields = []
 	phone_fields = []
+	filter_fields = []
 	phone_fieldtypes = {"Data", "Phone", "Read Only", "Small Text", "Text", "Long Text"}
+	from frappe_whatsapp_core.business_filters import is_filterable_field, table_multiselect_value_field
+
 	for field in meta.fields:
 		if field.fieldtype == "Table" and field.options:
 			child_meta = frappe.get_meta(field.options)
@@ -1047,17 +1052,22 @@ def contact_source_fields(source_doctype: str) -> dict:
 				if child.fieldtype in phone_fieldtypes:
 					phone_fields.append(option)
 			continue
-		if field.fieldtype in ignored or field.fieldtype in {"Table", "Table MultiSelect"}:
+		if field.fieldtype in ignored or field.fieldtype == "Table":
 			continue
 		option = {
 			"label": field.label or field.fieldname,
 			"value": field.fieldname,
 			"fieldtype": field.fieldtype,
+			"options": field.options or "",
 		}
 		fields.append(option)
 		if field.fieldtype in phone_fieldtypes:
 			phone_fields.append(option)
-	return {"fields": fields, "phone_fields": phone_fields}
+		if is_filterable_field(field) and (
+			field.fieldtype != "Table MultiSelect" or table_multiselect_value_field(field)
+		):
+			filter_fields.append(option)
+	return {"fields": fields, "phone_fields": phone_fields, "filter_fields": filter_fields}
 
 
 @frappe.whitelist()
@@ -1077,6 +1087,23 @@ def save_contact_source(source):
 		if record_name
 		else frappe.new_doc("WhatsApp Core Identity Source")
 	)
+	meta = frappe.get_meta(payload.get("source_doctype"))
+	filter_fields = payload.get("filter_fields") or []
+	if isinstance(filter_fields, str):
+		filter_fields = frappe.parse_json(filter_fields or "[]")
+	if not isinstance(filter_fields, list):
+		frappe.throw("Inbox filter fields must be a list", frappe.ValidationError)
+	filter_fields = list(dict.fromkeys(str(field or "").strip() for field in filter_fields if field))
+	from frappe_whatsapp_core.business_filters import is_filterable_field, table_multiselect_value_field
+
+	allowed_filter_fields = {
+		field.fieldname
+		for field in meta.fields
+		if is_filterable_field(field)
+		and (field.fieldtype != "Table MultiSelect" or table_multiselect_value_field(field))
+	}
+	if len(filter_fields) > 20 or not set(filter_fields).issubset(allowed_filter_fields):
+		frappe.throw("Select up to 20 valid inbox filter fields", frappe.ValidationError)
 	if not doc.is_new() and doc.source_key != source_key:
 		frappe.throw("Source key cannot be changed after creation", frappe.ValidationError)
 	doc.update({
@@ -1089,6 +1116,7 @@ def save_contact_source(source):
 		"phone_field": str(payload.get("phone_field") or "").strip(),
 		"display_name_field": str(payload.get("display_name_field") or "").strip(),
 		"entity_type_field": str(payload.get("entity_type_field") or "").strip(),
+		"filter_fields": frappe.as_json(filter_fields),
 		"filters": payload.get("filters") or "{}",
 	})
 	if doc.is_new():
@@ -1138,8 +1166,10 @@ def save_ai_summary_settings(
 	max_media_mb: int = 15,
 ):
 	settings = frappe.get_single("WhatsApp Core Settings")
+	was_enabled = bool(cint(settings.enable_ai_summaries))
+	will_enable = bool(cint(enabled))
 	action = str(action or "").strip()
-	if cint(enabled):
+	if will_enable:
 		if not _i2a_schema_available():
 			frappe.throw(
 				"Install Frappe Tools before enabling AI summaries",
@@ -1149,7 +1179,11 @@ def save_ai_summary_settings(
 			frappe.throw("Select a valid Frappe Tools I2A Action", frappe.ValidationError)
 		if not cint(frappe.db.get_value("I2A Action", action, "enabled")):
 			frappe.throw("The selected I2A Action is disabled", frappe.ValidationError)
-	settings.enable_ai_summaries = int(bool(cint(enabled)))
+	settings.enable_ai_summaries = int(will_enable)
+	if will_enable and not was_enabled:
+		settings.ai_summaries_enabled_from = now_datetime()
+	elif not will_enable:
+		settings.ai_summaries_enabled_from = None
 	settings.summary_i2a_action = action
 	settings.summary_batch_size = max(1, min(cint(batch_size) or 100, 250))
 	settings.summary_max_media_mb = max(1, min(cint(max_media_mb) or 15, 50))

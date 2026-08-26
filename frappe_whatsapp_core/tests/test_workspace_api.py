@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
-from frappe.utils import now_datetime
+from frappe.utils import add_to_date, now_datetime
 
 from frappe_whatsapp_core.conversation_reads import mark_messages_read
 from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS, manifest
@@ -29,6 +29,7 @@ from frappe_whatsapp_core.workspace_api import (
 	get_conversation,
 	list_conversations,
 	list_messages,
+	message_window,
 	refresh_messages,
 	remove_team_member,
 	send_text,
@@ -283,6 +284,47 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertEqual(inbox_page["resume_message"], oldest_message.name)
 		self.assertFalse(inbox_page["message_page"]["has_more"])
 		self.assertTrue(inbox_page["message_page"]["has_more_newer"])
+
+	def test_message_window_centres_an_exact_source_without_page_walking(self):
+		base = self.messages[-1].provider_timestamp
+		newer_messages = []
+		for index in range(3):
+			newer_messages.append(
+				frappe.get_doc(
+					{
+						"doctype": "WhatsApp Core Message",
+						"message_key": f"workspace-window-{frappe.generate_hash(length=8)}-{index}",
+						"conversation": self.conversation.name,
+						"channel": self.channel.name,
+						"provider_message_id": f"wamid.workspace.window.{frappe.generate_hash(length=12)}",
+						"direction": "Inbound",
+						"message_type": "text",
+						"body": f"Window message {index}",
+						"content": json.dumps({"text": {"body": f"Window message {index}"}}),
+						"provider_timestamp": add_to_date(base, seconds=index + 1),
+						"delivery_status": "Received",
+					}
+				).insert(ignore_permissions=True)
+			)
+		anchor = newer_messages[0]
+		window = message_window(
+			self.conversation.name,
+			anchor.name,
+			limit=3,
+		)
+		self.assertEqual(window["anchor_message"], anchor.name)
+		self.assertEqual(len(window["rows"]), 3)
+		self.assertEqual(window["rows"][1].name, anchor.name)
+		self.assertTrue(window["has_more"])
+		self.assertTrue(window["has_more_newer"])
+		self.assertEqual(window["next_before_name"], window["rows"][0].name)
+		self.assertEqual(window["next_after_name"], window["rows"][-1].name)
+		with self.assertRaises(frappe.ValidationError):
+			message_window(
+				self.conversation.name,
+				"missing-message",
+				limit=3,
+			)
 
 	def test_call_and_recording_are_projected_into_the_contact_chat(self):
 		from frappe_whatsapp_core.calling import get_call_artifact

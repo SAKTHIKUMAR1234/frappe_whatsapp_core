@@ -143,10 +143,17 @@ def _inbox_navigation(user: str) -> dict:
 		LEFT JOIN `tabWhatsApp Core Message Read` AS message_read
 			ON message_read.message = message.name
 			AND message_read.user = %(navigation_user)s
+		LEFT JOIN `tabWhatsApp Core Conversation Read` AS conversation_read
+			ON conversation_read.conversation = conversation.name
+			AND conversation_read.user = %(navigation_user)s
 		WHERE {where}
 			AND message.direction = 'Inbound'
 			AND message.message_type != 'reaction'
 			AND message_read.name IS NULL
+			AND (
+				conversation_read.last_opened_at IS NULL
+				OR message.creation > conversation_read.last_opened_at
+			)
 		GROUP BY message.conversation
 		""",
 		values,
@@ -478,10 +485,16 @@ def operations_dashboard() -> dict:
 				SELECT 1 FROM `tabWhatsApp Core Message` AS unread_message
 				LEFT JOIN `tabWhatsApp Core Message Read` AS own_read
 					ON own_read.message = unread_message.name AND own_read.user = %(user)s
+				LEFT JOIN `tabWhatsApp Core Conversation Read` AS own_cursor
+					ON own_cursor.conversation = conversation.name AND own_cursor.user = %(user)s
 				WHERE unread_message.conversation = conversation.name
 					AND unread_message.direction = 'Inbound'
 					AND unread_message.message_type != 'reaction'
 					AND own_read.name IS NULL
+					AND (
+						own_cursor.last_opened_at IS NULL
+						OR unread_message.creation > own_cursor.last_opened_at
+					)
 			)) AS unread_conversations
 		FROM `tabWhatsApp Core Conversation` AS conversation
 		WHERE {where}
@@ -502,7 +515,15 @@ def operations_dashboard() -> dict:
 			COUNT(DISTINCT contact.identity) AS contact_count,
 			COUNT(DISTINCT conversation.name) AS conversation_count,
 			COUNT(DISTINCT CASE WHEN conversation.status = 'Open' THEN conversation.name END) AS open_conversations,
-			COUNT(DISTINCT CASE WHEN unread_message.name IS NOT NULL AND own_read.name IS NULL THEN conversation.name END) AS unread_conversations,
+			COUNT(DISTINCT CASE
+				WHEN unread_message.name IS NOT NULL
+					AND own_read.name IS NULL
+					AND (
+						own_cursor.last_opened_at IS NULL
+						OR unread_message.creation > own_cursor.last_opened_at
+					)
+				THEN conversation.name
+			END) AS unread_conversations,
 			MAX(conversation.last_message_at) AS last_activity_at
 		FROM `tabWhatsApp Core Team` AS team
 		LEFT JOIN `tabWhatsApp Core Team Member` AS member
@@ -522,6 +543,8 @@ def operations_dashboard() -> dict:
 			AND unread_message.direction = 'Inbound' AND unread_message.message_type != 'reaction'
 		LEFT JOIN `tabWhatsApp Core Message Read` AS own_read
 			ON own_read.message = unread_message.name AND own_read.user = %(user)s
+		LEFT JOIN `tabWhatsApp Core Conversation Read` AS own_cursor
+			ON own_cursor.conversation = conversation.name AND own_cursor.user = %(user)s
 		WHERE team.enabled = 1 AND {team_visibility}
 		GROUP BY team.name, team.team_name, team.icon, team.avatar
 		ORDER BY unread_conversations DESC, open_conversations DESC, team.team_name ASC

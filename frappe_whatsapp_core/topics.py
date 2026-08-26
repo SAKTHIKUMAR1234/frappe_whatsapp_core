@@ -90,6 +90,21 @@ def list_topics(conversation: str) -> list[dict]:
 		order_by="modified desc",
 		limit_page_length=100,
 	)
+	boundary_names = {
+		message_name
+		for topic in topics
+		for message_name in (topic.first_message, topic.last_message)
+		if message_name
+	}
+	boundary_times = {
+		row.name: row.provider_timestamp
+		for row in frappe.get_all(
+			"WhatsApp Core Message",
+			filters={"name": ["in", list(boundary_names)]},
+			fields=["name", "provider_timestamp"],
+			limit_page_length=len(boundary_names),
+		)
+	} if boundary_names else {}
 	assignments = (
 		frappe.get_all(
 			"WhatsApp Core Topic Message",
@@ -108,6 +123,8 @@ def list_topics(conversation: str) -> list[dict]:
 		)
 	for topic in topics:
 		topic["messages"] = messages_by_topic.get(topic.name, [])
+		topic["first_message_at"] = boundary_times.get(topic.first_message)
+		topic["last_message_at"] = boundary_times.get(topic.last_message)
 	return topics
 
 

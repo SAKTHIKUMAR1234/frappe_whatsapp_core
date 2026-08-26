@@ -8,6 +8,7 @@ from frappe.utils import add_to_date, now_datetime
 from redis.exceptions import LockError
 
 from frappe_whatsapp_core.ai_summaries import (
+	_identity_messages,
 	_media_parts,
 	_model_data,
 	_run_i2a,
@@ -158,6 +159,30 @@ class TestAISummaries(FrappeTestCase):
 			"usage": {"total_tokens": 100},
 			"latency_ms": 20,
 		}
+
+	def test_activation_boundary_excludes_historical_messages(self):
+		cutoff = now_datetime()
+		frappe.db.set_value(
+			"WhatsApp Core Message",
+			self.messages[0].name,
+			"creation",
+			add_to_date(cutoff, seconds=-10),
+			update_modified=False,
+		)
+		new_message = self._message("Created after AI was enabled", 3)
+		self.settings.ai_summaries_enabled_from = cutoff
+		with patch("frappe_whatsapp_core.ai_summaries._settings", return_value=self.settings):
+			rows = _identity_messages(
+				self.identity.name,
+				SimpleNamespace(
+					last_message_at=None,
+					last_message_creation=None,
+					last_message=None,
+				),
+				100,
+			)
+		self.assertNotIn(self.messages[0].name, {row.name for row in rows})
+		self.assertIn(new_message.name, {row.name for row in rows})
 
 	@patch("frappe_whatsapp_core.ai_summaries._settings")
 	@patch("frappe_whatsapp_core.ai_summaries._run_i2a")
