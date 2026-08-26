@@ -75,13 +75,6 @@ export async function uploadFile(file, isPrivate = true) {
 	return data.message
 }
 
-export async function login(usr, pwd) {
-	const { data } = await client.post('/api/method/login', new URLSearchParams({ usr, pwd }), {
-		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-	})
-	return data
-}
-
 export async function logout() {
 	await client.get('/api/method/logout')
 }

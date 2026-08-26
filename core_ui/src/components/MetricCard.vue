@@ -14,7 +14,7 @@
 		<div class="metric-copy">
 			<span>{{ label }}</span>
 			<strong>{{ value }}</strong>
-			<small>{{ detail }}</small>
+			<small v-if="detail">{{ detail }}</small>
 		</div>
 	</div>
 </template>

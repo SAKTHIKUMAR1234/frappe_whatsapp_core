@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import frappe
 from frappe.utils import cint
@@ -90,6 +91,10 @@ def list_conversations(
 						WHEN message.direction = 'Inbound'
 							AND message.message_type != 'reaction'
 							AND message_read.name IS NULL
+							AND (
+								conversation_read.last_opened_at IS NULL
+								OR message.creation > conversation_read.last_opened_at
+							)
 					THEN 1 ELSE 0
 				END
 			), 0) AS unread_count
@@ -110,6 +115,9 @@ def list_conversations(
 		LEFT JOIN `tabWhatsApp Core Message Read` message_read
 			ON message_read.message = message.name
 			AND message_read.user = %(user)s
+		LEFT JOIN `tabWhatsApp Core Conversation Read` conversation_read
+			ON conversation_read.conversation = conversation.name
+			AND conversation_read.user = %(user)s
 		LEFT JOIN `tabWhatsApp Core Team` assigned_team
 			ON assigned_team.name = conversation.assigned_team
 		WHERE {where}
@@ -304,6 +312,125 @@ def list_messages(
 
 @frappe.whitelist()
 @require_core_access()
+def message_window(
+	conversation: str,
+	anchor_message: str,
+	limit: int = 30,
+) -> dict:
+	"""Return one bounded, bidirectional page centred on an exact message.
+
+	Conversation summaries and quoted-message links use this endpoint instead of
+	walking older pages until the source happens to enter the browser window.  The
+	returned cursor contract is the same as ``list_messages`` so the normal inbox
+	paging controls can continue in either direction after the jump.
+	"""
+	_assert_conversation_access(conversation)
+	limit = min(max(int(limit or 30), 3), 100)
+	anchor = frappe.db.get_value(
+		"WhatsApp Core Message",
+		{
+			"name": str(anchor_message or "").strip(),
+			"conversation": conversation,
+			"message_type": ["!=", "reaction"],
+		},
+		["name", "provider_timestamp", "creation"],
+		as_dict=True,
+	)
+	if not anchor:
+		frappe.throw("Message does not belong to this conversation", frappe.ValidationError)
+
+	fields = """
+		name, message_key, provider_message_id, direction, message_type,
+		body, content, provider_timestamp, delivery_status, failure, owner, creation,
+		EXISTS(
+			SELECT 1 FROM `tabWhatsApp Core Message Bookmark` bookmark
+			WHERE bookmark.message = `tabWhatsApp Core Message`.name
+				AND bookmark.user = %(user)s
+		) AS bookmarked
+	"""
+	values = {
+		"conversation": conversation,
+		"at": anchor.provider_timestamp,
+		"creation": anchor.creation,
+		"anchor_name": anchor.name,
+		"user": frappe.session.user,
+	}
+	before_limit = (limit - 1) // 2
+	after_limit = limit - before_limit - 1
+	older = frappe.db.sql(
+		f"""
+		SELECT {fields}
+		FROM `tabWhatsApp Core Message`
+		WHERE conversation = %(conversation)s AND message_type != 'reaction'
+			AND (
+				provider_timestamp < %(at)s
+				OR (
+					provider_timestamp = %(at)s
+					AND (
+						creation < %(creation)s
+						OR (creation = %(creation)s AND name < %(anchor_name)s)
+					)
+				)
+			)
+		ORDER BY provider_timestamp DESC, creation DESC, name DESC
+		LIMIT %(before_limit)s
+		""",
+		{**values, "before_limit": before_limit + 1},
+		as_dict=True,
+	)
+	newer = frappe.db.sql(
+		f"""
+		SELECT {fields}
+		FROM `tabWhatsApp Core Message`
+		WHERE conversation = %(conversation)s AND message_type != 'reaction'
+			AND (
+				provider_timestamp > %(at)s
+				OR (
+					provider_timestamp = %(at)s
+					AND (
+						creation > %(creation)s
+						OR (creation = %(creation)s AND name > %(anchor_name)s)
+					)
+				)
+			)
+		ORDER BY provider_timestamp ASC, creation ASC, name ASC
+		LIMIT %(after_limit)s
+		""",
+		{**values, "after_limit": after_limit + 1},
+		as_dict=True,
+	)
+	anchor_row = frappe.db.sql(
+		f"""
+		SELECT {fields}
+		FROM `tabWhatsApp Core Message`
+		WHERE name = %(anchor_name)s AND conversation = %(conversation)s
+		LIMIT 1
+		""",
+		values,
+		as_dict=True,
+	)[0]
+	has_more = len(older) > before_limit
+	has_more_newer = len(newer) > after_limit
+	rows = [*reversed(older[:before_limit]), anchor_row, *newer[:after_limit]]
+	_enrich_message_rows(rows, conversation)
+	oldest = rows[0] if rows else None
+	newest = rows[-1] if rows else None
+	return {
+		"rows": rows,
+		"anchor_message": anchor.name,
+		"has_more": has_more,
+		"has_more_newer": has_more_newer,
+		"next_before": oldest.provider_timestamp if has_more and oldest else None,
+		"next_before_creation": oldest.creation if has_more and oldest else None,
+		"next_before_name": oldest.name if has_more and oldest else None,
+		"next_after": newest.provider_timestamp if has_more_newer and newest else None,
+		"next_after_creation": newest.creation if has_more_newer and newest else None,
+		"next_after_name": newest.name if has_more_newer and newest else None,
+	}
+
+
+@frappe.whitelist()
+@require_core_access()
 def refresh_messages(conversation: str, message_names) -> dict:
 	"""Refresh the exact visible message window without resetting its read anchor.
 
@@ -465,10 +592,23 @@ def assign_conversation(
 @frappe.whitelist()
 @require_core_access()
 def list_teams() -> list[dict]:
-	"""Return bounded team summaries without materializing child tables."""
+	"""Compatibility list for bounded selectors; the Teams UI uses ``team_page``."""
+	return _team_page(limit=500, offset=0)["rows"]
+
+
+@frappe.whitelist()
+@require_core_access()
+def team_page(search=None, limit=24, offset=0) -> dict:
+	"""Return one permission-scoped page without materializing team child tables."""
+	return _team_page(search=search, limit=limit, offset=offset)
+
+
+def _team_page(search=None, limit=24, offset=0) -> dict:
 	user = frappe.session.user
 	manager = user == "Administrator" or bool(set(frappe.get_roles(user)) & CORE_MANAGEMENT_ROLES)
-	values = {"user": user, "limit": 500}
+	limit = max(1, min(cint(limit or 24), 100))
+	offset = max(0, cint(offset or 0))
+	values = {"user": user, "limit": limit + 1, "offset": offset}
 	visibility = (
 		"1 = 1"
 		if manager
@@ -481,6 +621,26 @@ def list_teams() -> list[dict]:
 			AND scoped_member.user = %(user)s
 	)"""
 	)
+	query = str(search or "").strip()
+	search_condition = ""
+	if query:
+		terms = list(dict.fromkeys(re.findall(r"[^\W_]+", query.casefold())))[:6]
+		term_conditions = []
+		for index, term in enumerate(terms):
+			fragment_key = f"search_{index}"
+			pattern_key = f"search_pattern_{index}"
+			values[fragment_key] = f"%{term[: min(3, len(term))]}%"
+			values[pattern_key] = ".*".join(re.escape(character) for character in term[:12])
+			term_conditions.append(
+				f"""(
+					team.team_name LIKE %({fragment_key})s
+					OR team.description LIKE %({fragment_key})s
+					OR team.team_name REGEXP %({pattern_key})s
+					OR team.description REGEXP %({pattern_key})s
+				)"""
+			)
+		if term_conditions:
+			search_condition = "AND " + " AND ".join(term_conditions)
 	rows = frappe.db.sql(
 		f"""
 		SELECT
@@ -505,8 +665,9 @@ def list_teams() -> list[dict]:
 		FROM `tabWhatsApp Core Team` team
 		WHERE team.enabled = 1
 			AND {visibility}
+			{search_condition}
 		ORDER BY team.team_name ASC
-		LIMIT %(limit)s
+		LIMIT %(limit)s OFFSET %(offset)s
 		""",
 		values,
 		as_dict=True,
@@ -514,7 +675,12 @@ def list_teams() -> list[dict]:
 	for row in rows:
 		row.avatar_url = team_avatar_url(row.name) if row.get("avatar") else ""
 		row.avatar = ""
-	return rows
+	return {
+		"rows": rows[:limit],
+		"has_more": len(rows) > limit,
+		"offset": offset,
+		"page_size": limit,
+	}
 
 
 @frappe.whitelist()

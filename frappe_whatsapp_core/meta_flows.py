@@ -95,6 +95,15 @@ def _public_workspace_error(error: Exception) -> str:
 		return "Meta rejected this account operation. Check its permissions in Integration."
 	if "timeout" in lowered or "timed out" in lowered:
 		return "Meta did not respond in time. Retry in a moment."
+	if (
+		"whatsapp hub is unavailable" in lowered
+		or "failed to establish a safe connection" in lowered
+		or "connection refused" in lowered
+	):
+		return (
+			"WhatsApp Integration could not be reached. Ask a WhatsApp Manager to check "
+			"the Hub connection, then retry."
+		)
 	return message or "WhatsApp Integration is unavailable"
 
 

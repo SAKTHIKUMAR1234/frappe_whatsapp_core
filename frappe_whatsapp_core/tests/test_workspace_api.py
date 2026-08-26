@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
-from frappe.utils import now_datetime
+from frappe.utils import add_to_date, now_datetime
 
 from frappe_whatsapp_core.conversation_reads import mark_messages_read
 from frappe_whatsapp_core.mcp_tools import TOOL_DEFINITIONS, manifest
@@ -29,6 +29,7 @@ from frappe_whatsapp_core.workspace_api import (
 	get_conversation,
 	list_conversations,
 	list_messages,
+	message_window,
 	refresh_messages,
 	remove_team_member,
 	send_text,
@@ -62,14 +63,14 @@ class TestCoreRoleBoundary(FrappeTestCase):
 		):
 			self.assertFalse(frontend_api.has_app_permission())
 
-	def test_user_bootstrap_exposes_inbox_only(self):
+	def test_user_bootstrap_exposes_customer_workspace(self):
 		from frappe_whatsapp_core import frontend_api
 
 		with patch.object(frontend_api.frappe, "get_roles", return_value=["WhatsApp User"]):
 			boot = frontend_api.bootstrap()
 		self.assertFalse(boot["can_manage"])
 		self.assertEqual(boot["default_module"], "inbox")
-		self.assertEqual(boot["modules"], ["inbox", "calling"])
+		self.assertEqual(boot["modules"], ["inbox", "dashboard", "calling"])
 
 	def test_manager_bootstrap_exposes_management_modules(self):
 		from frappe_whatsapp_core import frontend_api
@@ -114,13 +115,20 @@ class TestCoreRoleBoundary(FrappeTestCase):
 		self.assertEqual(boot["default_module"], "access-denied")
 		self.assertEqual(boot["modules"], [])
 
-	def test_user_cannot_enter_management_api(self):
-		from frappe_whatsapp_core import permissions
+	def test_user_dashboard_uses_permission_scoped_projection(self):
+		from frappe_whatsapp_core import customer_workspace, permissions
 		from frappe_whatsapp_core.frontend_api import dashboard
 
-		with patch.object(permissions.frappe, "get_roles", return_value=["WhatsApp User"]):
-			with self.assertRaises(frappe.PermissionError):
-				dashboard()
+		with (
+			patch.object(permissions.frappe, "get_roles", return_value=["WhatsApp User"]),
+			patch.object(
+				customer_workspace,
+				"operations_dashboard",
+				return_value={"metrics": {"conversations": 2}, "teams": []},
+			),
+		):
+			result = dashboard()
+		self.assertEqual(result["metrics"]["conversations"], 2)
 
 	def test_user_cannot_read_global_template_authoring_catalog_or_counts(self):
 		from frappe_whatsapp_core import frontend_api, permissions
@@ -132,7 +140,9 @@ class TestCoreRoleBoundary(FrappeTestCase):
 			self.assertRaises(frappe.PermissionError),
 		):
 			frontend_api.template_catalog(start=0, limit=1)
-		get_list.assert_not_called()
+		self.assertFalse(
+			any(call.args and call.args[0] == "WhatsApp Core Template" for call in get_list.call_args_list)
+		)
 		count.assert_not_called()
 
 	def test_manager_onboarding_status_is_secret_free(self):
@@ -274,6 +284,47 @@ class TestWorkspaceAPI(FrappeTestCase):
 		self.assertEqual(inbox_page["resume_message"], oldest_message.name)
 		self.assertFalse(inbox_page["message_page"]["has_more"])
 		self.assertTrue(inbox_page["message_page"]["has_more_newer"])
+
+	def test_message_window_centres_an_exact_source_without_page_walking(self):
+		base = self.messages[-1].provider_timestamp
+		newer_messages = []
+		for index in range(3):
+			newer_messages.append(
+				frappe.get_doc(
+					{
+						"doctype": "WhatsApp Core Message",
+						"message_key": f"workspace-window-{frappe.generate_hash(length=8)}-{index}",
+						"conversation": self.conversation.name,
+						"channel": self.channel.name,
+						"provider_message_id": f"wamid.workspace.window.{frappe.generate_hash(length=12)}",
+						"direction": "Inbound",
+						"message_type": "text",
+						"body": f"Window message {index}",
+						"content": json.dumps({"text": {"body": f"Window message {index}"}}),
+						"provider_timestamp": add_to_date(base, seconds=index + 1),
+						"delivery_status": "Received",
+					}
+				).insert(ignore_permissions=True)
+			)
+		anchor = newer_messages[0]
+		window = message_window(
+			self.conversation.name,
+			anchor.name,
+			limit=3,
+		)
+		self.assertEqual(window["anchor_message"], anchor.name)
+		self.assertEqual(len(window["rows"]), 3)
+		self.assertEqual(window["rows"][1].name, anchor.name)
+		self.assertTrue(window["has_more"])
+		self.assertTrue(window["has_more_newer"])
+		self.assertEqual(window["next_before_name"], window["rows"][0].name)
+		self.assertEqual(window["next_after_name"], window["rows"][-1].name)
+		with self.assertRaises(frappe.ValidationError):
+			message_window(
+				self.conversation.name,
+				"missing-message",
+				limit=3,
+			)
 
 	def test_call_and_recording_are_projected_into_the_contact_chat(self):
 		from frappe_whatsapp_core.calling import get_call_artifact

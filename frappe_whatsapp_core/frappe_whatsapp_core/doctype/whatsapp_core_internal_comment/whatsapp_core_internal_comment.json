@@ -1,0 +1,128 @@
+{
+ "doctype": "DocType",
+ "name": "WhatsApp Core Internal Comment",
+ "module": "Frappe WhatsApp Core",
+ "autoname": "hash",
+ "naming_rule": "Random",
+ "engine": "InnoDB",
+ "field_order": [
+  "conversation",
+  "user",
+  "content",
+  "message_references",
+  "reference_doctype",
+  "reference_name",
+  "parent_comment",
+  "mentioned_users",
+  "assigned_to",
+  "status",
+  "resolved_by",
+  "resolved_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "conversation",
+   "fieldtype": "Link",
+   "label": "Conversation",
+   "options": "WhatsApp Core Conversation",
+   "reqd": 1,
+   "in_list_view": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "label": "Team Member",
+   "options": "User",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "content",
+   "fieldtype": "Text",
+   "label": "Comment",
+   "reqd": 1
+  },
+  {
+   "fieldname": "message_references",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Message References"
+  },
+  {
+   "fieldname": "reference_doctype",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Summary Type",
+   "options": "DocType"
+  },
+  {
+   "fieldname": "reference_name",
+   "fieldtype": "Dynamic Link",
+   "hidden": 1,
+   "label": "Summary",
+   "options": "reference_doctype"
+  },
+  {
+   "fieldname": "parent_comment",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Reply To",
+   "options": "WhatsApp Core Internal Comment",
+   "search_index": 1
+  },
+  {
+   "fieldname": "mentioned_users",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "label": "Mentioned Team Members"
+  },
+  {
+   "fieldname": "assigned_to",
+   "fieldtype": "Link",
+   "label": "Assigned To",
+   "options": "User",
+   "search_index": 1
+  },
+  {
+   "default": "Open",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Open\nResolved",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "resolved_by",
+   "fieldtype": "Link",
+   "label": "Resolved By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "resolved_at",
+   "fieldtype": "Datetime",
+   "label": "Resolved At",
+   "read_only": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1
+  },
+  {
+   "role": "WhatsApp Manager",
+   "read": 1
+  },
+  {
+   "role": "WhatsApp User",
+   "read": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "search_fields": "conversation,user,assigned_to,status,content"
+}

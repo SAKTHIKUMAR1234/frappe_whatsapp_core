@@ -146,10 +146,7 @@
 
 <template>
 	<div class="page-heading">
-		<div>
-			<div class="eyebrow">Human review</div>
-			<h1>AI Queue</h1>
-		</div>
+		<h1>AI Queue</h1>
 		<div class="heading-actions">
 			<Button label="Refresh" outlined :loading="loading" :disabled="loading" @click="load">
 				<template #icon><RefreshCw :size="16" /></template>
@@ -194,10 +191,7 @@
 
 		<section class="surface-card queue-card">
 			<header>
-				<div>
-					<div class="eyebrow">Permanent queue</div>
-					<h2>Unclassified messages</h2>
-				</div>
+				<h2>Unclassified messages</h2>
 				<small v-if="selectedConversations.size > 1"
 					>Select messages from one conversation at a time.</small
 				>
@@ -239,7 +233,6 @@
 					<div class="empty">
 						<CircleCheck :size="30" />
 						<strong>Queue is clear</strong>
-						<span>Every materialized message belongs to a topic.</span>
 					</div>
 				</template>
 			</DataTable>
@@ -268,17 +261,13 @@
 				<div v-if="!workspace.messages.length" class="empty">
 					<CircleCheck :size="30" />
 					<strong>Queue is clear</strong>
-					<span>Every materialized message belongs to a topic.</span>
 				</div>
 			</div>
 		</section>
 
 		<section class="surface-card invocation-card">
 			<header>
-				<div>
-					<div class="eyebrow">Audited automation</div>
-					<h2>Recent MCP activity</h2>
-				</div>
+				<h2>Recent MCP activity</h2>
 			</header>
 			<DataTable class="desktop-table" :value="workspace.invocations" striped-rows>
 				<Column field="tool_name" header="Tool" />
@@ -332,11 +321,7 @@
 			@show="focusDialogControl(dialogRef, '#topic-title')"
 		>
 			<div class="dialog-copy">
-				<strong>{{ selected.length }} messages</strong>
-				<span
-					>Grouping is auditable and exclusive; a message cannot silently belong to two
-					topics.</span
-				>
+				<strong>{{ selected.length }} messages selected</strong>
 			</div>
 			<label for="topic-title">Topic title</label>
 			<InputText
@@ -463,18 +448,6 @@
 		margin-bottom: 14px;
 		border-radius: 12px;
 		background: var(--wa-mint);
-	}
-
-	.dialog-copy strong,
-	.dialog-copy span {
-		display: block;
-	}
-
-	.dialog-copy span {
-		margin-top: 3px;
-		color: var(--wa-muted);
-		font-size: 12px;
-		line-height: 1.45;
 	}
 
 	label {

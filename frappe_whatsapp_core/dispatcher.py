@@ -22,6 +22,7 @@ GENERIC_BATCH_DEADLOCK_RETRIES = 6
 WAITING_STATUS_DEADLOCK_RETRIES = 6
 ORPHAN_STATUS_RETRY_BASE_SECONDS = 0.25
 ORPHAN_STATUS_RETRY_MAX_SECONDS = 2.0
+MAX_IMMEDIATE_PROJECTION_BATCH_SIZE = 8
 
 
 def enqueue_event(event_id, enqueue_after_commit=False, serialization_key=None):
@@ -279,6 +280,70 @@ def process_event_batch(event_ids, retry_deadlocks=True, serialization_key=None)
 			frappe.db.commit()
 			return _process_event_batch(event_ids, retry_deadlocks)
 	return _process_event_batch(event_ids, retry_deadlocks)
+
+
+def project_realtime_event_batch(event_ids):
+	"""Materialize a small human-visible ingress window before worker dispatch.
+
+	This deliberately leaves Core Events pending.  The ordered worker still owns
+	automation, business hooks, retries and terminal event state; this fast path
+	only makes the durable inbox projection available to Socket.IO clients without
+	waiting behind those comparatively expensive handlers.
+	"""
+	event_ids = list(dict.fromkeys(event_ids or []))
+	if not event_ids:
+		return []
+	if len(event_ids) > MAX_IMMEDIATE_PROJECTION_BATCH_SIZE:
+		frappe.throw(
+			f"Immediate projection cannot exceed {MAX_IMMEDIATE_PROJECTION_BATCH_SIZE} events",
+			frappe.ValidationError,
+		)
+	events = frappe.get_all(
+		"WhatsApp Core Event",
+		filters={"name": ["in", event_ids]},
+		fields=["name", "event_id", "event_type", "channel_key", "external_id", "conversation_key", "payload"],
+		limit_page_length=len(event_ids),
+	)
+	event_map = {event.name: event for event in events}
+	results = []
+	projection_cache = {}
+	for event_id in event_ids:
+		event = event_map.get(event_id)
+		if not event:
+			results.append({"event_id": event_id, "status": "missing", "projections": []})
+			continue
+		projections = materialize_event(
+			event,
+			json.loads(event.payload),
+			projection_cache=projection_cache,
+		)
+		results.append({"event_id": event_id, "status": "projected", "projections": projections})
+
+	created_message_names = list(dict.fromkeys(
+		projection.get("name")
+		for result in results
+		for projection in result.get("projections") or []
+		if projection.get("kind") == "message"
+		and projection.get("status") == "created"
+		and projection.get("name")
+	))
+	if created_message_names:
+		from frappe_whatsapp_core.ai_summaries import enqueue_summary_for_messages
+
+		enqueue_summary_for_messages(created_message_names, enqueue_after_commit=True)
+		media_messages = frappe.get_all(
+			"WhatsApp Core Message",
+			filters={
+				"name": ["in", created_message_names],
+				"message_type": ["in", ["audio", "document", "image", "sticker", "template", "video"]],
+			},
+			pluck="name",
+			limit_page_length=len(created_message_names),
+		)
+		if media_messages:
+			enqueue_message_media_cache(media_messages, enqueue_after_commit=True)
+	_publish_batch_refresh(event_ids, results)
+	return results
 
 
 def _process_event_batch(event_ids, retry_deadlocks=True):
@@ -667,7 +732,7 @@ def _publish_batch_refresh(event_ids, results):
 		projection
 		for result in results or []
 		for projection in result.get("projections") or []
-		if isinstance(projection, dict)
+		if isinstance(projection, dict) and projection.get("status") != "duplicate"
 	]
 	publish_message_changes(projections)
 	publish_call_changes(

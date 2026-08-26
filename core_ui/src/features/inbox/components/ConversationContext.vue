@@ -2,17 +2,43 @@
 	import { computed, ref } from 'vue'
 	import Select from 'primevue/select'
 	import Tag from 'primevue/tag'
-	import { Bot, ImagePlus, RefreshCw, UsersRound, UserRoundCheck } from 'lucide-vue-next'
+	import {
+		Bot,
+		Folder,
+		ImagePlus,
+		RefreshCw,
+		Star,
+		UsersRound,
+		UserRoundCheck,
+		X,
+	} from 'lucide-vue-next'
 	import Button from 'primevue/button'
+	import InternalCommentsPanel from '@/features/inbox/components/InternalCommentsPanel.vue'
 	import { useToast } from 'primevue/usetoast'
 	import { call, errorMessage, uploadFile } from '@/services/frappe'
 
 	const props = defineProps({
 		data: { type: Object, required: true },
 		canManage: { type: Boolean, default: false },
+		folders: { type: Array, default: () => [] },
+		draftMessages: { type: Array, default: () => [] },
+		draftReference: { type: Object, default: null },
+		focusComment: { type: String, default: '' },
 	})
 
-	const emit = defineEmits(['status', 'refresh-summary', 'avatar-changed'])
+	const emit = defineEmits([
+		'status',
+		'refresh-summary',
+		'avatar-changed',
+		'folder',
+		'comment-created',
+		'comment-updated',
+		'comment-deleted',
+		'comments-older',
+		'comment-draft-consumed',
+		'comment-open-message',
+		'close',
+	])
 	const toast = useToast()
 	const avatarUploading = ref(false)
 	const teams = computed(() => {
@@ -21,6 +47,13 @@
 	})
 
 	const statusOptions = ['Open', 'Pending', 'Resolved']
+	const selectedFolders = computed(
+		() => new Set((props.data.contact_folders || []).map((folder) => folder.name)),
+	)
+	const readerCoverage = computed(() => {
+		const expected = new Set((props.data.expected_readers || []).map((reader) => reader.user))
+		return (props.data.readers || []).filter((reader) => expected.has(reader.user)).length
+	})
 
 	async function selectAvatar(event) {
 		const file = event.target.files?.[0]
@@ -50,8 +83,16 @@
 
 <template>
 	<aside class="context-panel">
+		<Button
+			text
+			rounded
+			class="context-close"
+			aria-label="Close conversation details"
+			@click="emit('close')"
+		>
+			<X :size="17" />
+		</Button>
 		<section>
-			<div class="eyebrow">Conversation</div>
 			<div class="identity">
 				<span>
 					<img
@@ -107,6 +148,9 @@
 
 		<section>
 			<header><UserRoundCheck :size="15" /> Read by</header>
+			<div v-if="data.expected_readers?.length" class="coverage-copy">
+				<strong>{{ readerCoverage }} / {{ data.expected_readers.length }} opened</strong>
+			</div>
 			<div class="reader-list">
 				<Tag
 					v-for="reader in data.readers"
@@ -120,6 +164,44 @@
 				>
 			</div>
 		</section>
+
+		<section>
+			<header><Folder :size="15" /> My folders</header>
+			<div class="folder-list">
+				<Button
+					v-for="folder in folders"
+					:key="folder.name"
+					unstyled
+					:class="['folder-tag', { active: selectedFolders.has(folder.name) }]"
+					:aria-pressed="selectedFolders.has(folder.name)"
+					@click="
+						$emit('folder', { folder, enabled: !selectedFolders.has(folder.name) })
+					"
+				>
+					<Star v-if="folder.folder_type === 'Important'" :size="13" />
+					<Folder v-else :size="13" />
+					{{ folder.folder_name }}
+				</Button>
+				<span v-if="!folders.length" class="empty-copy">No personal folders yet.</span>
+			</div>
+		</section>
+
+		<InternalCommentsPanel
+			:conversation="data.conversation?.name"
+			:comments="data.internal_comments || []"
+			:page="data.internal_comment_page || {}"
+			:current-user="data.current_user || ''"
+			:can-manage="canManage"
+			:draft-messages="draftMessages"
+			:draft-reference="draftReference"
+			:focus-comment="focusComment"
+			@created="$emit('comment-created', $event)"
+			@updated="$emit('comment-updated', $event)"
+			@deleted="$emit('comment-deleted', $event)"
+			@older="$emit('comments-older', $event)"
+			@draft-consumed="$emit('comment-draft-consumed')"
+			@open-message="$emit('comment-open-message', $event)"
+		/>
 
 		<section class="ai-note">
 			<header>
@@ -156,10 +238,17 @@
 
 <style scoped>
 	.context-panel {
+		position: relative;
 		min-height: 0;
 		overflow-y: auto;
 		border-left: 1px solid var(--wa-border);
 		background: var(--wa-surface);
+	}
+	.context-close {
+		position: absolute;
+		z-index: 2;
+		top: 9px;
+		right: 9px;
 	}
 	section {
 		padding: 17px;
@@ -252,6 +341,42 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 6px;
+	}
+	.coverage-copy {
+		display: flex;
+		align-items: baseline;
+		gap: 7px;
+		margin-bottom: 9px;
+		color: var(--wa-muted);
+		font-size: 11px;
+	}
+	.coverage-copy strong {
+		color: var(--wa-primary);
+		font-size: 14px;
+	}
+	.folder-list {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+	.folder-tag {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 6px 9px;
+		border: 1px solid var(--wa-border);
+		border-radius: 999px;
+		color: var(--wa-muted);
+		background: var(--wa-surface-muted);
+		font: inherit;
+		font-size: 11px;
+		font-weight: 700;
+		cursor: pointer;
+	}
+	.folder-tag.active {
+		border-color: var(--wa-primary);
+		color: var(--wa-primary);
+		background: var(--wa-primary-soft);
 	}
 	.team-list {
 		display: flex;

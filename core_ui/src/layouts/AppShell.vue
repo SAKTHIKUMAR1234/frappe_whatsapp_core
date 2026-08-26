@@ -5,6 +5,7 @@
 	import AppDialog from '@/components/AppDialog.vue'
 	import InputText from 'primevue/inputtext'
 	import Menu from 'primevue/menu'
+	import Popover from 'primevue/popover'
 	import {
 		Bell,
 		ChevronDown,
@@ -20,10 +21,13 @@
 	import { navigation } from '@/config/navigation'
 	import { useSessionStore } from '@/stores/session'
 	import { useCallingStore } from '@/stores/calling'
+	import { redirectToFrappeLogin } from '@/utils/frappeLogin'
 	import CallDock from '@/features/calling/components/CallDock.vue'
-	import { subscribeConnection } from '@/services/realtime'
-	import { onAuthExpired } from '@/services/frappe'
+	import { subscribe, subscribeConnection } from '@/services/realtime'
+	import { call, onAuthExpired } from '@/services/frappe'
+	import { formatDateTime } from '@/utils/datetime'
 	import { routeComponentKey } from '@/utils/routeView'
+	import { collaborationNotificationRoute } from '@/utils/collaborationNotification'
 
 	const session = useSessionStore()
 	const calling = useCallingStore()
@@ -39,8 +43,16 @@
 	const realtimeStatus = ref('connecting')
 	const darkMode = ref(false)
 	let unsubscribeConnection = () => {}
+	let unsubscribeNotifications = () => {}
 	let unsubscribeAuth = () => {}
 	let sidebarCollapseTimer = null
+	let notificationFocusSequence = 0
+	const notificationPopover = ref(null)
+	const collaborationNotifications = ref([])
+	const notificationsLoading = ref(false)
+	const notificationUnread = computed(
+		() => collaborationNotifications.value.filter((row) => !row.read).length,
+	)
 	const flushContent = computed(() =>
 		['inbox', 'flow-builder'].includes(String(route.name || '')),
 	)
@@ -93,7 +105,7 @@
 			icon: 'pi pi-sign-out',
 			command: async () => {
 				await session.logout()
-				router.push({ name: 'login' })
+				redirectToFrappeLogin('/', { replace: false })
 			},
 		},
 	]
@@ -156,6 +168,45 @@
 		applyTheme(!darkMode.value)
 	}
 
+	async function loadCollaborationNotifications() {
+		if (!session.boot?.modules?.includes('inbox')) return
+		notificationsLoading.value = true
+		try {
+			const result = await call(
+				'frappe_whatsapp_core.internal_comments.collaboration_notifications',
+				{ limit: 30 },
+			)
+			collaborationNotifications.value = result?.rows || []
+		} catch {
+			// A transient notification failure must not interrupt the workspace.
+		} finally {
+			notificationsLoading.value = false
+		}
+	}
+
+	async function toggleNotifications(event) {
+		notificationPopover.value?.toggle(event)
+		await loadCollaborationNotifications()
+	}
+
+	async function openCollaborationNotification(notification) {
+		if (!notification.read) {
+			await call(
+				'frappe_whatsapp_core.internal_comments.mark_collaboration_notification_read',
+				{ notification: notification.name },
+			).catch(() => null)
+			notification.read = 1
+		}
+		notificationPopover.value?.hide()
+		notificationFocusSequence += 1
+		await router.push(
+			collaborationNotificationRoute(
+				notification,
+				`${notification.name || 'notification'}:${notificationFocusSequence}`,
+			),
+		)
+	}
+
 	watch(
 		() => route.fullPath,
 		() => {
@@ -175,9 +226,15 @@
 		unsubscribeConnection = subscribeConnection(session.boot?.site, (status) => {
 			realtimeStatus.value = status
 		})
+		if (session.boot?.modules?.includes('inbox')) {
+			void loadCollaborationNotifications()
+			unsubscribeNotifications = subscribe(session.boot?.site, 'notification', () => {
+				void loadCollaborationNotifications()
+			})
+		}
 		unsubscribeAuth = onAuthExpired(() => {
 			session.expire()
-			router.replace({ name: 'login', query: { redirect: route.fullPath, expired: '1' } })
+			redirectToFrappeLogin(route.fullPath)
 		})
 		if (session.boot?.modules?.includes('calling')) {
 			calling.initialize(session.boot?.site, session.user?.name)
@@ -188,6 +245,7 @@
 		window.clearTimeout(sidebarCollapseTimer)
 		window.removeEventListener('keydown', handleShortcut)
 		unsubscribeConnection()
+		unsubscribeNotifications()
 		unsubscribeAuth()
 		calling.destroy()
 	})
@@ -222,7 +280,6 @@
 				<div class="brand-mark"><CoreMark :size="38" /></div>
 				<div>
 					<strong>WhatsApp</strong>
-					<span>Business workspace</span>
 				</div>
 				<Button
 					unstyled
@@ -305,14 +362,47 @@
 						@click="openCommand"
 						><Search :size="19"
 					/></Button>
-					<Button
-						text
-						rounded
-						severity="secondary"
-						aria-label="Open shared inbox"
-						@click="router.push({ name: 'inbox' })"
-						><Bell :size="19"
-					/></Button>
+					<div class="notification-control">
+						<Button
+							text
+							rounded
+							severity="secondary"
+							:aria-label="`Team notifications${notificationUnread ? ` (${notificationUnread} unread)` : ''}`"
+							@click="toggleNotifications"
+							><Bell :size="19"
+						/></Button>
+						<span v-if="notificationUnread" class="notification-count">{{
+							Math.min(notificationUnread, 99)
+						}}</span>
+					</div>
+					<Popover ref="notificationPopover" class="collaboration-popover">
+						<section class="notification-panel" aria-label="Team notifications">
+							<header><strong>Team activity</strong></header>
+							<div
+								v-if="notificationsLoading && !collaborationNotifications.length"
+								class="notification-empty"
+							>
+								Loading…
+							</div>
+							<Button
+								v-for="notification in collaborationNotifications"
+								:key="notification.name"
+								unstyled
+								:class="['notification-row', { unread: !notification.read }]"
+								@click="openCollaborationNotification(notification)"
+							>
+								<span>{{ notification.subject }}</span>
+								<small>{{ notification.comment?.content }}</small>
+								<time>{{ formatDateTime(notification.creation) }}</time>
+							</Button>
+							<div
+								v-if="!notificationsLoading && !collaborationNotifications.length"
+								class="notification-empty"
+							>
+								No mentions or assignments.
+							</div>
+						</section>
+					</Popover>
 					<Button
 						unstyled
 						class="profile"
@@ -481,19 +571,13 @@
 		pointer-events: auto;
 		transform: translateX(0);
 	}
-	.brand strong,
-	.brand span {
+	.brand strong {
 		display: block;
 	}
 	.brand strong {
 		color: var(--wa-text);
 		font-size: 15px;
 		letter-spacing: -0.02em;
-	}
-	.brand span {
-		color: var(--wa-muted);
-		font-size: 11px;
-		margin-top: 2px;
 	}
 	.sidebar nav {
 		min-height: 0;
@@ -840,6 +924,96 @@
 	}
 	:global(html.mobile-navigation-open) {
 		overflow: hidden;
+	}
+	.notification-control {
+		position: relative;
+	}
+	.notification-count {
+		position: absolute;
+		top: -2px;
+		right: -2px;
+		display: grid;
+		place-items: center;
+		min-width: 17px;
+		height: 17px;
+		padding: 0 4px;
+		border: 2px solid var(--wa-surface);
+		border-radius: 999px;
+		color: white;
+		background: var(--wa-danger);
+		font-size: 9px;
+		font-weight: 800;
+		pointer-events: none;
+	}
+	:global(.collaboration-popover .p-popover-content) {
+		padding: 0;
+	}
+	.notification-panel {
+		width: min(360px, calc(100vw - 24px));
+		max-height: min(520px, 70vh);
+		overflow-y: auto;
+		overscroll-behavior: contain;
+	}
+	.notification-panel > header {
+		position: sticky;
+		top: 0;
+		z-index: 1;
+		padding: 14px 16px;
+		border-bottom: 1px solid var(--wa-border-soft);
+		background: var(--wa-surface);
+	}
+	.notification-row {
+		position: relative;
+		display: grid;
+		gap: 4px;
+		width: 100%;
+		padding: 12px 16px;
+		border: 0;
+		border-bottom: 1px solid var(--wa-border-soft);
+		color: var(--wa-text);
+		background: transparent;
+		text-align: left;
+		cursor: pointer;
+	}
+	.notification-row.unread {
+		background: var(--wa-primary-soft);
+	}
+	.notification-row:hover,
+	.notification-row:focus-visible {
+		background: var(--wa-surface-muted);
+		outline: none;
+	}
+	.notification-row:focus-visible {
+		box-shadow: inset 3px 0 var(--wa-primary);
+	}
+	.notification-row.unread::before {
+		content: '';
+		position: absolute;
+		left: 5px;
+		top: 17px;
+		width: 5px;
+		height: 5px;
+		border-radius: 50%;
+		background: var(--wa-primary);
+	}
+	.notification-row span {
+		font-size: 12px;
+		font-weight: 700;
+	}
+	.notification-row small,
+	.notification-row time,
+	.notification-empty {
+		color: var(--wa-muted);
+		font-size: 10px;
+	}
+	.notification-row small {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.notification-empty {
+		padding: 22px 16px;
+		text-align: center;
 	}
 	@media (max-width: 900px) {
 		.sidebar {

@@ -7,7 +7,7 @@
 		"dev": "vite",
 		"build": "vite build --base=/assets/frappe_whatsapp_core/core_ui/ && yarn copy-html-entry",
 		"copy-html-entry": "cp ../frappe_whatsapp_core/public/core_ui/index.html ../frappe_whatsapp_core/www/whatsapp_core.html && cp ../frappe_whatsapp_core/public/core_ui/index.html ../frappe_whatsapp_core/www/whatsapp.html",
-		"test:unit": "node --test src/features/templates/templateAuthoring.test.js src/features/templates/templateParameters.test.js src/features/calling/services/callPermission.test.js src/features/calling/services/callSignaling.test.js src/features/calling/services/whatsappWebRTC.test.js src/features/flows/domain/nodeTypes.test.js src/features/flows/utils/flowAsset.test.js src/features/inbox/utils/conversationSearch.test.js src/utils/routeView.test.js",
+		"test:unit": "node --test src/components/form/linkFieldPresentation.test.js src/features/templates/templateAuthoring.test.js src/features/templates/templateParameters.test.js src/features/calling/services/callPermission.test.js src/features/calling/services/callSignaling.test.js src/features/calling/services/whatsappWebRTC.test.js src/features/flows/domain/nodeTypes.test.js src/features/flows/utils/flowAsset.test.js src/features/inbox/utils/conversationSearch.test.js src/features/inbox/utils/conversationThreads.test.js src/features/inbox/utils/conversationView.test.js src/features/inbox/utils/folderNavigation.test.js src/features/inbox/utils/messageContent.test.js src/utils/collaborationNotification.test.js src/utils/frappeLogin.test.js src/utils/routeView.test.js",
 		"format": "prettier --write .",
 		"format:check": "prettier --check ."
 	},

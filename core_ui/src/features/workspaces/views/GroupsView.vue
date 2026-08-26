@@ -15,7 +15,14 @@
 	import ContactSelect from '@/features/contacts/components/ContactSelect.vue'
 	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
 	import TemplateSelect from '@/features/templates/components/TemplateSelect.vue'
-	import { MessageCircleMore, Settings2, ShieldCheck, UsersRound } from 'lucide-vue-next'
+	import {
+		MessageCircleMore,
+		RefreshCw,
+		Settings2,
+		ShieldCheck,
+		ShieldOff,
+		UsersRound,
+	} from 'lucide-vue-next'
 	import { call, errorMessage, friendlyMessage, uploadFile } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
@@ -66,6 +73,19 @@
 	const edit = ref({ subject: '', description: '' })
 	const invite = ref({ identity: '', template_name: '', language_code: 'en' })
 	const rows = computed(() => workspace.value.data || [])
+	const groupsUnavailable = computed(() => !loading.value && workspace.value.available === false)
+	const unavailableTitle = computed(() =>
+		workspace.value.configured === false
+			? 'Connect WhatsApp Integration to use groups'
+			: 'Groups are not available for this phone number',
+	)
+	const unavailableCopy = computed(
+		() =>
+			error.value ||
+			(workspace.value.configured === false
+				? 'Complete the Core-to-Hub connection first, then recheck availability.'
+				: 'Meta has not enabled the Groups API for this account. Recheck after permissions or account eligibility change.'),
+	)
 	const pinnableMessages = computed(() =>
 		(activity.value.messages || []).map((message) => ({
 			value: message.provider_message_id,
@@ -416,10 +436,7 @@
 
 <template>
 	<div class="page-heading">
-		<div>
-			<div class="eyebrow">Meta Groups API</div>
-			<h1>WhatsApp Groups</h1>
-		</div>
+		<h1>WhatsApp Groups</h1>
 		<Button
 			label="Create group"
 			icon="pi pi-plus"
@@ -427,7 +444,7 @@
 			@click="showCreate = true"
 		/>
 	</div>
-	<div v-if="error" class="banner error-banner">{{ error }}</div>
+	<div v-if="error && !groupsUnavailable" class="banner error-banner">{{ error }}</div>
 	<div v-if="notice" class="banner success-banner">{{ notice }}</div>
 	<section class="surface-card panel">
 		<div class="toolbar">
@@ -447,6 +464,16 @@
 		</div>
 		<div v-if="loading" class="group-grid" aria-busy="true">
 			<div v-for="index in 4" :key="index" class="group-card loading-card"></div>
+		</div>
+		<div v-else-if="groupsUnavailable" class="availability-state" role="status">
+			<span class="availability-icon"><ShieldOff :size="24" /></span>
+			<div>
+				<strong>{{ unavailableTitle }}</strong>
+				<p>{{ unavailableCopy }}</p>
+			</div>
+			<Button label="Recheck availability" outlined :loading="loading" @click="load()">
+				<template #icon><RefreshCw :size="15" /></template>
+			</Button>
 		</div>
 		<div v-else-if="rows.length" class="group-grid">
 			<article v-for="group in rows" :key="group.id" class="group-card">
@@ -484,7 +511,6 @@
 		<div v-else class="empty">
 			<MessageCircleMore :size="32" />
 			<strong>No WhatsApp groups yet</strong>
-			<span>Create the first group for this account or choose another account.</span>
 		</div>
 	</section>
 	<AppDialog
@@ -867,6 +893,48 @@
 		);
 		background-size: 200% 100%;
 		animation: group-pulse 1.3s ease-in-out infinite;
+	}
+	.availability-state {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 16px;
+		min-height: 150px;
+		padding: 22px;
+		border: 1px solid color-mix(in srgb, var(--wa-warning) 28%, var(--wa-border));
+		border-radius: 16px;
+		background: color-mix(in srgb, var(--wa-warning) 6%, var(--wa-surface));
+	}
+	.availability-icon {
+		display: grid;
+		place-items: center;
+		width: 46px;
+		height: 46px;
+		border-radius: 14px;
+		color: var(--wa-warning);
+		background: color-mix(in srgb, var(--wa-warning) 13%, transparent);
+	}
+	.availability-state strong {
+		display: block;
+		margin-bottom: 5px;
+	}
+	.availability-state p,
+	.availability-state small {
+		display: block;
+		margin: 0;
+		color: var(--wa-muted);
+		line-height: 1.5;
+	}
+	.availability-state small {
+		margin-top: 7px;
+	}
+	@media (max-width: 720px) {
+		.availability-state {
+			grid-template-columns: auto minmax(0, 1fr);
+		}
+		.availability-state .p-button {
+			grid-column: 1 / -1;
+		}
 	}
 	@keyframes group-pulse {
 		to {

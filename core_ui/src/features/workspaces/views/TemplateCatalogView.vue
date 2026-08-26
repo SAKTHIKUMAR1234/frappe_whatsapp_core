@@ -224,7 +224,6 @@
 					<div class="empty">
 						<MessageSquareText :size="30" />
 						<strong>No template assignments received</strong>
-						<span>Assign a Meta template to this workspace in Integration Desk.</span>
 					</div>
 				</template>
 			</DataTable>

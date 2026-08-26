@@ -328,6 +328,33 @@ def publish_conversation_presence(
 	return len(recipients)
 
 
+def publish_internal_comment_change(
+	conversation: str,
+	*,
+	comment: dict,
+	status: str,
+	after_commit: bool = True,
+) -> int:
+	"""Publish a team note only to users who may open its conversation."""
+	conversation = str(conversation or "").strip()
+	if not conversation or status not in {"created", "updated", "deleted"}:
+		return 0
+	payload = {
+		"conversation": conversation,
+		"status": status,
+		"comment": dict(comment or {}),
+	}
+	recipients = conversation_recipients([conversation]).get(conversation, set())
+	for user in recipients:
+		frappe.publish_realtime(
+			"whatsapp_core_internal_comment",
+			payload,
+			user=user,
+			after_commit=after_commit,
+		)
+	return len(recipients)
+
+
 def publish_call_changes(call_names, *, after_commit: bool = True) -> int:
 	"""Send complete call lifecycle deltas only to users in the call's inbox scope."""
 	names = _unique_strings(call_names)

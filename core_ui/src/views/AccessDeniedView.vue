@@ -1,16 +1,14 @@
 <script setup>
 	import Button from 'primevue/button'
 	import { ShieldX } from 'lucide-vue-next'
-	import { useRouter } from 'vue-router'
-
 	import { useSessionStore } from '@/stores/session'
+	import { redirectToFrappeLogin } from '@/utils/frappeLogin'
 
-	const router = useRouter()
 	const session = useSessionStore()
 
 	async function signOut() {
 		await session.logout()
-		router.replace({ name: 'login' })
+		redirectToFrappeLogin('/')
 	}
 </script>
 

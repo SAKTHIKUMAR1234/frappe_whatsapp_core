@@ -96,10 +96,7 @@
 <template>
 	<section class="assignment-table">
 		<header>
-			<div>
-				<strong>Team contacts</strong
-				><small>Migration assigns business contacts; managers can adjust them here.</small>
-			</div>
+			<strong>Team contacts</strong>
 			<span>{{ rows.length }}{{ hasMore ? '+' : '' }}</span>
 		</header>
 		<Message v-if="failure" severity="error" :closable="false">{{ failure }}</Message>
@@ -172,14 +169,6 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 10px;
-	}
-	.assignment-table header div {
-		display: grid;
-		gap: 2px;
-	}
-	.assignment-table header small {
-		color: var(--wa-muted);
-		font-size: 11px;
 	}
 	.assignment-add > :first-child {
 		flex: 1 1 auto;

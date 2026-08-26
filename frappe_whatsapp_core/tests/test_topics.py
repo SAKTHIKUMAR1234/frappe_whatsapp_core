@@ -76,7 +76,12 @@ class TestConversationTopics(FrappeTestCase):
 			topic_name=topic.name,
 		)
 		self.assertEqual(repeated.message_count, 2)
-		self.assertEqual(list_topics(self.conversation.name)[0]["message_count"], 2)
+		listed = list_topics(self.conversation.name)[0]
+		self.assertEqual(listed["message_count"], 2)
+		self.assertEqual(listed["first_message"], self.first_message.name)
+		self.assertEqual(listed["last_message"], self.second_message.name)
+		self.assertTrue(listed["first_message_at"])
+		self.assertTrue(listed["last_message_at"])
 
 		with self.assertRaises(frappe.ValidationError):
 			upsert_topic(

@@ -9,7 +9,7 @@
 		empty: { type: Boolean, default: false },
 		loadingLabel: { type: String, default: 'Loading workspace…' },
 		emptyTitle: { type: String, default: 'Nothing here yet' },
-		emptyMessage: { type: String, default: 'New records will appear here automatically.' },
+		emptyMessage: { type: String, default: '' },
 	})
 
 	defineEmits(['retry'])
@@ -18,10 +18,7 @@
 <template>
 	<section v-if="loading" class="async-state" aria-live="polite" aria-busy="true">
 		<ProgressSpinner stroke-width="5" />
-		<div>
-			<strong>{{ loadingLabel }}</strong
-			><span>Please wait while we fetch the latest data.</span>
-		</div>
+		<strong>{{ loadingLabel }}</strong>
 	</section>
 	<section v-else-if="error" class="async-state error" role="alert">
 		<span class="state-icon"><AlertTriangle :size="21" /></span>
@@ -34,7 +31,7 @@
 		<span class="state-icon"><Inbox :size="21" /></span>
 		<div>
 			<strong>{{ emptyTitle }}</strong
-			><span>{{ emptyMessage }}</span>
+			><span v-if="emptyMessage">{{ emptyMessage }}</span>
 		</div>
 		<slot />
 	</section>

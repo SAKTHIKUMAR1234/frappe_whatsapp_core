@@ -18,6 +18,7 @@
 		"phone_field",
 		"display_name_field",
 		"entity_type_field",
+		"filter_fields",
 		"filters"
 	],
 	"fields": [
@@ -85,6 +86,12 @@
 			"fieldname": "entity_type_field",
 			"fieldtype": "Data",
 			"label": "Entity Type Field"
+		},
+		{
+			"fieldname": "filter_fields",
+			"fieldtype": "JSON",
+			"label": "Inbox Filter Fields",
+			"description": "Business fields operators may use to filter the shared inbox."
 		},
 		{
 			"fieldname": "filters",

@@ -17,6 +17,7 @@ class WhatsAppCoreIdentitySource(Document):
 		if not self.phone_field:
 			frappe.throw(_("Phone Field is required."))
 		self._validate_mapping_fields()
+		self._validate_filter_fields()
 		if self.filters:
 			try:
 				filters = json.loads(self.filters)
@@ -24,6 +25,31 @@ class WhatsAppCoreIdentitySource(Document):
 				frappe.throw(_("Filters must contain valid JSON."))
 			if not isinstance(filters, dict):
 				frappe.throw(_("Filters must be a JSON object."))
+
+	def _validate_filter_fields(self):
+		from frappe_whatsapp_core.business_filters import (
+			MAX_CONFIGURED_FIELDS,
+			is_filterable_field,
+			table_multiselect_value_field,
+		)
+
+		try:
+			configured = frappe.parse_json(self.filter_fields or "[]")
+		except (TypeError, ValueError, json.JSONDecodeError):
+			frappe.throw(_("Inbox Filter Fields must contain valid JSON."))
+		if not isinstance(configured, list):
+			frappe.throw(_("Inbox Filter Fields must be a JSON list."))
+		configured = list(dict.fromkeys(str(value or "").strip() for value in configured if value))
+		if len(configured) > MAX_CONFIGURED_FIELDS:
+			frappe.throw(_("Select no more than {0} inbox filter fields.").format(MAX_CONFIGURED_FIELDS))
+		meta = frappe.get_meta(self.source_doctype)
+		for fieldname in configured:
+			field = meta.get_field(fieldname)
+			if not is_filterable_field(field):
+				frappe.throw(_("{0} is not a filterable field on {1}.").format(fieldname, self.source_doctype))
+			if field.fieldtype == "Table MultiSelect" and not table_multiselect_value_field(field):
+				frappe.throw(_("{0} does not contain a Link value field.").format(field.label or fieldname))
+		self.filter_fields = frappe.as_json(configured)
 
 	def _validate_mapping_fields(self):
 		meta = frappe.get_meta(self.source_doctype)

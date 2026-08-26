@@ -119,6 +119,22 @@ class TestMetaFlowProxy(FrappeTestCase):
 			"an eligible Official Business Account (OBA) phone number.",
 		)
 
+	def test_workspace_hides_private_hub_connection_details(self):
+		from frappe_whatsapp_core.meta_flows import _public_workspace_error
+
+		message = _public_workspace_error(
+			Exception(
+				"Failed to establish a safe connection to http://127.0.0.1:8003: "
+				"[Errno 111] Connection refused"
+			)
+		)
+		self.assertEqual(
+			message,
+			"WhatsApp Integration could not be reached. Ask a WhatsApp Manager to check "
+			"the Hub connection, then retry.",
+		)
+		self.assertNotIn("127.0.0.1", message)
+
 	@patch("frappe_whatsapp_core.meta_flows._context", return_value={"waba_name": "WABA Doc"})
 	@patch("frappe_whatsapp_core.meta_flows._call")
 	def test_create_and_upload_stay_on_meta(self, call, context):

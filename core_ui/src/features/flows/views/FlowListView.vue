@@ -14,7 +14,7 @@
 	import Skeleton from 'primevue/skeleton'
 	import Tag from 'primevue/tag'
 	import Textarea from 'primevue/textarea'
-	import { Cloud, GitBranch, Plus, Search, WandSparkles } from 'lucide-vue-next'
+	import { Cloud, GitBranch, Plus, Search } from 'lucide-vue-next'
 	import { useConfirm } from 'primevue/useconfirm'
 	import { useToast } from 'primevue/usetoast'
 	import {
@@ -258,10 +258,7 @@
 <template>
 	<FlowTypeSwitch />
 	<div class="page-heading">
-		<div>
-			<div class="eyebrow">Meta-hosted experiences</div>
-			<h1>WhatsApp Flows</h1>
-		</div>
+		<h1>WhatsApp Flows</h1>
 		<div v-if="canManage" class="heading-actions">
 			<Button
 				label="Data endpoint"
@@ -364,8 +361,7 @@
 			></Column>
 			<template #empty
 				><div class="empty">
-					<Cloud :size="30" /><strong>No Meta Flows found</strong
-					><span>Create one for this WhatsApp account.</span>
+					<Cloud :size="30" /><strong>No Meta Flows found</strong>
 				</div></template
 			>
 		</DataTable>
@@ -379,13 +375,6 @@
 		:style="{ width: '470px', maxWidth: '94vw' }"
 		@show="focusDialogControl(createDialogRef, '#meta-flow-name')"
 	>
-		<div class="dialog-copy">
-			<WandSparkles :size="20" />
-			<p>
-				The Flow is created directly in Meta. You can upload and validate flow.json on the
-				next screen.
-			</p>
-		</div>
 		<label for="meta-flow-name">Flow name</label>
 		<InputText
 			id="meta-flow-name"
@@ -636,20 +625,6 @@
 	}
 	.empty strong {
 		color: var(--wa-text);
-	}
-	.dialog-copy {
-		display: flex;
-		gap: 10px;
-		padding: 12px;
-		margin-bottom: 17px;
-		border-radius: 10px;
-		color: var(--wa-success);
-		background: var(--wa-success-soft);
-	}
-	.dialog-copy p {
-		margin: 0;
-		font-size: 11px;
-		line-height: 1.5;
 	}
 	label {
 		display: block;

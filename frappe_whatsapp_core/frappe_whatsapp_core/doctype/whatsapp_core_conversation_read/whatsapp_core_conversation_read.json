@@ -9,6 +9,7 @@
 		"read_key",
 		"conversation",
 		"user",
+		"last_opened_at",
 		"last_read_message",
 		"last_read_at",
 		"last_read_creation"
@@ -36,6 +37,11 @@
 			"options": "User",
 			"reqd": 1,
 			"in_list_view": 1
+		},
+		{
+			"fieldname": "last_opened_at",
+			"fieldtype": "Datetime",
+			"label": "Last Opened At"
 		},
 		{
 			"fieldname": "last_read_message",

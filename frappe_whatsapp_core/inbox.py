@@ -7,8 +7,14 @@ import json
 import re
 
 import frappe
+from frappe.utils import cint
 
 from frappe_whatsapp_core.ai_summaries import attach_message_insights, get_identity_summary
+from frappe_whatsapp_core.business_filters import (
+	add_business_filters,
+	filter_options,
+	source_schemas,
+)
 from frappe_whatsapp_core.contact_presentation import (
 	present_identity_names,
 	search_presented_identities,
@@ -40,14 +46,24 @@ def conversations(
 	limit: int = 250,
 	category: str | None = None,
 	team: str | None = None,
+	folder: str | None = None,
 	search: str | None = None,
+	unread_only=0,
+	include_unread=1,
+	business_source: str | None = None,
+	business_filters=None,
 ) -> list[dict]:
 	limit = max(1, min(int(limit), 500))
 	return _conversation_page(
 		limit=limit,
 		category=category,
 		team=team,
+		folder=folder,
 		search=search,
+		unread_only=unread_only,
+		include_unread=include_unread,
+		business_source=business_source,
+		business_filters=business_filters,
 	)[0]
 
 
@@ -59,7 +75,12 @@ def conversation_page(
 	before_name: str | None = None,
 	category: str | None = None,
 	team: str | None = None,
+	folder: str | None = None,
 	search: str | None = None,
+	unread_only=0,
+	include_unread=1,
+	business_source: str | None = None,
+	business_filters=None,
 ) -> dict:
 	"""Return a stable cursor page for the virtualized conversation list."""
 	limit = max(1, min(int(limit or 20), 100))
@@ -69,7 +90,12 @@ def conversation_page(
 		before_name=before_name,
 		category=category,
 		team=team,
+		folder=folder,
 		search=search,
+		unread_only=unread_only,
+		include_unread=include_unread,
+		business_source=business_source,
+		business_filters=business_filters,
 	)
 	oldest = rows[-1] if has_more and rows else None
 	return {
@@ -87,14 +113,47 @@ def _conversation_page(
 	before_name: str | None = None,
 	category: str | None = None,
 	team: str | None = None,
+	folder: str | None = None,
 	search: str | None = None,
+	unread_only=0,
+	include_unread=1,
+	business_source: str | None = None,
+	business_filters=None,
 ) -> tuple[list[dict], bool]:
 	conditions, values = conversation_conditions("conversation")
+	if cint(unread_only):
+		conditions.append(
+			"""EXISTS (
+				SELECT 1 FROM `tabWhatsApp Core Message` AS unread_filter_message
+				LEFT JOIN `tabWhatsApp Core Message Read` AS unread_filter_read
+					ON unread_filter_read.message = unread_filter_message.name
+					AND unread_filter_read.user = %(unread_filter_user)s
+				LEFT JOIN `tabWhatsApp Core Conversation Read` AS unread_filter_cursor
+					ON unread_filter_cursor.conversation = unread_filter_message.conversation
+					AND unread_filter_cursor.user = %(unread_filter_user)s
+				WHERE unread_filter_message.conversation = conversation.name
+					AND unread_filter_message.direction = 'Inbound'
+					AND unread_filter_message.message_type != 'reaction'
+					AND unread_filter_read.name IS NULL
+					AND (
+						unread_filter_cursor.name IS NULL
+						OR unread_filter_cursor.last_opened_at IS NULL
+						OR unread_filter_message.creation > unread_filter_cursor.last_opened_at
+					)
+			)"""
+		)
+		values["unread_filter_user"] = frappe.session.user
 	_add_conversation_search(
 		conditions,
 		values,
 		search,
 		presented_identities=search_presented_identities(search),
+	)
+	add_business_filters(
+		conditions,
+		values,
+		source_name=business_source,
+		raw_filters=business_filters,
 	)
 	team = str(team or "").strip()
 	if team:
@@ -123,6 +182,15 @@ def _conversation_page(
 			)"""
 		)
 		values["team"] = team
+	from frappe_whatsapp_core.customer_workspace import folder_filter_condition
+
+	folder_condition, folder_values = folder_filter_condition(
+		folder,
+		identity_expression="conversation.remote_identity",
+	)
+	if folder_condition:
+		conditions.append(folder_condition)
+		values.update(folder_values)
 	category = str(category or "").strip()
 	if category:
 		conditions.append(
@@ -173,7 +241,48 @@ def _conversation_page(
 	)
 	has_more = len(rows) > limit
 	rows = rows[:limit]
-	return _enrich_conversation_rows(rows), has_more
+	return _enrich_conversation_rows(rows, include_unread=bool(cint(include_unread))), has_more
+
+
+@frappe.whitelist()
+@require_core_access()
+def business_filter_schema() -> list[dict]:
+	"""Return administrator-curated business filters for the current inbox."""
+	return source_schemas()
+
+
+@frappe.whitelist()
+@require_core_access()
+def business_filter_options(source: str, field: str, search: str = "") -> list[dict]:
+	"""Search filter values without crossing the operator's conversation scope."""
+	return filter_options(source, field, search)
+
+
+@frappe.whitelist()
+@require_core_access()
+def conversation_unread_counts(conversations) -> dict[str, int]:
+	"""Hydrate unread badges for a small, permission-scoped visible list window."""
+	if isinstance(conversations, str):
+		try:
+			conversations = json.loads(conversations)
+		except (TypeError, ValueError):
+			conversations = [conversations]
+	names = list(dict.fromkeys(str(name or "").strip() for name in (conversations or [])))
+	names = [name for name in names if name][:100]
+	if not names:
+		return {}
+	conditions, values = conversation_conditions("conversation")
+	conditions.append("conversation.name IN %(requested_conversations)s")
+	values["requested_conversations"] = tuple(names)
+	visible = frappe.db.sql(
+		f"""SELECT conversation.name
+		FROM `tabWhatsApp Core Conversation` AS conversation
+		WHERE {" AND ".join(conditions)}""",
+		values,
+		pluck=True,
+	)
+	counts = _unread_counts(visible) if visible else {}
+	return {name: cint(counts.get(name)) for name in visible}
 
 
 def _add_conversation_search(
@@ -342,6 +451,9 @@ def _enrich_conversation_rows(
 	identity_aliases = _identity_search_aliases(identity_names)
 	teams = _team_presentations({row.assigned_team for row in rows if row.assigned_team})
 	contact_teams = _identity_team_presentations(identity_names)
+	from frappe_whatsapp_core.customer_workspace import folders_for_identities
+
+	contact_folders = folders_for_identities(identity_names, user=user)
 	presentations = present_identity_names(identity_names, context={"surface": "inbox_list"})
 	latest_messages = _latest_messages(conversation_names)
 	latest_calls = _latest_calls(conversation_names)
@@ -376,6 +488,7 @@ def _enrich_conversation_rows(
 				**row,
 				"assigned_team_details": teams.get(row.assigned_team),
 				"contact_teams": contact_teams.get(row.remote_identity, []),
+				"contact_folders": contact_folders.get(row.remote_identity, []),
 				"display_name": display_name,
 				"phone_number": presentation.get("secondary_text") or "",
 				"identity_status": identity.get("status") or "",
@@ -502,6 +615,12 @@ def conversation(name: str, message_limit: int = 30) -> dict:
 	_attach_template_snapshots(messages)
 	attach_message_reactions(messages, doc.name)
 	attach_message_readers(messages)
+	from frappe_whatsapp_core.customer_workspace import attach_read_coverage, folders_for_identities
+	from frappe_whatsapp_core.internal_comments import _comment_page
+
+	expected_readers = attach_read_coverage(messages, doc.name)
+	contact_folders = folders_for_identities([identity.name]).get(identity.name, [])
+	internal_comment_page = _comment_page(doc.name)
 	bookmarks = (
 		set(
 			frappe.get_all(
@@ -522,6 +641,7 @@ def conversation(name: str, message_limit: int = 30) -> dict:
 		"conversation": doc.as_dict(),
 		"assigned_team_details": assigned_team,
 		"contact_teams": contact_teams,
+		"contact_folders": contact_folders,
 		"identity": identity.as_dict(),
 		"display_name": presentation.get("display_name") or identity.normalized_value,
 		"contact_presentation": presentation,
@@ -534,6 +654,12 @@ def conversation(name: str, message_limit: int = 30) -> dict:
 		"topics": list_topics(doc.name),
 		"contact_summary": get_identity_summary(identity.name),
 		"readers": readers,
+		"expected_readers": expected_readers,
+		"current_user": frappe.session.user,
+		"internal_comments": internal_comment_page["rows"],
+		"internal_comment_page": {
+			key: value for key, value in internal_comment_page.items() if key != "rows"
+		},
 		"outbound": outbound_state(doc.name),
 		"templates": frappe.get_all(
 			"WhatsApp Core Template",
@@ -600,10 +726,17 @@ def _conversation_message_rows(conversation: str, limit: int, current_read) -> t
 		LEFT JOIN `tabWhatsApp Core Message Read` message_read
 			ON message_read.message = message.name
 			AND message_read.user = %(user)s
+		LEFT JOIN `tabWhatsApp Core Conversation Read` conversation_read
+			ON conversation_read.conversation = message.conversation
+			AND conversation_read.user = %(user)s
 		WHERE message.conversation = %(conversation)s
 			AND message.direction = 'Inbound'
 			AND message.message_type != 'reaction'
 			AND message_read.name IS NULL
+			AND (
+				conversation_read.last_opened_at IS NULL
+				OR message.creation > conversation_read.last_opened_at
+			)
 		ORDER BY message.provider_timestamp ASC, message.creation ASC, message.name ASC
 		LIMIT 1
 		""",
@@ -1107,10 +1240,18 @@ def _unread_counts(conversation_names: list[str], *, user: str | None = None) ->
 		LEFT JOIN `tabWhatsApp Core Message Read` AS message_read
 			ON message_read.message = message.name
 			AND message_read.user = %(user)s
+		LEFT JOIN `tabWhatsApp Core Conversation Read` AS conversation_read
+			ON conversation_read.conversation = message.conversation
+			AND conversation_read.user = %(user)s
 		WHERE message.conversation IN %(conversation_names)s
 			AND message.direction = 'Inbound'
 			AND message.message_type != 'reaction'
 			AND message_read.name IS NULL
+			AND (
+				conversation_read.name IS NULL
+				OR conversation_read.last_opened_at IS NULL
+				OR message.creation > conversation_read.last_opened_at
+			)
 		GROUP BY message.conversation
 		""",
 		{

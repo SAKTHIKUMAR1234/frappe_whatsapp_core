@@ -153,6 +153,24 @@ def team_permission_query(user: str | None = None, **_kwargs) -> str:
 	)"""
 
 
+def contact_folder_permission_query(user: str | None = None, **_kwargs) -> str:
+	user = _permission_user(user)
+	if user == "Guest":
+		return "1 = 0"
+	return f"`tabWhatsApp Core Contact Folder`.user = {frappe.db.escape(user)}"
+
+
+def contact_folder_item_permission_query(user: str | None = None, **_kwargs) -> str:
+	user = _permission_user(user)
+	if user == "Guest":
+		return "1 = 0"
+	return f"`tabWhatsApp Core Contact Folder Item`.user = {frappe.db.escape(user)}"
+
+
+def has_personal_record_permission(doc, ptype="read", user=None, **_kwargs):
+	return _permission_user(user) != "Guest" and doc.get("user") == _permission_user(user)
+
+
 def template_permission_query(user: str | None = None, **_kwargs) -> str:
 	"""Expose only sendable templates to operators; managers may audit every state."""
 	user = _permission_user(user)
@@ -238,6 +256,12 @@ def call_permission_query(user: str | None = None, **_kwargs) -> str:
 	)
 
 
+def internal_comment_permission_query(user: str | None = None, **_kwargs) -> str:
+	return _linked_conversation_permission_query(
+		"WhatsApp Core Internal Comment", "conversation", user
+	)
+
+
 def _has_conversation_scope(conversation: str | None, user: str | None = None) -> bool:
 	user = _permission_user(user)
 	if not conversation:
@@ -273,6 +297,10 @@ def has_scoped_message_read_permission(doc, ptype="read", user=None, **_kwargs):
 
 
 def has_scoped_call_permission(doc, ptype="read", user=None, **_kwargs):
+	return _has_conversation_scope(doc.get("conversation"), user)
+
+
+def has_scoped_internal_comment_permission(doc, ptype="read", user=None, **_kwargs):
 	return _has_conversation_scope(doc.get("conversation"), user)
 
 

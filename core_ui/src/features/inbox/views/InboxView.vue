@@ -7,15 +7,30 @@
 	import Select from 'primevue/select'
 	import Skeleton from 'primevue/skeleton'
 	import { useToast } from 'primevue/usetoast'
-	import { MessageSquarePlus, ArrowDown, Search, ShieldAlert, X } from 'lucide-vue-next'
+	import {
+		MessageSquarePlus,
+		ArrowDown,
+		FolderPlus,
+		ListTodo,
+		Search,
+		ShieldAlert,
+		X,
+	} from 'lucide-vue-next'
 
 	import ConversationHeader from '@/features/inbox/components/ConversationHeader.vue'
+	import AttachmentPreviewDialog from '@/features/inbox/components/AttachmentPreviewDialog.vue'
 	import CallTimelineEvent from '@/features/inbox/components/CallTimelineEvent.vue'
 	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
 	import ConversationContext from '@/features/inbox/components/ConversationContext.vue'
+	import ConversationSummaryPanel from '@/features/inbox/components/ConversationSummaryPanel.vue'
 	import ContactMessageEditor from '@/features/inbox/components/ContactMessageEditor.vue'
 	import ConversationList from '@/features/inbox/components/ConversationList.vue'
 	import { filterAndRankConversations } from '@/features/inbox/utils/conversationSearch'
+	import { foldersMatch } from '@/features/inbox/utils/folderNavigation'
+	import {
+		conversationViewStorageKey,
+		defaultConversationView,
+	} from '@/features/inbox/utils/conversationView'
 	import InboxSidebarControls from '@/features/inbox/components/InboxSidebarControls.vue'
 	import InboxResizeHandle from '@/features/inbox/components/InboxResizeHandle.vue'
 	import MessageActionMenu from '@/features/inbox/components/MessageActionMenu.vue'
@@ -44,7 +59,21 @@
 	const richSending = ref(false)
 	const search = ref('')
 	const listMode = ref('all')
-	const team = ref('')
+	const team = ref(String(route.query.team || ''))
+	const folder = ref(String(route.query.folder || ''))
+	const businessSource = ref(String(route.query.business_source || ''))
+	const businessFilters = ref(parseBusinessFilters(route.query.business_filters))
+	const businessFilterSchemas = ref([])
+	const folders = ref([])
+	const inboxNavigation = ref({
+		conversation_count: 0,
+		unread_count: 0,
+		unread_conversations: 0,
+	})
+	const folderDialog = ref(false)
+	const folderName = ref('')
+	const folderColor = ref('#22c55e')
+	const savingFolder = ref(false)
 	const rows = ref([])
 	const conversationViewers = ref([])
 	const conversationPage = ref({ has_more: false })
@@ -60,6 +89,8 @@
 		return [...new Map(values.filter(Boolean).map((item) => [item.name, item])).values()]
 	})
 	const contextOpen = ref(false)
+	const viewMode = ref('chat')
+	const summaryRefreshing = ref(false)
 	const messagePage = ref({ has_more: false, has_more_newer: false })
 	const loadingNewer = ref(false)
 	const messageSearchOpen = ref(false)
@@ -69,11 +100,63 @@
 	const messageSearching = ref(false)
 	const draft = ref('')
 	const replyTo = ref(null)
+	const composerRef = ref(null)
 	const messageMenu = ref(null)
+	const internalTaskMessages = ref([])
+	const internalTaskReference = ref(null)
+	const focusedComment = computed(() => String(route.query.comment || ''))
+	const focusedMessage = computed(() => String(route.query.message || ''))
+	const internalTaskMessageNames = computed(
+		() => new Set(internalTaskMessages.value.map((message) => message.name)),
+	)
 	const messageMenuPosition = ref({ x: 0, y: 0 })
 	const messageInfo = ref(null)
 	const messageInfoOpen = ref(false)
+	const attachmentPreviewOpen = ref(false)
+	const attachmentPreview = ref(null)
+	const messageInfoReaders = computed(() => {
+		const rows = (messageInfo.value?.read_by || []).filter((reader) => reader?.user)
+		return [...new Map(rows.map((reader) => [reader.user, reader])).values()]
+	})
+	const messageInfoReaderUsers = computed(
+		() => new Set(messageInfoReaders.value.map((reader) => reader.user)),
+	)
+	const messageInfoWaitingReaders = computed(() =>
+		(messageInfo.value?.read_coverage?.unread_by || []).filter(
+			(reader) => !messageInfoReaderUsers.value.has(reader.user),
+		),
+	)
 	const quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🙏']
+
+	function parseBusinessFilters(value) {
+		if (!value) return {}
+		try {
+			const parsed = JSON.parse(String(value))
+			return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+		} catch {
+			return {}
+		}
+	}
+
+	function serializedBusinessFilters(value = businessFilters.value) {
+		const entries = Object.entries(value || {}).filter(([, filterValue]) => {
+			if (Array.isArray(filterValue)) return filterValue.length > 0
+			return filterValue !== null && filterValue !== undefined && filterValue !== ''
+		})
+		return entries.length ? JSON.stringify(Object.fromEntries(entries)) : ''
+	}
+
+	function openAttachmentPreview(attachment) {
+		if (!/^(https?:\/\/|\/)/i.test(String(attachment?.url || ''))) return
+		attachmentPreview.value = attachment
+		attachmentPreviewOpen.value = true
+	}
+
+	async function focusComposer({ explicit = false } = {}) {
+		if (!explicit && !window.matchMedia?.('(pointer: fine)').matches) return
+		await nextTick()
+		window.requestAnimationFrame(() => composerRef.value?.focus?.({ preventScroll: true }))
+	}
 	const richDialog = ref(false)
 	const richDialogRef = ref(null)
 	const uploadingMedia = ref(false)
@@ -122,6 +205,11 @@
 	let typingRefreshTimer = null
 	let messageSearchTimer = null
 	let conversationSearchTimer = null
+	let navigationRefreshTimer = null
+	let navigationIdleCallback = null
+	let unreadHydrationTimer = null
+	const pendingUnreadHydration = new Set()
+	const hydratedUnreadRows = new Set()
 	let presenceHeartbeatTimer = null
 	let presenceConversation = ''
 	const presenceClientId = browserPresenceId()
@@ -271,22 +359,6 @@
 		}
 		return result
 	})
-	const topics = computed(() =>
-		(detail.value?.topics || []).map((topic) => ({
-			...topic,
-			messageRows: (topic.messages || [])
-				.map((messageName) => messageMap.value.get(messageName))
-				.filter(Boolean),
-		})),
-	)
-	const assignedMessages = computed(
-		() => new Set(topics.value.flatMap((topic) => topic.messages || [])),
-	)
-	const ungrouped = computed(() =>
-		(detail.value?.messages || []).filter(
-			(message) => !assignedMessages.value.has(message.name),
-		),
-	)
 	function timelineTimestamp(value) {
 		const raw =
 			value?.timeline_at ||
@@ -316,7 +388,7 @@
 	})
 	const timelineItems = computed(() =>
 		[
-			...ungrouped.value.map((message) => ({
+			...(detail.value?.messages || []).map((message) => ({
 				kind: 'message',
 				key: `message:${message.name}`,
 				value: message,
@@ -340,20 +412,28 @@
 		if (!silent) loading.value = true
 		listError.value = ''
 		try {
+			const includeUnread = listMode.value === 'unread'
 			const loaded = await call('frappe_whatsapp_core.inbox.conversation_page', {
 				limit: query ? 100 : 20,
 				team: team.value || null,
+				folder: folder.value || null,
 				search: query || null,
+				unread_only: listMode.value === 'unread' ? 1 : 0,
+				include_unread: includeUnread ? 1 : 0,
+				business_source: businessSource.value || null,
+				business_filters: serializedBusinessFilters() || null,
 			})
 			if (request !== listRequest) return
 			const currentUnread = new Map(
 				rows.value.map((row) => [row.name, Number(row.unread_count || 0)]),
 			)
-			rows.value = (loaded.rows || []).map((row) =>
-				clearedConversationBadges.has(row.name)
+			hydratedUnreadRows.clear()
+			rows.value = (loaded.rows || []).map((row) => {
+				if (includeUnread) hydratedUnreadRows.add(row.name)
+				return clearedConversationBadges.has(row.name)
 					? { ...row, unread_count: currentUnread.get(row.name) || 0 }
-					: row,
-			)
+					: row
+			})
 			conversationPage.value = loaded
 		} catch (error) {
 			if (request === listRequest)
@@ -368,16 +448,24 @@
 		loadingMoreRows.value = true
 		const request = listRequest
 		try {
+			const includeUnread = listMode.value === 'unread'
 			const loaded = await call('frappe_whatsapp_core.inbox.conversation_page', {
 				limit: search.value.trim() ? 100 : 20,
 				before: conversationPage.value.next_before,
 				before_name: conversationPage.value.next_before_name,
 				team: team.value || null,
+				folder: folder.value || null,
 				search: search.value.trim() || null,
+				unread_only: listMode.value === 'unread' ? 1 : 0,
+				include_unread: includeUnread ? 1 : 0,
+				business_source: businessSource.value || null,
+				business_filters: serializedBusinessFilters() || null,
 			})
 			if (request !== listRequest) return
 			const known = new Set(rows.value.map((row) => row.name))
-			rows.value.push(...(loaded.rows || []).filter((row) => !known.has(row.name)))
+			const added = (loaded.rows || []).filter((row) => !known.has(row.name))
+			if (includeUnread) added.forEach((row) => hydratedUnreadRows.add(row.name))
+			rows.value.push(...added)
 			conversationPage.value = loaded
 		} catch (error) {
 			toast.add({
@@ -388,6 +476,38 @@
 			})
 		} finally {
 			loadingMoreRows.value = false
+		}
+	}
+
+	function queueUnreadHydration(names) {
+		for (const name of names || []) {
+			if (name && !hydratedUnreadRows.has(name)) pendingUnreadHydration.add(name)
+		}
+		window.clearTimeout(unreadHydrationTimer)
+		if (!pendingUnreadHydration.size) return
+		unreadHydrationTimer = window.setTimeout(hydrateUnreadCounts, 40)
+	}
+
+	async function hydrateUnreadCounts() {
+		const names = [...pendingUnreadHydration].slice(0, 100)
+		if (!names.length) return
+		for (const name of names) pendingUnreadHydration.delete(name)
+		try {
+			const counts = await call('frappe_whatsapp_core.inbox.conversation_unread_counts', {
+				conversations: names,
+			})
+			for (const name of names) {
+				const row = rows.value.find((item) => item.name === name)
+				if (!row) continue
+				if (!clearedConversationBadges.has(name))
+					row.unread_count = Number(counts?.[name] || 0)
+				hydratedUnreadRows.add(name)
+			}
+		} catch {
+			// Badge hydration is non-critical and retries when the row re-enters view.
+		} finally {
+			if (pendingUnreadHydration.size)
+				unreadHydrationTimer = window.setTimeout(hydrateUnreadCounts, 80)
 		}
 	}
 
@@ -427,6 +547,10 @@
 			const loaded = await call('frappe_whatsapp_core.inbox.conversation', { name })
 			if (request !== detailRequest) return
 			detail.value = loaded
+			if (!silent) {
+				const savedMode = localStorage.getItem(conversationViewStorageKey(name))
+				viewMode.value = defaultConversationView(loaded, savedMode)
+			}
 			resumeMessage = loaded.resume_message || null
 			messagePage.value = detail.value.message_page || {
 				has_more: false,
@@ -438,13 +562,17 @@
 		} finally {
 			if (request === detailRequest) {
 				if (!silent) detailLoading.value = false
-				await restoreMessageScroll(name, {
-					forceBottom: !resumeMessage,
-					fallback: preservedPosition,
-					resumeMessage,
-					preferResume: hadUnread,
-				})
-				queueVisibleMessages()
+				if (viewMode.value === 'chat') {
+					await restoreMessageScroll(name, {
+						forceBottom: !resumeMessage,
+						fallback: preservedPosition,
+						resumeMessage,
+						preferResume: hadUnread,
+					})
+					queueVisibleMessages()
+					if (!silent && textReady.value) void focusComposer()
+				}
+				if (!silent) await focusRouteTarget(name)
 			}
 		}
 	}
@@ -861,12 +989,46 @@
 
 	function selectConversation(name) {
 		if (name === selectedName.value) return
-		clearConversationBadge(name)
 		rememberMessageScroll()
 		router.push({
 			name: 'inbox',
 			params: { conversation: name },
+			query: inboxFilterQuery(),
 			state: { fromInbox: true },
+		})
+	}
+
+	function inboxFilterQuery() {
+		const query = { ...route.query }
+		if (team.value) query.team = team.value
+		else delete query.team
+		if (folder.value) query.folder = folder.value
+		else delete query.folder
+		if (businessSource.value) query.business_source = businessSource.value
+		else delete query.business_source
+		const serializedFilters = serializedBusinessFilters()
+		if (businessSource.value && serializedFilters) query.business_filters = serializedFilters
+		else delete query.business_filters
+		return query
+	}
+
+	function syncInboxFilterRoute() {
+		const query = inboxFilterQuery()
+		const currentTeam = String(route.query.team || '')
+		const currentFolder = String(route.query.folder || '')
+		const currentBusinessSource = String(route.query.business_source || '')
+		const currentBusinessFilters = String(route.query.business_filters || '')
+		if (
+			currentTeam === team.value &&
+			currentFolder === folder.value &&
+			currentBusinessSource === businessSource.value &&
+			currentBusinessFilters === serializedBusinessFilters()
+		)
+			return
+		router.replace({
+			name: 'inbox',
+			params: selectedName.value ? { conversation: selectedName.value } : {},
+			query,
 		})
 	}
 
@@ -875,12 +1037,29 @@
 		const row = rows.value.find((item) => item.name === name)
 		if (row) row.unread_count = 0
 		clearedConversationBadges.add(name)
+		scheduleInboxNavigation()
+	}
+
+	async function acknowledgeConversationOpen(name) {
+		if (!name) return
+		clearConversationBadge(name)
+		try {
+			const read = await call(
+				'frappe_whatsapp_core.conversation_reads.mark_conversation_read',
+				{ conversation: name },
+			)
+			if (name === selectedName.value && read?.last_read_message)
+				updateConversationReader(read)
+		} catch {
+			// Opening the chat must remain available when read-state persistence is
+			// temporarily unavailable. The next unread hydration will reconcile it.
+		}
 	}
 
 	function closeMobileConversation() {
 		rememberMessageScroll()
 		if (window.history.state?.fromInbox) router.back()
-		else router.replace({ name: 'inbox' })
+		else router.replace({ name: 'inbox', query: inboxFilterQuery() })
 	}
 
 	function rememberListScroll(value) {
@@ -1063,6 +1242,7 @@
 
 	function selectReply(message) {
 		replyTo.value = message
+		void focusComposer({ explicit: true })
 	}
 
 	async function openQuotedMessage(message) {
@@ -1080,10 +1260,70 @@
 		if (!target) return
 		target.closest('details')?.setAttribute('open', '')
 		target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+		target.setAttribute('tabindex', '-1')
+		target.focus({ preventScroll: true })
+		target.addEventListener('blur', () => target.removeAttribute('tabindex'), { once: true })
 		target.classList.remove('quote-highlight')
 		void target.offsetWidth
 		target.classList.add('quote-highlight')
 		window.setTimeout(() => target?.classList.remove('quote-highlight'), 1300)
+	}
+
+	async function openThreadSource(messageName) {
+		if (!messageName || !detail.value) return
+		const conversation = selectedName.value
+		const currentDetail = detail.value
+		setConversationView('chat')
+		await nextTick()
+		let source = currentDetail.messages.find((message) => message.name === messageName)
+		if (!source) {
+			try {
+				const page = await call('frappe_whatsapp_core.workspace_api.message_window', {
+					conversation,
+					anchor_message: messageName,
+					limit: 30,
+				})
+				if (conversation !== selectedName.value || detail.value !== currentDetail) return
+				currentDetail.messages = page.rows || []
+				messagePage.value = {
+					has_more: Boolean(page.has_more),
+					has_more_newer: Boolean(page.has_more_newer),
+					next_before: page.next_before || null,
+					next_before_creation: page.next_before_creation || null,
+					next_before_name: page.next_before_name || null,
+					next_after: page.next_after || null,
+					next_after_creation: page.next_after_creation || null,
+					next_after_name: page.next_after_name || null,
+				}
+				source = currentDetail.messages.find((message) => message.name === messageName)
+			} catch (error) {
+				toast.add({
+					severity: 'error',
+					summary: 'Thread source unavailable',
+					detail: errorMessage(error, 'Unable to open the source messages.'),
+					life: 4000,
+				})
+				return
+			}
+		}
+		if (source) await openQuotedMessage(source)
+	}
+
+	async function focusRouteTarget(conversation = selectedName.value) {
+		if (!conversation || !detail.value || detail.value.conversation?.name !== conversation)
+			return
+		const message = String(route.query.message || '')
+		if (message) {
+			await openThreadSource(message)
+			return
+		}
+		const comment = String(route.query.comment || '')
+		if (!comment) return
+		contextOpen.value = true
+		await nextTick()
+		document
+			.querySelector(`[data-comment-name="${CSS.escape(comment)}"]`)
+			?.scrollIntoView({ block: 'center', behavior: 'smooth' })
 	}
 
 	function openMessageMenu({ message, x, y }) {
@@ -1098,6 +1338,53 @@
 
 	function closeMessageMenu() {
 		messageMenu.value = null
+	}
+
+	function toggleMessageForInternalTask() {
+		const message = messageMenu.value
+		if (!message?.name) return
+		if (internalTaskMessageNames.value.has(message.name)) {
+			internalTaskMessages.value = internalTaskMessages.value.filter(
+				(item) => item.name !== message.name,
+			)
+		} else if (internalTaskMessages.value.length < 50) {
+			internalTaskMessages.value = [...internalTaskMessages.value, message]
+		}
+		closeMessageMenu()
+	}
+
+	async function openInternalTaskComposer() {
+		contextOpen.value = true
+		await nextTick()
+		const panel = document.querySelector('[data-internal-work]')
+		panel?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })
+		panel?.querySelector?.('textarea[name="internal_note"]')?.focus?.({ preventScroll: true })
+	}
+
+	async function openSummaryComment(reference = null) {
+		internalTaskReference.value =
+			reference ||
+			(detail.value?.contact_summary?.name
+				? {
+						doctype: 'WhatsApp Core Contact Summary',
+						name: detail.value.contact_summary.name,
+						label: 'Contact summary',
+					}
+				: null)
+		await openInternalTaskComposer()
+	}
+
+	function setConversationView(mode) {
+		if (!['chat', 'summary'].includes(mode)) return
+		viewMode.value = mode
+		if (selectedName.value)
+			localStorage.setItem(conversationViewStorageKey(selectedName.value), mode)
+		if (mode === 'chat') void nextTick(() => queueVisibleMessages())
+	}
+
+	function clearInternalTaskMessages() {
+		internalTaskMessages.value = []
+		internalTaskReference.value = null
 	}
 
 	function replyFromMenu() {
@@ -1167,7 +1454,9 @@
 	}
 
 	function handleGlobalKeydown(event) {
-		if (event.key === 'Escape') closeMessageMenu()
+		if (event.key !== 'Escape') return
+		if (contextOpen.value) contextOpen.value = false
+		closeMessageMenu()
 	}
 
 	async function publishTypingIndicator(conversation) {
@@ -1497,6 +1786,7 @@
 			return
 		}
 		if (!event?.conversation || !event.message) return
+		if (event.message.direction === 'Inbound') scheduleInboxNavigation()
 		const authoritativeRow = event.conversation_row
 			? upsertConversationRow(event.conversation_row)
 			: null
@@ -1536,9 +1826,21 @@
 		}
 	}
 
-	function conversationMatchesTeam(row) {
-		if (!team.value) return true
-		return (row?.contact_teams || []).some((contactTeam) => contactTeam.name === team.value)
+	function conversationMatchesFilters(row) {
+		const matchesTeam =
+			!team.value ||
+			(row?.contact_teams || []).some((contactTeam) => contactTeam.name === team.value)
+		const matchesUnread = listMode.value !== 'unread' || Number(row?.unread_count || 0) > 0
+		if (!matchesTeam || !matchesUnread || !folder.value) return matchesTeam && matchesUnread
+		const selectedFolder = folders.value.find((item) => item.name === folder.value)
+		return (
+			matchesUnread &&
+			(row?.contact_folders || []).some((contactFolder) =>
+				selectedFolder?.folder_type === 'Important' || folder.value === 'important'
+					? contactFolder.folder_type === 'Important'
+					: contactFolder.name === folder.value,
+			)
+		)
 	}
 
 	function sortConversationRows() {
@@ -1553,7 +1855,7 @@
 	function upsertConversationRow(incoming) {
 		if (!incoming?.name) return null
 		const existing = rows.value.find((row) => row.name === incoming.name)
-		if (!conversationMatchesTeam(incoming)) {
+		if (!conversationMatchesFilters(incoming)) {
 			if (existing) rows.value = rows.value.filter((row) => row.name !== incoming.name)
 			return null
 		}
@@ -1668,6 +1970,7 @@
 			return
 		}
 		if (event?.conversation_row) upsertConversationRow(event.conversation_row)
+		scheduleInboxNavigation()
 		if (event?.conversation !== selectedName.value || !detail.value || !event.user) return
 		const previous = (detail.value.readers || []).find((reader) => reader.user === event.user)
 		const staleCursor = previous && compareCursorPosition(event, previous) < 0
@@ -1706,6 +2009,47 @@
 		}
 	}
 
+	function upsertInternalComment(comment) {
+		if (!detail.value || comment?.conversation !== selectedName.value || !comment?.name) return
+		const comments = detail.value.internal_comments || []
+		const index = comments.findIndex((row) => row.name === comment.name)
+		if (index >= 0) comments.splice(index, 1, { ...comments[index], ...comment })
+		else comments.push(comment)
+		comments.sort(
+			(left, right) =>
+				String(left.creation || '').localeCompare(String(right.creation || '')) ||
+				String(left.name || '').localeCompare(String(right.name || '')),
+		)
+		detail.value.internal_comments = comments
+	}
+
+	function deleteInternalComment(name) {
+		if (!detail.value || !name) return
+		detail.value.internal_comments = (detail.value.internal_comments || []).filter(
+			(comment) => comment.name !== name,
+		)
+	}
+
+	function prependOlderComments(page) {
+		if (!detail.value) return
+		const known = new Set((detail.value.internal_comments || []).map((row) => row.name))
+		detail.value.internal_comments = [
+			...(page?.rows || []).filter((row) => !known.has(row.name)),
+			...(detail.value.internal_comments || []),
+		]
+		detail.value.internal_comment_page = {
+			has_more: Boolean(page?.has_more),
+			next_before: page?.next_before || null,
+			next_before_name: page?.next_before_name || null,
+		}
+	}
+
+	function applyInternalComment(event) {
+		if (event?.conversation !== selectedName.value || !detail.value) return
+		if (event.status === 'deleted') deleteInternalComment(event.comment?.name)
+		else upsertInternalComment(event.comment)
+	}
+
 	function mergeCommittedMessage(message, { allowAppend = true } = {}) {
 		if (!detail.value || !message || message.conversation !== selectedName.value) return
 		if (message.message_type === 'reaction') {
@@ -1732,6 +2076,7 @@
 
 	function refreshCommittedBatch(event) {
 		pendingBatchEvents.push(event || {})
+		scheduleInboxNavigation()
 		// Coalesce one bounded window without postponing refresh indefinitely
 		// while a high-volume account is receiving continuous events.
 		if (batchRefreshTimer !== null) return
@@ -1931,6 +2276,7 @@
 	async function refreshContactSummary() {
 		const identity = detail.value?.identity?.name
 		if (!identity) return
+		summaryRefreshing.value = true
 		try {
 			const summary = await call('frappe_whatsapp_core.frontend_api.contact_summary', {
 				identity,
@@ -1945,7 +2291,199 @@
 				detail: errorMessage(error, 'Unable to refresh the contact summary.'),
 				life: 5000,
 			})
+		} finally {
+			summaryRefreshing.value = false
 		}
+	}
+
+	async function loadFolders({ silent = false } = {}) {
+		try {
+			const navigation = await call(
+				'frappe_whatsapp_core.customer_workspace.inbox_navigation',
+			)
+			folders.value = navigation.folders || []
+			inboxNavigation.value = {
+				conversation_count: Number(navigation.conversation_count || 0),
+				unread_count: Number(navigation.unread_count || 0),
+				unread_conversations: Number(navigation.unread_conversations || 0),
+			}
+			if (
+				folder.value &&
+				folder.value !== 'important' &&
+				!folders.value.some((item) => item.name === folder.value)
+			) {
+				folder.value = ''
+			}
+		} catch (error) {
+			if (!silent)
+				toast.add({
+					severity: 'warn',
+					summary: 'Personal folders unavailable',
+					detail: errorMessage(error),
+					life: 4000,
+				})
+		}
+	}
+
+	function scheduleInboxNavigation() {
+		window.clearTimeout(navigationRefreshTimer)
+		if (navigationIdleCallback && 'cancelIdleCallback' in window)
+			window.cancelIdleCallback(navigationIdleCallback)
+		navigationRefreshTimer = window.setTimeout(() => {
+			const refresh = () => loadFolders({ silent: true })
+			if ('requestIdleCallback' in window)
+				navigationIdleCallback = window.requestIdleCallback(refresh, { timeout: 1200 })
+			else navigationIdleCallback = window.setTimeout(refresh, 0)
+		}, 320)
+	}
+
+	async function refreshInbox() {
+		await Promise.all([loadBusinessFilterSchema(), loadRows()])
+		scheduleInboxNavigation()
+	}
+
+	async function loadBusinessFilterSchema() {
+		try {
+			businessFilterSchemas.value = await call(
+				'frappe_whatsapp_core.inbox.business_filter_schema',
+			)
+			if (
+				businessSource.value &&
+				!businessFilterSchemas.value.some((schema) => schema.name === businessSource.value)
+			) {
+				businessSource.value = ''
+				businessFilters.value = {}
+			}
+		} catch {
+			businessFilterSchemas.value = []
+		}
+	}
+
+	async function createContactFolder() {
+		if (!folderName.value.trim()) return
+		savingFolder.value = true
+		try {
+			const created = await call(
+				'frappe_whatsapp_core.customer_workspace.create_contact_folder',
+				{ folder_name: folderName.value, color: folderColor.value },
+			)
+			folders.value.push({
+				conversation_count: 0,
+				unread_count: 0,
+				unread_conversations: 0,
+				...created,
+			})
+			folderName.value = ''
+			folderDialog.value = false
+			toast.add({
+				severity: 'success',
+				summary: 'Contact folder created',
+				detail: 'Open a customer and add it from My folders.',
+				life: 3500,
+			})
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Folder not created',
+				detail: errorMessage(error),
+				life: 4500,
+			})
+		} finally {
+			savingFolder.value = false
+		}
+	}
+
+	async function setContactFolder({ folder: selectedFolder, enabled }) {
+		const identity = detail.value?.identity?.name
+		if (!identity || !selectedFolder?.name) return
+		try {
+			const result = await call(
+				'frappe_whatsapp_core.customer_workspace.set_contact_folder',
+				{ identity, folder: selectedFolder.name, enabled: enabled ? 1 : 0 },
+			)
+			const canonical =
+				result.folder_details ||
+				folders.value.find((item) => item.name === result.folder) ||
+				(selectedFolder.folder_type === 'Important'
+					? folders.value.find((item) => item.folder_type === 'Important')
+					: null) ||
+				selectedFolder
+			applyFolderMembership(identity, canonical, enabled)
+		} catch (error) {
+			toast.add({
+				severity: 'error',
+				summary: 'Folder not updated',
+				detail: errorMessage(error),
+				life: 4500,
+			})
+		}
+	}
+
+	function applyFolderMembership(identity, canonical, enabled) {
+		if (!identity || !canonical?.name) return
+		let folderMatched = false
+		folders.value = folders.value.map((item) => {
+			if (!foldersMatch(item, canonical)) return item
+			folderMatched = true
+			return { ...item, ...canonical }
+		})
+		if (!folderMatched) folders.value.push(canonical)
+		const apply = (target) => {
+			if (!target || target.remote_identity !== identity) return
+			const current = (target.contact_folders || []).filter(
+				(item) => !foldersMatch(item, canonical),
+			)
+			target.contact_folders = enabled ? [...current, canonical] : current
+		}
+		rows.value.forEach(apply)
+		if (detail.value?.identity?.name === identity) {
+			const current = (detail.value.contact_folders || []).filter(
+				(item) => !foldersMatch(item, canonical),
+			)
+			detail.value.contact_folders = enabled ? [...current, canonical] : current
+		}
+		if (folder.value && !enabled)
+			rows.value = rows.value.filter((row) => conversationMatchesFilters(row))
+	}
+
+	async function refreshContactFolders(event) {
+		if (event?.identity && event?.folder_details) {
+			applyFolderMembership(event.identity, event.folder_details, Boolean(event.enabled))
+			if (event.enabled && folder.value) {
+				const matchesActiveFolder =
+					folder.value === event.folder_details.name ||
+					(folder.value === 'important' &&
+						event.folder_details.folder_type === 'Important')
+				if (matchesActiveFolder) {
+					await Promise.all(
+						(event.conversations || [])
+							.filter(
+								(conversation) =>
+									!rows.value.some((row) => row.name === conversation),
+							)
+							.map((conversation) => hydrateConversationRow(conversation)),
+					)
+				}
+			}
+			return
+		}
+		await loadFolders()
+		if (!event?.identity) return
+		const affected = rows.value.filter((row) => row.remote_identity === event.identity)
+		let updatedFolders = null
+		for (const row of affected) {
+			try {
+				const updated = await call('frappe_whatsapp_core.inbox.conversation_summary', {
+					name: row.name,
+				})
+				updatedFolders = updated?.contact_folders || updatedFolders
+				upsertConversationRow(updated)
+			} catch {
+				// Access can change between the notification and this targeted refresh.
+			}
+		}
+		if (detail.value?.identity?.name === event.identity)
+			detail.value.contact_folders = updatedFolders || detail.value.contact_folders || []
 	}
 
 	async function scrollToBottom(smooth = false) {
@@ -2005,7 +2543,7 @@
 		}
 	}
 
-	watch(selectedName, (name, previousName) => {
+	watch(selectedName, async (name, previousName) => {
 		if (previousName) leaveConversationPresence(previousName)
 		enterConversationPresence(name)
 		rememberMessageScroll(previousName)
@@ -2013,12 +2551,19 @@
 		locallyReadMessages.clear()
 		hasUnseenMessages.value = false
 		atMessageBottom.value = true
-		loadDetail(name)
+		await acknowledgeConversationOpen(name)
+		await loadDetail(name)
 		replyTo.value = null
+		clearInternalTaskMessages()
 		contextOpen.value = false
 		stopTypingSession()
 		closeMessageSearch()
 	})
+	watch(
+		() => [focusedMessage.value, focusedComment.value, route.query.focus],
+		() => void focusRouteTarget(),
+		{ immediate: true },
+	)
 	watch(messageSearch, () => {
 		clearTimeout(messageSearchTimer)
 		messageSearchTimer = setTimeout(runMessageSearch, 300)
@@ -2027,17 +2572,39 @@
 		window.clearTimeout(conversationSearchTimer)
 		conversationSearchTimer = window.setTimeout(() => loadRows({ silent: true }), 220)
 	})
-	watch(team, async () => {
+	watch([team, folder, listMode, businessSource, businessFilters], async () => {
+		syncInboxFilterRoute()
 		await loadRows()
 	})
+	watch(
+		() => [
+			route.query.team,
+			route.query.folder,
+			route.query.business_source,
+			route.query.business_filters,
+		],
+		([routeTeam, routeFolder, routeBusinessSource, routeBusinessFilters]) => {
+			const nextTeam = String(routeTeam || '')
+			const nextFolder = String(routeFolder || '')
+			const nextBusinessSource = String(routeBusinessSource || '')
+			const nextBusinessFilters = parseBusinessFilters(routeBusinessFilters)
+			if (team.value !== nextTeam) team.value = nextTeam
+			if (folder.value !== nextFolder) folder.value = nextFolder
+			if (businessSource.value !== nextBusinessSource)
+				businessSource.value = nextBusinessSource
+			if (serializedBusinessFilters() !== serializedBusinessFilters(nextBusinessFilters))
+				businessFilters.value = nextBusinessFilters
+		},
+	)
 	onMounted(async () => {
 		window.addEventListener('keydown', handleGlobalKeydown)
 		window.addEventListener('focus', handleReadVisibilityChange)
 		window.addEventListener('blur', handleReadVisibilityChange)
 		document.addEventListener('visibilitychange', handleReadVisibilityChange)
 		document.addEventListener('visibilitychange', handlePresenceVisibilityChange)
-		await loadRows()
-		clearConversationBadge(selectedName.value)
+		await Promise.all([loadBusinessFilterSchema(), loadRows()])
+		scheduleInboxNavigation()
+		await acknowledgeConversationOpen(selectedName.value)
 		if (selectedName.value) await loadDetail(selectedName.value)
 		enterConversationPresence(selectedName.value)
 		const site = session.boot?.site
@@ -2050,6 +2617,8 @@
 			subscribe(site, 'whatsapp_core_batch_committed', refreshCommittedBatch),
 			subscribe(site, 'whatsapp_core_contact', refreshDirectoryPresentations),
 			subscribe(site, 'whatsapp_core_team', refreshDirectoryPresentations),
+			subscribe(site, 'whatsapp_core_contact_folder', refreshContactFolders),
+			subscribe(site, 'whatsapp_core_internal_comment', applyInternalComment),
 			subscribeConnection(site, async (status) => {
 				if (status !== 'connected') return
 				if (!realtimeConnectedOnce) {
@@ -2073,6 +2642,11 @@
 		rememberMessageScroll()
 		clearTimeout(messageSearchTimer)
 		clearTimeout(conversationSearchTimer)
+		clearTimeout(navigationRefreshTimer)
+		clearTimeout(unreadHydrationTimer)
+		clearTimeout(navigationIdleCallback)
+		if (navigationIdleCallback && 'cancelIdleCallback' in window)
+			window.cancelIdleCallback(navigationIdleCallback)
 		leaveConversationPresence()
 		stopTypingSession()
 		window.clearTimeout(batchRefreshTimer)
@@ -2100,10 +2674,19 @@
 					v-model:search="search"
 					v-model:mode="listMode"
 					v-model:team="team"
+					v-model:folder="folder"
+					:business-source="businessSource"
+					:business-filters="businessFilters"
+					:business-filter-schemas="businessFilterSchemas"
+					:folders="folders"
+					:unread-conversations="inboxNavigation.unread_conversations"
 					:loading="loading"
 					:can-manage="canManage"
-					@refresh="loadRows"
+					@refresh="refreshInbox"
 					@new-chat="openNewChat"
+					@new-folder="folderDialog = true"
+					@update:business-source="businessSource = $event"
+					@update:business-filters="businessFilters = $event"
 				/>
 				<div v-if="loading" class="list-skeleton" aria-label="Loading conversations">
 					<div v-for="index in 7" :key="index" class="conversation-skeleton">
@@ -2127,6 +2710,7 @@
 					@select="selectConversation"
 					@scroll-position="rememberListScroll"
 					@load-more="loadMoreRows"
+					@visible="queueUnreadHydration"
 				/>
 				<div v-if="loadingMoreRows" class="older-loading">Loading conversations…</div>
 			</aside>
@@ -2155,11 +2739,7 @@
 				</div>
 				<div v-else-if="!detail" class="empty-chat">
 					<span class="empty-chat-icon"><MessageSquarePlus :size="28" /></span>
-					<strong>Select a conversation</strong>
-					<span
-						>Choose a customer from the shared inbox to review messages, calls and
-						context.</span
-					>
+					<strong>Choose a conversation</strong>
 				</div>
 				<template v-else>
 					<ConversationHeader
@@ -2169,171 +2749,183 @@
 						:teams="detailTeams"
 						:status="detail.conversation.status"
 						:viewers="conversationViewers"
+						:folders="folders"
+						:contact-folders="detail.contact_folders || []"
 						:context-open="contextOpen"
+						:view-mode="viewMode"
 						@back="closeMobileConversation"
 						@search="toggleMessageSearch"
+						@folder="setContactFolder"
 						@toggle-context="contextOpen = !contextOpen"
+						@update:view-mode="setConversationView"
 					/>
-					<div v-if="messageSearchOpen" class="message-search-bar">
-						<Search :size="15" />
-						<InputText
-							ref="messageSearchInput"
-							v-model="messageSearch"
-							placeholder="Search messages in this conversation"
-						/>
-						<Button
-							text
-							rounded
-							aria-label="Close message search"
-							@click="closeMessageSearch"
-						>
-							<X :size="15" />
-						</Button>
-					</div>
-					<MessageStreamViewport ref="stream" @scroll="handleStreamScroll">
-						<div v-if="messageSearch.trim()" class="search-results">
-							<div v-if="messageSearching" class="older-loading">Searching…</div>
-							<div v-else-if="!messageSearchRows.length" class="search-empty">
-								No matching messages
+					<ConversationSummaryPanel
+						v-if="viewMode === 'summary'"
+						:data="detail"
+						:can-manage="canManage"
+						:loading="summaryRefreshing"
+						@refresh="refreshContactSummary"
+						@open-thread="openThreadSource"
+						@comment-summary="openSummaryComment"
+						@expand="setConversationView('chat')"
+					/>
+					<template v-else>
+						<div v-if="messageSearchOpen" class="message-search-bar">
+							<Search :size="15" />
+							<InputText
+								ref="messageSearchInput"
+								v-model="messageSearch"
+								placeholder="Search messages in this conversation"
+							/>
+							<Button
+								text
+								rounded
+								aria-label="Close message search"
+								@click="closeMessageSearch"
+							>
+								<X :size="15" />
+							</Button>
+						</div>
+						<MessageStreamViewport ref="stream" @scroll="handleStreamScroll">
+							<div v-if="messageSearch.trim()" class="search-results">
+								<div v-if="messageSearching" class="older-loading">Searching…</div>
+								<div v-else-if="!messageSearchRows.length" class="search-empty">
+									No matching messages
+								</div>
+								<MessageBubble
+									v-for="message in messageSearchRows"
+									:key="message.name"
+									:message="message"
+									:message-index="providerMessageMap"
+									:contact-name="detail.display_name"
+									:readers="readersByMessage.get(message.name) || []"
+									:selected-for-work="internalTaskMessageNames.has(message.name)"
+									@reply="selectReply"
+									@quote="openQuotedMessage"
+									@retry="retryMessage"
+									@menu="openMessageMenu"
+									@preview="openAttachmentPreview"
+								/>
 							</div>
-							<MessageBubble
-								v-for="message in messageSearchRows"
-								:key="message.name"
-								:message="message"
-								:message-index="providerMessageMap"
-								:contact-name="detail.display_name"
-								:readers="readersByMessage.get(message.name) || []"
-								@reply="selectReply"
-								@quote="openQuotedMessage"
-								@retry="retryMessage"
-								@menu="openMessageMenu"
+							<template v-else>
+								<div v-if="loadingOlder" class="older-loading">
+									Loading older messages…
+								</div>
+								<Button
+									v-else-if="messagePage.has_more"
+									class="older-loading older-button"
+									unstyled
+									@click="loadOlderMessages"
+								>
+									Load older messages
+								</Button>
+								<div v-if="timelineItems.length" class="ungrouped">
+									<template v-for="item in timelineItems" :key="item.key">
+										<CallTimelineEvent
+											v-if="item.kind === 'call'"
+											:call="item.value"
+										/>
+										<MessageBubble
+											v-else
+											:message="item.value"
+											:message-index="providerMessageMap"
+											:contact-name="detail.display_name"
+											:readers="readersByMessage.get(item.value.name) || []"
+											:selected-for-work="
+												internalTaskMessageNames.has(item.value.name)
+											"
+											@reply="selectReply"
+											@quote="openQuotedMessage"
+											@retry="retryMessage"
+											@menu="openMessageMenu"
+											@preview="openAttachmentPreview"
+										/>
+									</template>
+								</div>
+								<Button
+									v-if="messagePage.has_more_newer"
+									class="older-loading older-button newer-button"
+									unstyled
+									:disabled="loadingNewer"
+									@click="loadNewerMessages"
+								>
+									{{
+										loadingNewer
+											? 'Loading newer messages…'
+											: 'Load newer messages'
+									}}
+								</Button>
+							</template>
+						</MessageStreamViewport>
+						<div v-if="internalTaskMessages.length" class="internal-task-selection">
+							<span
+								><ListTodo :size="15" />
+								{{ internalTaskMessages.length }} selected</span
+							>
+							<Button
+								label="Clear"
+								text
+								size="small"
+								@click="clearInternalTaskMessages"
+							/>
+							<Button
+								label="Write internal task"
+								size="small"
+								@click="openInternalTaskComposer"
 							/>
 						</div>
-						<template v-else>
-							<div v-if="loadingOlder" class="older-loading">
-								Loading older messages…
-							</div>
-							<Button
-								v-else-if="messagePage.has_more"
-								class="older-loading older-button"
-								unstyled
-								@click="loadOlderMessages"
-							>
-								Load older messages
-							</Button>
-							<details v-for="topic in topics" :key="topic.name" class="topic-group">
-								<summary>
-									<span>
-										<small>{{ topic.category || 'AI topic' }}</small>
-										<strong>{{ topic.title }}</strong>
-										<p>
-											{{
-												topic.summary || 'Open to review grouped messages.'
-											}}
-										</p>
-									</span>
-									<em>{{ topic.message_count }} messages</em>
-								</summary>
-								<div class="topic-messages">
-									<MessageBubble
-										v-for="message in topic.messageRows"
-										:key="message.name"
-										:message="message"
-										:message-index="providerMessageMap"
-										:contact-name="detail.display_name"
-										:readers="readersByMessage.get(message.name) || []"
-										@reply="selectReply"
-										@quote="openQuotedMessage"
-										@retry="retryMessage"
-										@menu="openMessageMenu"
-									/>
-								</div>
-							</details>
-							<div v-if="timelineItems.length" class="ungrouped">
-								<div v-if="topics.length" class="section-label">
-									Recent conversation activity
-								</div>
-								<template v-for="item in timelineItems" :key="item.key">
-									<CallTimelineEvent
-										v-if="item.kind === 'call'"
-										:call="item.value"
-									/>
-									<MessageBubble
-										v-else
-										:message="item.value"
-										:message-index="providerMessageMap"
-										:contact-name="detail.display_name"
-										:readers="readersByMessage.get(item.value.name) || []"
-										@reply="selectReply"
-										@quote="openQuotedMessage"
-										@retry="retryMessage"
-										@menu="openMessageMenu"
-									/>
-								</template>
-							</div>
-							<Button
-								v-if="messagePage.has_more_newer"
-								class="older-loading older-button newer-button"
-								unstyled
-								:disabled="loadingNewer"
-								@click="loadNewerMessages"
-							>
-								{{
-									loadingNewer
-										? 'Loading newer messages…'
-										: 'Load newer messages'
-								}}
-							</Button>
-						</template>
-					</MessageStreamViewport>
-					<Button
-						v-if="messagePage.has_more_newer || !atMessageBottom || hasUnseenMessages"
-						class="new-messages-button"
-						unstyled
-						:data-unseen="hasUnseenMessages ? 'true' : 'false'"
-						:disabled="jumpingToLatest"
-						:aria-label="
-							hasUnseenMessages || messagePage.has_more_newer
-								? 'Jump to new messages'
-								: 'Scroll to bottom'
-						"
-						@click="loadLatestMessages"
-					>
-						<ArrowDown :size="15" />
-						{{
-							jumpingToLatest
-								? 'Loading latest…'
-								: hasUnseenMessages || messagePage.has_more_newer
-									? 'New messages'
-									: 'Scroll to bottom'
-						}}
-					</Button>
-					<MessageComposer
-						v-if="textReady"
-						v-model="draft"
-						:reply-to="replyTo"
-						@send="sendText"
-						@emoji="addEmoji"
-						@media="richDialog = true"
-						@cancel-reply="replyTo = null"
-						@typing="noteTyping"
-						@blur="stopTypingSession"
-					/>
-					<footer v-else class="template-gate">
-						<ShieldAlert :size="18" />
-						<div>
-							<strong>Template required</strong>
-							<span>{{
-								detail.outbound.reasons?.join(' · ') ||
-								'The 24-hour service window is closed.'
-							}}</span>
-						</div>
 						<Button
-							label="Choose template"
-							:loading="richSending"
-							@click="templateDialog = true"
+							v-if="
+								messagePage.has_more_newer || !atMessageBottom || hasUnseenMessages
+							"
+							class="new-messages-button"
+							unstyled
+							:data-unseen="hasUnseenMessages ? 'true' : 'false'"
+							:disabled="jumpingToLatest"
+							:aria-label="
+								hasUnseenMessages || messagePage.has_more_newer
+									? 'Jump to new messages'
+									: 'Scroll to bottom'
+							"
+							@click="loadLatestMessages"
+						>
+							<ArrowDown :size="15" />
+							{{
+								jumpingToLatest
+									? 'Loading latest…'
+									: hasUnseenMessages || messagePage.has_more_newer
+										? 'New messages'
+										: 'Scroll to bottom'
+							}}
+						</Button>
+						<MessageComposer
+							v-if="textReady"
+							ref="composerRef"
+							v-model="draft"
+							:reply-to="replyTo"
+							@send="sendText"
+							@emoji="addEmoji"
+							@media="richDialog = true"
+							@cancel-reply="replyTo = null"
+							@typing="noteTyping"
+							@blur="stopTypingSession"
 						/>
-					</footer>
+						<footer v-else class="template-gate">
+							<ShieldAlert :size="18" />
+							<div>
+								<strong>Template required</strong>
+								<span>{{
+									detail.outbound.reasons?.join(' · ') ||
+									'The 24-hour service window is closed.'
+								}}</span>
+							</div>
+							<Button
+								label="Choose template"
+								:loading="richSending"
+								@click="templateDialog = true"
+							/>
+						</footer>
+					</template>
 				</template>
 			</main>
 
@@ -2341,11 +2933,50 @@
 				v-if="detail && contextOpen"
 				:data="detail"
 				:can-manage="canManage"
+				:folders="folders"
+				:draft-messages="internalTaskMessages"
+				:draft-reference="internalTaskReference"
+				:focus-comment="focusedComment"
 				@status="updateStatus"
 				@refresh-summary="refreshContactSummary"
 				@avatar-changed="refreshDirectoryPresentations"
+				@folder="setContactFolder"
+				@comment-created="upsertInternalComment"
+				@comment-updated="upsertInternalComment"
+				@comment-deleted="deleteInternalComment"
+				@comments-older="prependOlderComments"
+				@comment-draft-consumed="clearInternalTaskMessages"
+				@comment-open-message="openThreadSource"
+				@close="contextOpen = false"
 			/>
 		</section>
+
+		<AppDialog v-model:visible="folderDialog" modal header="Create contact folder">
+			<div class="dialog-form folder-dialog-form">
+				<div class="folder-dialog-icon"><FolderPlus :size="21" /></div>
+				<label>
+					Folder name
+					<InputText
+						v-model="folderName"
+						maxlength="80"
+						placeholder="For example: Priority customers"
+					/>
+				</label>
+				<label>
+					Folder colour
+					<input v-model="folderColor" type="color" aria-label="Folder colour" />
+				</label>
+			</div>
+			<template #footer>
+				<Button label="Cancel" text @click="folderDialog = false" />
+				<Button
+					label="Create folder"
+					:loading="savingFolder"
+					:disabled="!folderName.trim()"
+					@click="createContactFolder"
+				/>
+			</template>
+		</AppDialog>
 
 		<TemplateSendDialog
 			v-if="detail"
@@ -2402,10 +3033,6 @@
 						v-model="newChat.template"
 						:options="openingTemplates"
 				/></label>
-				<small v-else>
-					The chat opens directly. WhatsApp permits free-form messages while the 24-hour
-					customer service window is open.
-				</small>
 			</div>
 			<template #footer>
 				<Button label="Cancel" text @click="newDialog = false" />
@@ -2522,15 +3149,45 @@
 						messageInfo.sender_name || messageInfo.owner || 'Team member'
 					}}</strong>
 				</div>
-				<div class="message-info-id">
-					<span>WhatsApp message ID</span>
-					<strong>{{ messageInfo.provider_message_id || 'Pending assignment' }}</strong>
-				</div>
+				<section class="message-info-readers">
+					<header>
+						<strong>Read by</strong>
+						<small>{{ messageInfoReaders.length }} team members</small>
+					</header>
+					<ul v-if="messageInfoReaders.length">
+						<li v-for="reader in messageInfoReaders" :key="reader.user">
+							<span>{{
+								reader.display_name || reader.full_name || 'Team member'
+							}}</span>
+							<small>{{ formatInfoTime(reader.read_at) }}</small>
+						</li>
+					</ul>
+					<p v-else>No team member has read this message yet.</p>
+				</section>
+				<section class="message-info-readers waiting">
+					<header>
+						<strong>Not read by</strong>
+						<small>{{ messageInfoWaitingReaders.length }} team members</small>
+					</header>
+					<ul v-if="messageInfoWaitingReaders.length">
+						<li v-for="reader in messageInfoWaitingReaders" :key="reader.user">
+							<span>{{
+								reader.display_name || reader.full_name || 'Team member'
+							}}</span>
+						</li>
+					</ul>
+					<p v-else>Everyone responsible for this conversation has read it.</p>
+				</section>
 			</div>
 			<template #footer>
 				<Button label="Close" @click="messageInfoOpen = false" />
 			</template>
 		</AppDialog>
+
+		<AttachmentPreviewDialog
+			v-model:visible="attachmentPreviewOpen"
+			:attachment="attachmentPreview"
+		/>
 
 		<MessageActionMenu
 			:visible="Boolean(messageMenu)"
@@ -2545,11 +3202,15 @@
 			:can-download="
 				Boolean(messageMenu && isMediaMessage(messageMenu) && messageMenu.media_url)
 			"
+			:selected-for-internal-task="
+				Boolean(messageMenu && internalTaskMessageNames.has(messageMenu.name))
+			"
 			@close="closeMessageMenu"
 			@react="reactToMessage"
 			@reply="replyFromMenu"
 			@info="showMessageInfo"
 			@download="downloadMedia"
+			@internal-task="toggleMessageForInternalTask"
 		/>
 	</div>
 </template>
@@ -2591,7 +3252,7 @@
 	.list-panel {
 		min-height: 0;
 		display: grid;
-		grid-template-rows: auto auto auto minmax(0, 1fr);
+		grid-template-rows: auto minmax(0, 1fr) auto;
 		overflow: hidden;
 		border-right: 1px solid var(--wa-border);
 	}
@@ -2726,8 +3387,25 @@
 		opacity: 0.7;
 		cursor: wait;
 	}
+	.internal-task-selection {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 7px 11px;
+		border-top: 1px solid var(--wa-border);
+		background: var(--wa-primary-soft);
+	}
+	.internal-task-selection > span {
+		min-width: 0;
+		flex: 1;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		color: var(--wa-primary);
+		font-size: 12px;
+		font-weight: 700;
+	}
 	.ungrouped,
-	.topic-messages,
 	.search-results {
 		min-width: 0;
 		display: grid;
@@ -2739,13 +3417,6 @@
 		padding: 20px;
 		color: var(--wa-muted);
 		font-size: 11px;
-	}
-	.section-label {
-		margin: 8px 0;
-		color: var(--wa-muted);
-		font-size: 12px;
-		text-align: center;
-		text-transform: uppercase;
 	}
 	.older-loading {
 		display: block;
@@ -2761,43 +3432,6 @@
 	}
 	.older-button {
 		cursor: pointer;
-	}
-	.topic-group {
-		margin-bottom: 12px;
-		border: 1px solid var(--wa-border);
-		border-radius: 13px;
-		background: color-mix(in srgb, var(--wa-surface) 94%, transparent);
-	}
-	.topic-group summary {
-		padding: 11px 13px;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		cursor: pointer;
-	}
-	.topic-group summary span > * {
-		display: block;
-	}
-	.topic-group small,
-	.topic-group em {
-		color: var(--wa-success);
-		font-size: 12px;
-		font-style: normal;
-		text-transform: uppercase;
-	}
-	.topic-group strong {
-		margin-top: 2px;
-		font-size: 11px;
-	}
-	.topic-group p {
-		margin: 3px 0 0;
-		color: var(--wa-muted);
-		font-size: 12px;
-	}
-	.topic-messages {
-		padding: 12px;
-		border-top: 1px solid var(--wa-border-soft);
 	}
 	.template-gate {
 		padding: 10px 12px;
@@ -2831,6 +3465,26 @@
 		width: min(480px, 80vw);
 		display: grid;
 		gap: 14px;
+	}
+	.folder-dialog-form {
+		width: min(420px, 80vw);
+	}
+	.folder-dialog-icon {
+		display: grid;
+		place-items: center;
+		width: 44px;
+		height: 44px;
+		border-radius: 13px;
+		color: var(--wa-primary);
+		background: var(--wa-primary-soft);
+	}
+	.folder-dialog-form input[type='color'] {
+		width: 100%;
+		height: 42px;
+		padding: 4px;
+		border: 1px solid var(--wa-border);
+		border-radius: 9px;
+		background: var(--wa-surface-muted);
 	}
 	.dialog-form label {
 		display: grid;
@@ -2875,15 +3529,77 @@
 		overflow-wrap: anywhere;
 		font-size: 13px;
 	}
-	.message-info-id {
+	.message-info-grid > .message-info-readers {
 		grid-column: 1 / -1;
+		padding: 0;
+		overflow: hidden;
+	}
+	.message-info-readers header {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 10px;
+		padding: 10px 11px;
+		border-bottom: 1px solid var(--wa-border-soft);
+	}
+	.message-info-readers header strong,
+	.message-info-readers header small {
+		display: block;
+		margin: 0;
+	}
+	.message-info-readers header small,
+	.message-info-readers li small,
+	.message-info-readers p {
+		color: var(--wa-muted);
+		font-size: 11px;
+	}
+	.message-info-readers ul {
+		max-height: 170px;
+		margin: 0;
+		padding: 0;
+		overflow-y: auto;
+		list-style: none;
+	}
+	.message-info-readers li {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		padding: 8px 11px;
+		border-bottom: 1px solid var(--wa-border-soft);
+	}
+	.message-info-readers li:last-child {
+		border-bottom: 0;
+	}
+	.message-info-readers li span {
+		min-width: 0;
+		margin: 0;
+		overflow: hidden;
+		color: var(--wa-text);
+		font-size: 12px;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.message-info-readers p {
+		margin: 0;
+		padding: 11px;
 	}
 	@media (max-width: 1120px) {
+		.inbox-workbench {
+			position: relative;
+		}
 		.inbox-workbench.context-open {
 			grid-template-columns: var(--conversation-pane-width, 320px) 5px minmax(0, 1fr);
 		}
 		.inbox-workbench.context-open > :deep(.context-panel) {
-			display: none;
+			display: block;
+			position: absolute;
+			z-index: 20;
+			top: 0;
+			right: 0;
+			bottom: 0;
+			width: min(310px, 100%);
+			box-shadow: -12px 0 32px rgb(15 23 42 / 16%);
 		}
 	}
 	@media (max-width: 760px) {
@@ -2924,9 +3640,6 @@
 		.message-info-grid {
 			width: 100%;
 			grid-template-columns: 1fr;
-		}
-		.message-info-id {
-			grid-column: auto;
 		}
 	}
 	@keyframes mobile-chat-in {

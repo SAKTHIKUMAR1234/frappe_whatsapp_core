@@ -99,10 +99,7 @@
 <template>
 	<section class="assignment-table">
 		<header>
-			<div>
-				<strong>Team members</strong
-				><small>Members receive access to this team’s contacts.</small>
-			</div>
+			<strong>Team members</strong>
 			<span>{{ rows.length }}{{ hasMore ? '+' : '' }}</span>
 		</header>
 		<Message v-if="failure" severity="error" :closable="false">{{ failure }}</Message>
@@ -179,12 +176,10 @@
 		justify-content: space-between;
 		gap: 10px;
 	}
-	.assignment-table header div,
 	td:first-child {
 		display: grid;
 		gap: 2px;
 	}
-	.assignment-table header small,
 	td small {
 		color: var(--wa-muted);
 		font-size: 11px;

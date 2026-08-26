@@ -16,6 +16,7 @@ from frappe_whatsapp_core.api import (
 	receive_outbound_results,
 )
 from frappe_whatsapp_core.dispatcher import (
+	MAX_IMMEDIATE_PROJECTION_BATCH_SIZE,
 	_get_locked_core_event_rows,
 	_has_orphan_status,
 	_lock_status_projection_rows,
@@ -25,6 +26,7 @@ from frappe_whatsapp_core.dispatcher import (
 	enqueue_orphan_status_retry,
 	enqueue_waiting_status_events,
 	process_event_batch,
+	project_realtime_event_batch,
 	retry_orphan_status_events,
 	retry_failed_events,
 	retry_stale_events,
@@ -192,13 +194,18 @@ class TestPayloadContract(unittest.TestCase):
 	def test_fingerprint_ignores_key_order(self):
 		self.assertEqual(payload_fingerprint({"a": 1, "b": 2}), payload_fingerprint({"b": 2, "a": 1}))
 
+	@patch("frappe_whatsapp_core.api.project_realtime_event_batch")
 	@patch("frappe_whatsapp_core.api.enqueue_event_batch")
 	@patch("frappe_whatsapp_core.api.process_event_batch")
 	@patch("frappe_whatsapp_core.api.frappe.db.bulk_insert")
 	@patch("frappe_whatsapp_core.api.frappe.get_all", return_value=[])
 	def test_inbound_message_batch_is_durably_queued_after_ingress_commit(
-		self, _get_all, bulk_insert, process_batch, enqueue_batch
+		self, _get_all, bulk_insert, process_batch, enqueue_batch, project_realtime
 	):
+		project_realtime.return_value = [
+			{"event_id": f"event-{index}", "status": "projected"}
+			for index in range(3)
+		]
 		payloads = [
 			{"entry": [{"changes": [{"field": "messages", "value": {
 				"metadata": {"phone_number_id": "PHONE-1"},
@@ -210,6 +217,7 @@ class TestPayloadContract(unittest.TestCase):
 		self.assertEqual(result["inserted"], 3)
 		self.assertEqual(result["status"], "queued")
 		self.assertEqual(result["immediate"], 0)
+		self.assertEqual(result["projected"], 3)
 		self.assertEqual(result["deferred"], 3)
 		bulk_insert.assert_called_once()
 		process_batch.assert_not_called()
@@ -220,6 +228,30 @@ class TestPayloadContract(unittest.TestCase):
 			enqueue_batch.call_args.kwargs["serialization_key"],
 			"919999999999",
 		)
+		project_realtime.assert_called_once()
+		self.assertEqual(len(project_realtime.call_args.args[0]), 3)
+
+	@patch("frappe_whatsapp_core.api.project_realtime_event_batch")
+	@patch("frappe_whatsapp_core.api.enqueue_event_batch")
+	@patch("frappe_whatsapp_core.api.process_event_batch")
+	@patch("frappe_whatsapp_core.api.frappe.db.bulk_insert")
+	@patch("frappe_whatsapp_core.api.frappe.get_all", return_value=[])
+	def test_large_message_batch_skips_request_time_projection(
+		self, _get_all, _bulk_insert, process_batch, _enqueue_batch, project_realtime
+	):
+		payloads = [
+			{"entry": [{"changes": [{"field": "messages", "value": {
+				"metadata": {"phone_number_id": "PHONE-1"},
+				"messages": [{"id": f"wamid.{index}", "from": "919999999999", "type": "text"}],
+			}}]}]}
+			for index in range(MAX_IMMEDIATE_PROJECTION_BATCH_SIZE + 1)
+		]
+
+		result = receive_batch(payloads)
+
+		self.assertEqual(result["projected"], 0)
+		process_batch.assert_not_called()
+		project_realtime.assert_not_called()
 
 	@patch("frappe_whatsapp_core.api.enqueue_event_batch")
 	@patch("frappe_whatsapp_core.api.process_event_batch")
@@ -413,6 +445,34 @@ class TestPayloadContract(unittest.TestCase):
 		self.assertEqual(len(result), 2)
 		publish_changes.assert_called_once_with([])
 		publish_notice.assert_called_once_with([])
+
+	@patch("frappe_whatsapp_core.dispatcher._publish_batch_refresh")
+	@patch("frappe_whatsapp_core.dispatcher.enqueue_message_media_cache")
+	@patch("frappe_whatsapp_core.ai_summaries.enqueue_summary_for_messages")
+	@patch("frappe_whatsapp_core.dispatcher.materialize_event")
+	@patch("frappe_whatsapp_core.dispatcher.frappe.get_all")
+	def test_immediate_projection_materializes_without_completing_events(
+		self, get_all, materialize, enqueue_summary, enqueue_media, publish
+	):
+		get_all.side_effect = [
+			[
+				frappe._dict(name="EVENT-2", payload='{"entry": []}'),
+				frappe._dict(name="EVENT-1", payload='{"entry": []}'),
+			],
+			["MSG-1"],
+		]
+		materialize.side_effect = [
+			[{"kind": "message", "status": "created", "name": "MSG-1"}],
+			[{"kind": "message", "status": "duplicate", "name": "MSG-2"}],
+		]
+
+		result = project_realtime_event_batch(["EVENT-1", "EVENT-2"])
+
+		self.assertEqual([row["event_id"] for row in result], ["EVENT-1", "EVENT-2"])
+		self.assertEqual(materialize.call_count, 2)
+		enqueue_summary.assert_called_once_with(["MSG-1"], enqueue_after_commit=True)
+		enqueue_media.assert_called_once_with(["MSG-1"], enqueue_after_commit=True)
+		publish.assert_called_once_with(["EVENT-1", "EVENT-2"], result)
 
 	@patch("frappe_whatsapp_core.dispatcher._process_status_event_batch")
 	@patch(

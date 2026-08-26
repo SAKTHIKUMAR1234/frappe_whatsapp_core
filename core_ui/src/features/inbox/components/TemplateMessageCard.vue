@@ -9,6 +9,7 @@
 		mediaUrl: { type: String, default: '' },
 		mediaType: { type: String, default: '' },
 	})
+	const emit = defineEmits(['preview'])
 	const headerMedia = computed(() => props.mediaUrl || props.snapshot.header_media || '')
 	const mediaReady = ref(false)
 	const mediaFailed = ref(false)
@@ -31,6 +32,17 @@
 		return /^(https?:\/\/|\/)/i.test(String(value || ''))
 	}
 
+	function openPreview(kind) {
+		if (!isSafeUrl(headerMedia.value)) return
+		emit('preview', {
+			url: headerMedia.value,
+			kind,
+			filename: props.snapshot.header_filename || props.snapshot.filename || '',
+			mimeType: props.mediaType || '',
+			size: Number(props.snapshot.header_file_size || 0),
+		})
+	}
+
 	watch(
 		() => [headerMedia.value, headerType.value],
 		() => {
@@ -45,6 +57,11 @@
 		<div
 			v-if="['IMAGE', 'VIDEO'].includes(headerType) && isSafeUrl(headerMedia)"
 			:class="['template-media-frame', { ready: mediaReady }]"
+			:role="headerType === 'IMAGE' ? 'button' : undefined"
+			:tabindex="headerType === 'IMAGE' ? 0 : undefined"
+			@click="headerType === 'IMAGE' && openPreview('image')"
+			@keydown.enter="headerType === 'IMAGE' && openPreview('image')"
+			@keydown.space.prevent="headerType === 'IMAGE' && openPreview('image')"
 		>
 			<div v-if="!mediaReady && !mediaFailed" class="template-media-skeleton" />
 			<span v-if="mediaFailed">Media unavailable</span>
@@ -65,16 +82,15 @@
 				@error="mediaFailed = true"
 			/>
 		</div>
-		<a
+		<button
 			v-else-if="headerType === 'DOCUMENT' && isSafeUrl(headerMedia)"
-			:href="headerMedia"
+			type="button"
 			class="template-document"
-			target="_blank"
-			rel="noreferrer"
+			@click="openPreview('document')"
 		>
 			<FileText :size="18" />
 			<span>Open document</span>
-		</a>
+		</button>
 		<div
 			v-else-if="['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerType)"
 			class="template-media-placeholder"
@@ -120,6 +136,13 @@
 		border-radius: 8px 8px 0 0;
 		overflow: hidden;
 		background: var(--wa-media-bg);
+	}
+	.template-media-frame[role='button'] {
+		cursor: zoom-in;
+	}
+	.template-media-frame[role='button']:focus-visible {
+		outline: 2px solid var(--wa-primary);
+		outline-offset: 2px;
 	}
 	.template-media {
 		grid-area: 1 / 1;
@@ -170,6 +193,8 @@
 		text-transform: capitalize;
 	}
 	.template-document {
+		width: 100%;
+		border: 0;
 		min-height: 58px;
 		margin: -2px 0 8px;
 		display: flex;
@@ -179,6 +204,7 @@
 		border-radius: 7px;
 		color: var(--wa-primary);
 		background: color-mix(in srgb, var(--wa-surface) 58%, transparent);
+		font: inherit;
 		font-size: 12px;
 		text-decoration: none;
 	}

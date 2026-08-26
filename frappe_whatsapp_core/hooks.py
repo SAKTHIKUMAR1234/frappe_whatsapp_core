@@ -207,8 +207,11 @@ permission_query_conditions = {
 	"WhatsApp Core Conversation Read": "frappe_whatsapp_core.permissions.conversation_read_permission_query",
 	"WhatsApp Core Message Read": "frappe_whatsapp_core.permissions.message_read_permission_query",
 	"WhatsApp Core Team": "frappe_whatsapp_core.permissions.team_permission_query",
+	"WhatsApp Core Contact Folder": "frappe_whatsapp_core.permissions.contact_folder_permission_query",
+	"WhatsApp Core Contact Folder Item": "frappe_whatsapp_core.permissions.contact_folder_item_permission_query",
 	"WhatsApp Core Template": "frappe_whatsapp_core.permissions.template_permission_query",
 	"WhatsApp Core Call": "frappe_whatsapp_core.permissions.call_permission_query",
+	"WhatsApp Core Internal Comment": "frappe_whatsapp_core.permissions.internal_comment_permission_query",
 }
 
 has_permission = {
@@ -217,8 +220,11 @@ has_permission = {
 	"WhatsApp Core Conversation Read": "frappe_whatsapp_core.permissions.has_scoped_conversation_read_permission",
 	"WhatsApp Core Message Read": "frappe_whatsapp_core.permissions.has_scoped_message_read_permission",
 	"WhatsApp Core Team": "frappe_whatsapp_core.permissions.has_scoped_team_permission",
+	"WhatsApp Core Contact Folder": "frappe_whatsapp_core.permissions.has_personal_record_permission",
+	"WhatsApp Core Contact Folder Item": "frappe_whatsapp_core.permissions.has_personal_record_permission",
 	"WhatsApp Core Template": "frappe_whatsapp_core.permissions.has_scoped_template_permission",
 	"WhatsApp Core Call": "frappe_whatsapp_core.permissions.has_scoped_call_permission",
+	"WhatsApp Core Internal Comment": "frappe_whatsapp_core.permissions.has_scoped_internal_comment_permission",
 }
 
 # DocType Class

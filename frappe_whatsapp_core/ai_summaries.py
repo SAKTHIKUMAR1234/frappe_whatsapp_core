@@ -231,6 +231,7 @@ def enqueue_summary_for_messages(message_names, *, enqueue_after_commit=True) ->
 	settings = _settings()
 	if not cint(settings.enable_ai_summaries) or not settings.summary_i2a_action:
 		return
+	enabled_from = _ai_enabled_from(settings)
 	names = list(dict.fromkeys(str(name) for name in (message_names or []) if name))
 	if not names:
 		return
@@ -241,8 +242,9 @@ def enqueue_summary_for_messages(message_names, *, enqueue_after_commit=True) ->
 		JOIN `tabWhatsApp Core Conversation` AS conversation
 			ON conversation.name = message.conversation
 		WHERE message.name IN %(messages)s
+			AND (%(enabled_from)s IS NULL OR message.creation >= %(enabled_from)s)
 		""",
-		{"messages": tuple(names)},
+		{"messages": tuple(names), "enabled_from": enabled_from},
 		pluck=True,
 	)
 	for identity in identities:
@@ -260,6 +262,7 @@ def queue_pending_summaries(limit: int = 100) -> dict:
 	settings = _settings()
 	if not cint(settings.enable_ai_summaries) or not settings.summary_i2a_action:
 		return {"queued": 0, "disabled": True}
+	enabled_from = _ai_enabled_from(settings)
 	identities = frappe.db.sql(
 		"""
 		SELECT DISTINCT conversation.remote_identity
@@ -272,6 +275,7 @@ def queue_pending_summaries(limit: int = 100) -> dict:
 			WHERE message.conversation = conversation.name
 				AND message.delivery_status != 'Deleted'
 				AND message.message_type != 'reaction'
+				AND (%(enabled_from)s IS NULL OR message.creation >= %(enabled_from)s)
 				AND (
 					summary.name IS NULL
 					OR summary.last_message_at IS NULL
@@ -290,7 +294,10 @@ def queue_pending_summaries(limit: int = 100) -> dict:
 		)
 		LIMIT %(limit)s
 		""",
-		{"limit": max(1, min(cint(limit) or 100, 500))},
+		{
+			"limit": max(1, min(cint(limit) or 100, 500)),
+			"enabled_from": enabled_from,
+		},
 		pluck=True,
 	)
 	for identity in identities:
@@ -305,7 +312,8 @@ def queue_pending_summaries(limit: int = 100) -> dict:
 
 
 def _identity_messages(identity: str, summary, limit: int) -> list[dict]:
-	values = {"identity": identity, "limit": limit}
+	enabled_from = _ai_enabled_from(_settings())
+	values = {"identity": identity, "limit": limit, "enabled_from": enabled_from}
 	cursor = ""
 	if summary.last_message_at and summary.last_message_creation:
 		values.update({
@@ -340,6 +348,7 @@ def _identity_messages(identity: str, summary, limit: int) -> list[dict]:
 		WHERE conversation.remote_identity = %(identity)s
 			AND message.delivery_status != 'Deleted'
 			AND message.message_type != 'reaction'
+			AND (%(enabled_from)s IS NULL OR message.creation >= %(enabled_from)s)
 			{cursor}
 		ORDER BY message.provider_timestamp ASC, message.creation ASC, message.name ASC
 		LIMIT %(limit)s
@@ -811,7 +820,29 @@ def _valid_identity(identity) -> str:
 
 
 def _settings():
-	return frappe.get_single("WhatsApp Core Settings")
+	settings = frappe.get_single("WhatsApp Core Settings")
+	_ai_enabled_from(settings)
+	return settings
+
+
+def _ai_enabled_from(settings):
+	"""Return the durable activation boundary, initializing upgraded enabled sites once."""
+	value = getattr(settings, "ai_summaries_enabled_from", None)
+	if value or not cint(getattr(settings, "enable_ai_summaries", 0)):
+		return value
+	# Unit-test settings are intentionally lightweight objects. Only persist the
+	# migration-safe boundary for the real Single DocType loaded by Frappe.
+	if getattr(settings, "doctype", None) != "WhatsApp Core Settings":
+		return None
+	value = now_datetime()
+	frappe.db.set_single_value(
+		"WhatsApp Core Settings",
+		"ai_summaries_enabled_from",
+		value,
+		update_modified=False,
+	)
+	settings.ai_summaries_enabled_from = value
+	return value
 
 
 def _action_or_throw(settings) -> None:

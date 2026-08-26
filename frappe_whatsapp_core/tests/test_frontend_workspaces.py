@@ -292,7 +292,7 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		self.assertIn("newChat.mode === 'template' && !newChat.template", inbox)
 		self.assertNotIn("Start and queue", inbox)
 
-	def test_reader_tooltip_uses_a_viewport_overlay_and_formatted_identity(self):
+	def test_reader_details_use_a_viewport_panel_and_formatted_identities(self):
 		bubble = (
 			Path(__file__).resolve().parents[2]
 			/ "core_ui"
@@ -304,9 +304,10 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		).read_text()
 		self.assertIn('<Teleport to="body">', bubble)
 		self.assertIn("formatDateTime(readAt, '')", bubble)
-		self.assertIn("reader-tooltip-overlay", bubble)
-		self.assertNotIn('data-tooltip="readerTooltip(reader)"', bubble)
-		self.assertNotIn(':title="readerTooltip(reader)"', bubble)
+		self.assertIn("reader-panel", bubble)
+		self.assertIn('role="dialog"', bubble)
+		self.assertIn("Waiting on", bubble)
+		self.assertNotIn("reader-tooltip-overlay", bubble)
 
 	def test_document_references_use_shared_link_components(self):
 		ui_root = Path(__file__).resolve().parents[2] / "core_ui" / "src"
@@ -336,6 +337,22 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		self.assertFalse(settings["ai_summary"]["enabled"])
 		self.assertEqual(settings["ai_summary"]["batch_size"], 100)
 		self.assertEqual(settings["ai_summary"]["max_media_mb"], 50)
+
+	def test_ai_activation_boundary_is_created_once_per_enabled_period(self):
+		action = frappe.db.get_value("I2A Action", {"enabled": 1}, "name")
+		if not action:
+			self.skipTest("No enabled I2A Action is available on the local test site")
+		with patch(
+			"frappe_whatsapp_core.frontend_api._i2a_schema_available",
+			return_value=True,
+		):
+			save_ai_summary_settings(enabled=0, action="")
+			first = save_ai_summary_settings(enabled=1, action=action)["ai_summary"]
+			second = save_ai_summary_settings(enabled=1, action=action)["ai_summary"]
+			self.assertTrue(first["enabled_from"])
+			self.assertEqual(first["enabled_from"], second["enabled_from"])
+			disabled = save_ai_summary_settings(enabled=0, action="")["ai_summary"]
+			self.assertFalse(disabled["enabled_from"])
 
 	def test_i2a_schema_probe_short_circuits_when_frappe_tools_is_absent(self):
 		with (
@@ -384,6 +401,8 @@ class TestFrontendWorkspaces(FrappeTestCase):
 		self.assertIn("User", {row.name for row in doctypes})
 		fields = contact_source_fields("User")
 		self.assertIn("mobile_no", {row["value"] for row in fields["phone_fields"]})
+		self.assertIn("first_name", {row["value"] for row in fields["filter_fields"]})
+		self.assertNotIn("Password", {row["fieldtype"] for row in fields["filter_fields"]})
 		source = save_contact_source({
 			"source_key": f"ui.user.{self.suffix}",
 			"display_name": "UI Users",

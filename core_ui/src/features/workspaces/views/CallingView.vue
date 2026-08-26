@@ -13,8 +13,10 @@
 		Phone,
 		PhoneCall,
 		PhoneMissed,
+		RefreshCw,
 		Send,
 		ShieldCheck,
+		ShieldOff,
 	} from 'lucide-vue-next'
 	import AppDialog from '@/components/AppDialog.vue'
 	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
@@ -47,9 +49,25 @@
 	)
 	const visibleError = computed(() => {
 		if (localError.value) return localError.value
+		if (calling.workspace.available === false) return ''
 		if (!calling.error) return ''
 		return 'Calling is temporarily unavailable. Ask a WhatsApp Manager to check the Hub connection.'
 	})
+	const callingUnavailable = computed(
+		() => !calling.loading && calling.workspace.available === false,
+	)
+	const unavailableTitle = computed(() =>
+		calling.workspace.configured === false
+			? 'Connect WhatsApp Integration to use calling'
+			: 'WhatsApp calling is not available for this account',
+	)
+	const unavailableCopy = computed(
+		() =>
+			calling.error ||
+			(calling.workspace.configured === false
+				? 'Complete the Core-to-Hub connection first, then recheck availability.'
+				: 'Meta has not made calling available for this phone number. Recheck after permissions or account settings change.'),
+	)
 
 	function statusLabelFor(callRow) {
 		const value = String(callRow?.status || '').toLowerCase()
@@ -174,11 +192,7 @@
 <template>
 	<div class="calling-page">
 		<header class="page-heading calling-heading">
-			<div>
-				<div class="eyebrow">WhatsApp Business Calling</div>
-				<h1>Call customers from the workspace</h1>
-				<p>Secure browser audio with the same team access rules as the shared inbox.</p>
-			</div>
+			<h1>Calling</h1>
 			<div class="heading-actions">
 				<ChannelSelect
 					:model-value="calling.selectedAccount"
@@ -196,18 +210,28 @@
 		</div>
 		<div v-if="calling.notice" class="banner success-banner">{{ calling.notice }}</div>
 
+		<section v-if="callingUnavailable" class="surface-card availability-card" role="status">
+			<span class="availability-icon"><ShieldOff :size="25" /></span>
+			<div>
+				<strong>{{ unavailableTitle }}</strong>
+				<p>{{ unavailableCopy }}</p>
+			</div>
+			<Button
+				label="Recheck availability"
+				outlined
+				:loading="calling.loading"
+				@click="calling.load()"
+			>
+				<template #icon><RefreshCw :size="15" /></template>
+			</Button>
+		</section>
+
 		<section
-			v-if="!calling.callingEnabled && calling.workspace.available"
+			v-else-if="!calling.callingEnabled && calling.workspace.available"
 			class="surface-card activation-card"
 		>
 			<div class="feature-icon"><ShieldCheck :size="25" /></div>
-			<div>
-				<strong>Calling is ready to be activated</strong>
-				<p>
-					The supported WhatsApp calling defaults are applied automatically. Your team
-					can start calling as soon as a manager enables it.
-				</p>
-			</div>
+			<strong>Calling is ready to be activated</strong>
 			<Button
 				v-if="calling.canManage"
 				label="Enable calling"
@@ -218,14 +242,11 @@
 			<small v-else>Ask a WhatsApp Manager to enable calling once.</small>
 		</section>
 
-		<div class="calling-grid">
+		<div v-if="!callingUnavailable" class="calling-grid">
 			<section class="surface-card dialer-card">
 				<div class="section-heading">
 					<div class="feature-icon"><PhoneCall :size="23" /></div>
-					<div>
-						<h2>Start a call</h2>
-						<p>Only contacts available to your team are shown.</p>
-					</div>
+					<h2>Start a call</h2>
 				</div>
 				<label class="field-label">
 					Contact
@@ -283,26 +304,6 @@
 						<template #icon><Phone :size="18" /></template>
 					</Button>
 				</div>
-				<p class="privacy-note">
-					Your browser requests microphone access only when you start or answer a call.
-				</p>
-			</section>
-
-			<section class="surface-card readiness-card">
-				<div class="section-heading compact">
-					<div class="feature-icon"><ShieldCheck :size="21" /></div>
-					<div>
-						<h2>Private by design</h2>
-						<p>Your team sees only the contacts and calls they can handle.</p>
-					</div>
-				</div>
-				<ul>
-					<li><CheckCircle2 :size="17" /> Team-scoped contacts and incoming calls</li>
-					<li><CheckCircle2 :size="17" /> Secure browser voice calls</li>
-					<li><CheckCircle2 :size="17" /> Announced call recording for every call</li>
-					<li><CheckCircle2 :size="17" /> Global call controls while you work</li>
-					<li><CheckCircle2 :size="17" /> Live ringing, answer and call status</li>
-				</ul>
 			</section>
 		</div>
 
@@ -310,10 +311,7 @@
 			<div class="section-heading history-heading">
 				<div class="heading-copy">
 					<div class="feature-icon"><History :size="22" /></div>
-					<div>
-						<h2>Recent calls</h2>
-						<p>Your team-scoped call history.</p>
-					</div>
+					<h2>Recent calls</h2>
 				</div>
 				<Button
 					icon="pi pi-refresh"
@@ -400,7 +398,6 @@
 			<div v-else class="empty-history">
 				<PhoneMissed :size="28" />
 				<strong>No calls yet</strong>
-				<span>Your incoming and outgoing WhatsApp calls will appear here.</span>
 			</div>
 		</section>
 
@@ -411,8 +408,14 @@
 			:style="{ width: 'min(32rem, calc(100vw - 2rem))' }"
 		>
 			<div class="invitation-form">
-				<p>Send a WhatsApp call button when a customer should initiate the call.</p>
-				<Textarea v-model="invitationText" rows="4" fluid maxlength="1024" />
+				<label for="call-invitation-message">Invitation message</label>
+				<Textarea
+					id="call-invitation-message"
+					v-model="invitationText"
+					rows="4"
+					fluid
+					maxlength="1024"
+				/>
 			</div>
 			<template #footer>
 				<Button
@@ -442,16 +445,6 @@
 	.calling-heading {
 		align-items: flex-start;
 	}
-	.calling-heading p {
-		margin: 5px 0 0;
-	}
-	.eyebrow {
-		color: var(--wa-primary);
-		font-size: 11px;
-		font-weight: 800;
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
-	}
 	.heading-actions {
 		display: flex;
 		gap: 10px;
@@ -468,11 +461,35 @@
 		align-items: center;
 		border-color: color-mix(in srgb, var(--wa-primary) 35%, var(--wa-border));
 	}
-	.activation-card p,
 	.activation-card small {
 		margin: 4px 0 0;
 		color: var(--wa-muted);
 		font-size: 12px;
+	}
+	.availability-card {
+		display: grid;
+		grid-template-columns: 46px minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 15px;
+		padding: 20px;
+		border-color: color-mix(in srgb, var(--wa-warning) 28%, var(--wa-border));
+		background: color-mix(in srgb, var(--wa-warning) 6%, var(--wa-surface));
+	}
+	.availability-icon {
+		display: grid;
+		place-items: center;
+		width: 46px;
+		height: 46px;
+		border-radius: 14px;
+		color: var(--wa-warning);
+		background: color-mix(in srgb, var(--wa-warning) 13%, transparent);
+	}
+	.availability-card p {
+		display: block;
+		margin: 4px 0 0;
+		color: var(--wa-muted);
+		font-size: 12px;
+		line-height: 1.5;
 	}
 	.feature-icon {
 		width: 42px;
@@ -486,11 +503,10 @@
 	}
 	.calling-grid {
 		display: grid;
-		grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.8fr);
+		grid-template-columns: minmax(0, 1fr);
 		gap: 18px;
 	}
 	.dialer-card,
-	.readiness-card,
 	.history-card {
 		padding: 20px;
 	}
@@ -504,11 +520,6 @@
 		margin: 0;
 		color: var(--wa-text);
 		font-size: 16px;
-	}
-	.section-heading p {
-		margin: 3px 0 0;
-		color: var(--wa-muted);
-		font-size: 12px;
 	}
 	.field-label {
 		margin-top: 22px;
@@ -597,28 +608,6 @@
 		background: var(--wa-green) !important;
 		border-color: var(--wa-green) !important;
 	}
-	.privacy-note {
-		margin: 14px 0 0;
-		color: var(--wa-muted);
-		font-size: 11px;
-	}
-	.readiness-card ul {
-		margin: 22px 0 0;
-		padding: 0;
-		display: grid;
-		gap: 14px;
-		list-style: none;
-	}
-	.readiness-card li {
-		display: flex;
-		gap: 9px;
-		align-items: center;
-		color: var(--wa-text);
-		font-size: 12px;
-	}
-	.readiness-card li svg {
-		color: var(--wa-success);
-	}
 	.history-heading {
 		justify-content: space-between;
 	}
@@ -679,17 +668,13 @@
 	.empty-history strong {
 		color: var(--wa-text);
 	}
-	.empty-history span {
-		font-size: 12px;
-	}
 	.invitation-form {
 		display: grid;
 		gap: 12px;
 	}
-	.invitation-form p {
-		margin: 0;
-		color: var(--wa-muted);
+	.invitation-form label {
 		font-size: 12px;
+		font-weight: 700;
 	}
 	@media (max-width: 980px) {
 		.calling-grid {
@@ -711,7 +696,11 @@
 		.activation-card {
 			grid-template-columns: 42px 1fr;
 		}
-		.activation-card > :last-child {
+		.availability-card {
+			grid-template-columns: 42px 1fr;
+		}
+		.activation-card > :last-child,
+		.availability-card > :last-child {
 			grid-column: 1 / -1;
 		}
 		.dialer-actions > * {

@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%2336d79f'/%3E%3Cpath d='M19 18h26v20H30l-8 8v-8h-3z' fill='%2308100f'/%3E%3C/svg%3E" />
+  <title>WhatsApp Core — Internal Collaboration Release</title>
+  <style>
+    :root {
+      --bg: #08100f;
+      --surface: #101a18;
+      --surface-2: #162321;
+      --line: #273633;
+      --text: #eff8f5;
+      --muted: #9fb2ad;
+      --green: #36d79f;
+      --green-soft: rgba(54, 215, 159, 0.12);
+      --blue: #5ac8fa;
+      --amber: #f6c85f;
+      --radius: 18px;
+      --shadow: 0 20px 70px rgba(0, 0, 0, 0.28);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% 0%, rgba(54, 215, 159, 0.12), transparent 32rem),
+        radial-gradient(circle at 90% 10%, rgba(90, 200, 250, 0.09), transparent 30rem),
+        var(--bg);
+      line-height: 1.55;
+    }
+    a { color: var(--blue); }
+    .page { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 40px 0 70px; }
+    .hero, .panel, .step, .feature, .boundary, .proof {
+      border: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 96%, transparent);
+      box-shadow: var(--shadow);
+    }
+    .hero { padding: clamp(24px, 5vw, 54px); border-radius: 28px; }
+    .eyebrow { margin: 0 0 10px; color: var(--green); font-size: .76rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { max-width: 850px; margin: 0; font-size: clamp(2rem, 5vw, 4.6rem); line-height: .98; letter-spacing: -.045em; }
+    .lead { max-width: 780px; margin: 22px 0 0; color: var(--muted); font-size: 1.05rem; }
+    .status { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+    .chip { padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--surface-2); font-size: .78rem; font-weight: 700; }
+    .chip.good { color: var(--green); border-color: rgba(54, 215, 159, .34); background: var(--green-soft); }
+    section { margin-top: 36px; }
+    .section-head { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 14px; }
+    h2 { margin: 0; font-size: clamp(1.35rem, 3vw, 2rem); letter-spacing: -.025em; }
+    .section-head p { max-width: 620px; margin: 0; color: var(--muted); }
+    .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+    .step { position: relative; min-height: 150px; padding: 17px; border-radius: var(--radius); }
+    .step:not(:last-child)::after { content: "→"; position: absolute; z-index: 2; top: 50%; right: -18px; width: 26px; color: var(--green); text-align: center; font-weight: 900; }
+    .number { display: grid; place-items: center; width: 28px; height: 28px; margin-bottom: 22px; border-radius: 9px; color: var(--bg); background: var(--green); font-size: .78rem; font-weight: 900; }
+    .step strong { display: block; margin-bottom: 6px; }
+    .step p, .feature p, .boundary p { margin: 0; color: var(--muted); font-size: .88rem; }
+    .features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .feature { padding: 20px; border-radius: var(--radius); }
+    .feature b { display: block; margin-bottom: 7px; color: var(--green); font-size: .76rem; letter-spacing: .08em; text-transform: uppercase; }
+    .feature strong { display: block; margin-bottom: 7px; }
+    .panel { padding: 22px; border-radius: var(--radius); }
+    .states { display: grid; grid-template-columns: 1fr auto 1fr; gap: 16px; align-items: center; }
+    .state { padding: 20px; border: 1px solid var(--line); border-radius: 15px; background: var(--surface-2); }
+    .state strong { display: block; margin-bottom: 5px; }
+    .state p { margin: 0; color: var(--muted); }
+    .switch { color: var(--green); font-size: 1.5rem; }
+    .boundaries { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .boundary { padding: 22px; border-radius: var(--radius); }
+    .boundary h3 { margin: 0 0 9px; }
+    .boundary.core { border-color: rgba(54, 215, 159, .34); }
+    .boundary.hub { border-color: rgba(90, 200, 250, .3); }
+    .rules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+    .rules li { padding: 14px 16px; border-left: 3px solid var(--green); border-radius: 10px; color: var(--muted); background: var(--surface-2); }
+    .rules strong { color: var(--text); }
+    .proof-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .proof { overflow: hidden; border-radius: var(--radius); }
+    .proof img { display: block; width: 100%; height: auto; background: #050807; }
+    .proof figcaption { padding: 14px 16px; color: var(--muted); font-size: .84rem; }
+    .tests { width: 100%; border-collapse: collapse; overflow: hidden; }
+    .tests th, .tests td { padding: 13px 14px; border-bottom: 1px solid var(--line); text-align: left; }
+    .tests th { color: var(--muted); font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; }
+    .tests td:last-child { color: var(--green); font-weight: 800; }
+    .foot { margin-top: 28px; padding: 18px 20px; border: 1px solid rgba(246, 200, 95, .25); border-radius: 14px; color: var(--muted); background: rgba(246, 200, 95, .06); }
+    .foot strong { color: var(--amber); }
+    @media (max-width: 900px) {
+      .flow { grid-template-columns: 1fr; }
+      .step { min-height: 0; }
+      .step:not(:last-child)::after { content: "↓"; top: auto; right: 50%; bottom: -20px; }
+      .features { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 650px) {
+      .page { width: min(100% - 20px, 1180px); padding-top: 10px; }
+      .hero { border-radius: 20px; }
+      .section-head { display: block; }
+      .section-head p { margin-top: 7px; }
+      .features, .boundaries, .proof-grid, .rules { grid-template-columns: 1fr; }
+      .states { grid-template-columns: 1fr; }
+      .switch { transform: rotate(90deg); text-align: center; }
+      .panel { overflow-x: auto; }
+    }
+    @media print {
+      :root { --bg: #fff; --surface: #fff; --surface-2: #f4f7f6; --line: #d9e2df; --text: #12201c; --muted: #52635e; }
+      body { background: #fff; }
+      .page { width: 100%; padding: 0; }
+      .hero, .panel, .step, .feature, .boundary, .proof { box-shadow: none; break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <p class="eyebrow">WhatsApp Core · Collaboration release</p>
+      <h1>From a chat inbox to a team workspace.</h1>
+      <p class="lead">Summaries now reduce long conversations into a compact view, while private notes, mentions, assignments, replies and resolution keep internal work connected to the exact customer context.</p>
+      <div class="status" aria-label="Release status">
+        <span class="chip good">Implemented</span>
+        <span class="chip good">Browser tested</span>
+        <span class="chip">Core-owned data</span>
+        <span class="chip">No production changes</span>
+      </div>
+    </header>
+
+    <section aria-labelledby="flow-title">
+      <div class="section-head">
+        <h2 id="flow-title">How the process works</h2>
+        <p>One permission-scoped path from customer context to accountable team work.</p>
+      </div>
+      <div class="flow">
+        <article class="step"><span class="number">1</span><strong>Open customer</strong><p>A summarized conversation opens in Compact mode instead of loading the complete transcript first.</p></article>
+        <article class="step"><span class="number">2</span><strong>Create internal note</strong><p>The operator links the note to the contact summary, a topic, or selected messages.</p></article>
+        <article class="step"><span class="number">3</span><strong>Mention or assign</strong><p>Only team members who can access this conversation can be selected.</p></article>
+        <article class="step"><span class="number">4</span><strong>Notify</strong><p>Core creates a durable Frappe notification and sends a realtime refresh to the recipient.</p></article>
+        <article class="step"><span class="number">5</span><strong>Reply and resolve</strong><p>The recipient opens the exact conversation, replies with context, then resolves or reopens the task.</p></article>
+      </div>
+    </section>
+
+    <section aria-labelledby="features-title">
+      <div class="section-head">
+        <h2 id="features-title">New features</h2>
+        <p>The visible UI and the data contract were changed together.</p>
+      </div>
+      <div class="features">
+        <article class="feature"><b>Conversation view</b><strong>Compact by default</strong><p>Conversations with a summary or topics start in Compact mode. “Expand conversation” restores the full message timeline.</p></article>
+        <article class="feature"><b>Context</b><strong>Notes against real work</strong><p>A note can reference a contact summary, topic summary, summary period, or up to 50 messages.</p></article>
+        <article class="feature"><b>Collaboration</b><strong>Mentions and assignment</strong><p>Up to 20 scoped teammates can be mentioned, with one accountable assignee.</p></article>
+        <article class="feature"><b>Threading</b><strong>Replies keep context</strong><p>Replies display the original author and note preview, without exposing random database IDs.</p></article>
+        <article class="feature"><b>Workflow</b><strong>Resolve and reopen</strong><p>Authors, assignees and managers can update work; resolution records who completed it and when.</p></article>
+        <article class="feature"><b>Notifications</b><strong>Durable and realtime</strong><p>The bell loads permission-scoped Notification Logs. A click marks one read and deep-links to its comment.</p></article>
+      </div>
+    </section>
+
+    <section aria-labelledby="views-title">
+      <div class="section-head"><h2 id="views-title">Compact and expanded views</h2></div>
+      <div class="panel states">
+        <div class="state"><strong>Compact</strong><p>Intent, ownership, context coverage, team visibility, actions, risks and conversation topics.</p></div>
+        <div class="switch" aria-hidden="true">⇄</div>
+        <div class="state"><strong>Conversation</strong><p>The complete message timeline, media, read state, replies and exact message selection.</p></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="boundary-title">
+      <div class="section-head">
+        <h2 id="boundary-title">Core and Hub responsibility</h2>
+        <p>Internal customer work stays private to the business site.</p>
+      </div>
+      <div class="boundaries">
+        <article class="boundary core"><h3>WhatsApp Core owns</h3><p>Internal notes, summary links, message links, mentions, assignment, replies, task state, Notification Logs, permissions and the collaboration UI.</p></article>
+        <article class="boundary hub"><h3>WhatsApp Hub owns</h3><p>Meta credentials, transport, webhook routing, delivery work, templates and relay operations. It does not receive private internal notes.</p></article>
+      </div>
+    </section>
+
+    <section aria-labelledby="security-title">
+      <div class="section-head"><h2 id="security-title">Permission and integrity rules</h2></div>
+      <ul class="rules">
+        <li><strong>Conversation scope:</strong> every read and write first validates access to the selected conversation.</li>
+        <li><strong>Team scope:</strong> mentions and assignment reject users outside the conversation’s eligible team.</li>
+        <li><strong>Reference scope:</strong> linked messages and summaries must belong to the same conversation or identity.</li>
+        <li><strong>Mutation scope:</strong> only the author, assignee or WhatsApp Manager can edit, resolve, reopen or delete.</li>
+        <li><strong>Notification scope:</strong> users only receive and load notifications for conversations they may still access.</li>
+        <li><strong>Query efficiency:</strong> users, message previews, summary labels and notification comments are batch hydrated.</li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="proof-title">
+      <div class="section-head"><h2 id="proof-title">Browser proof</h2><p>Captured from the local <code>sales-prod.site</code> verification run.</p></div>
+      <div class="proof-grid">
+        <figure class="proof"><img src="../../../output/playwright/whatsapp-compact-summary-final.png" alt="Compact customer summary shown in WhatsApp Core" /><figcaption>Compact mode: summary first, with a clear path to the complete conversation.</figcaption></figure>
+        <figure class="proof"><img src="../../../output/playwright/whatsapp-internal-collaboration-final.png" alt="Internal notes panel with assignment, mention, reply and resolved state" /><figcaption>Internal collaboration: linked summary, mention, assignment, threaded reply and resolved state.</figcaption></figure>
+      </div>
+    </section>
+
+    <section aria-labelledby="tests-title">
+      <div class="section-head"><h2 id="tests-title">Verification results</h2></div>
+      <div class="panel">
+        <table class="tests">
+          <thead><tr><th>Verification</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td>Full Core backend suite</td><td>426 / 426 passed</td></tr>
+            <tr><td>Final collaboration and access suite</td><td>24 / 24 passed</td></tr>
+            <tr><td>Frontend unit suite</td><td>43 / 43 passed</td></tr>
+            <tr><td>Production frontend build</td><td>2,054 modules built</td></tr>
+            <tr><td>Real browser workflow</td><td>Create → mention → assign → reply → resolve</td></tr>
+            <tr><td>Browser console</td><td>0 errors · 0 warnings</td></tr>
+            <tr><td>Static checks</td><td>Ruff · Prettier · Python compile · diff check</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <p class="foot"><strong>Release note:</strong> The implementation and test data are local. Nothing in this work was pushed or applied to production.</p>
+  </main>
+</body>
+</html>
