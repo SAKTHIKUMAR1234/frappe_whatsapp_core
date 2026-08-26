@@ -13,6 +13,7 @@
 	import FlowResponseCard from '@/features/flows/components/FlowResponseCard.vue'
 	import MessageDocumentCard from '@/features/inbox/components/MessageDocumentCard.vue'
 	import TemplateMessageCard from '@/features/inbox/components/TemplateMessageCard.vue'
+	import TypedMessageContent from '@/features/inbox/components/TypedMessageContent.vue'
 	import { flowReplyFromContent } from '@/features/flows/utils/flowResponse'
 	import { formatDateTime, formatTime } from '@/utils/datetime'
 
@@ -21,8 +22,9 @@
 		messageIndex: { type: Map, default: () => new Map() },
 		contactName: { type: String, default: 'Contact' },
 		readers: { type: Array, default: () => [] },
+		selectedForWork: { type: Boolean, default: false },
 	})
-	const emit = defineEmits(['reply', 'retry', 'menu', 'quote'])
+	const emit = defineEmits(['reply', 'retry', 'menu', 'quote', 'preview'])
 	let longPressTimer = null
 	let longPressOrigin = null
 	const mediaReady = ref(false)
@@ -157,22 +159,6 @@
 		const value = String(quotedMessage.value?.media_url || '')
 		return /^(https?:\/\/|\/)/i.test(value) ? value : ''
 	})
-	const locationUrl = computed(() => {
-		if (props.message.message_type !== 'location') return ''
-		const latitude = richContent.value?.latitude
-		const longitude = richContent.value?.longitude
-		if (latitude === undefined || longitude === undefined) return ''
-		return `https://www.google.com/maps?q=${encodeURIComponent(`${latitude},${longitude}`)}`
-	})
-	const contactNames = computed(() => {
-		const rows = Array.isArray(richContent.value)
-			? richContent.value
-			: richContent.value?.contacts || []
-		return rows
-			.map((row) => row?.name?.formatted_name || row?.name?.first_name)
-			.filter(Boolean)
-			.join(', ')
-	})
 	const reactionGroups = computed(() => {
 		const groups = new Map()
 		for (const reaction of props.message.reactions || []) {
@@ -293,6 +279,20 @@
 		mediaReady.value = false
 		mediaFailed.value = true
 	}
+
+	function previewAttachment(kind = props.message.message_type) {
+		if (!mediaUrl.value) return
+		emit('preview', {
+			url: mediaUrl.value,
+			kind: kind === 'sticker' ? 'image' : kind,
+			filename:
+				richContent.value.filename ||
+				richContent.value.file_name ||
+				(kind === 'document' ? props.message.body : ''),
+			mimeType: richContent.value.mime_type || richContent.value.mime || '',
+			size: Number(richContent.value.file_size || richContent.value.size || 0),
+		})
+	}
 </script>
 
 <template>
@@ -300,7 +300,7 @@
 		:class="[
 			'message-bubble',
 			message.direction?.toLowerCase(),
-			{ 'has-visual-media': hasVisualMedia },
+			{ 'has-visual-media': hasVisualMedia, 'selected-for-work': selectedForWork },
 		]"
 		:data-message-name="message.name"
 		@contextmenu="openMenu"
@@ -348,6 +348,15 @@
 		<div
 			v-if="hasVisualMedia"
 			:class="['message-media-frame', message.message_type, { ready: mediaReady }]"
+			:role="['image', 'sticker'].includes(message.message_type) ? 'button' : undefined"
+			:tabindex="['image', 'sticker'].includes(message.message_type) ? 0 : undefined"
+			@click="['image', 'sticker'].includes(message.message_type) && previewAttachment()"
+			@keydown.enter="
+				['image', 'sticker'].includes(message.message_type) && previewAttachment()
+			"
+			@keydown.space.prevent="
+				['image', 'sticker'].includes(message.message_type) && previewAttachment()
+			"
 		>
 			<div v-if="!mediaReady && !mediaFailed" class="media-skeleton" aria-hidden="true" />
 			<span v-if="mediaFailed" class="media-failed">Media unavailable</span>
@@ -380,18 +389,8 @@
 			:filename="richContent.filename || richContent.file_name || message.body"
 			:mime-type="richContent.mime_type || richContent.mime"
 			:size="Number(richContent.file_size || richContent.size || 0)"
+			@open="previewAttachment('document')"
 		/>
-		<a
-			v-else-if="locationUrl"
-			:href="locationUrl"
-			class="message-link"
-			target="_blank"
-			rel="noreferrer"
-			>Open location</a
-		>
-		<div v-else-if="message.message_type === 'contacts' && contactNames" class="contact-card">
-			{{ contactNames }}
-		</div>
 		<FlowResponseCard
 			v-else-if="hasFlowResponse"
 			:response="flowReply.response"
@@ -407,8 +406,9 @@
 			:fallback="message.body"
 			:media-url="mediaUrl"
 			:media-type="richContent.mime_type"
+			@preview="emit('preview', $event)"
 		/>
-		<p v-else>{{ message.body || 'Media or interactive message' }}</p>
+		<TypedMessageContent v-else :message="message" />
 		<div v-if="message.ai_insight?.categories?.length" class="message-categories">
 			<span
 				v-for="category in message.ai_insight.categories"
@@ -588,6 +588,11 @@
 		border-radius: 8px 8px 2px 8px;
 		background: var(--wa-message-out);
 	}
+	.message-bubble.selected-for-work {
+		box-shadow:
+			0 0 0 2px var(--wa-primary),
+			0 1px 1px rgba(11, 20, 26, 0.16);
+	}
 	.message-bubble.has-visual-media {
 		padding-right: 9px;
 	}
@@ -714,6 +719,13 @@
 		width: min(180px, 44vw);
 		aspect-ratio: 1;
 		background: transparent;
+	}
+	.message-media-frame[role='button'] {
+		cursor: zoom-in;
+	}
+	.message-media-frame[role='button']:focus-visible {
+		outline: 2px solid var(--wa-primary);
+		outline-offset: 2px;
 	}
 	.message-media {
 		grid-area: 1 / 1;

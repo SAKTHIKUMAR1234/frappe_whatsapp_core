@@ -1,5 +1,5 @@
 <script setup>
-	import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+	import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 	import Button from 'primevue/button'
 	import AppDialog from '@/components/AppDialog.vue'
 	import InputText from 'primevue/inputtext'
@@ -10,10 +10,13 @@
 	import Tag from 'primevue/tag'
 	import {
 		Building2,
+		ChevronLeft,
+		ChevronRight,
 		Headphones,
 		ImagePlus,
 		MessageCircleMore,
 		Plus,
+		Search,
 		Store,
 		Trash2,
 		UsersRound,
@@ -25,11 +28,16 @@
 	import { call, errorMessage, uploadFile } from '@/services/frappe'
 	import { subscribe } from '@/services/realtime'
 	import { useSessionStore } from '@/stores/session'
+	import { filterAndRankConversations } from '@/features/inbox/utils/conversationSearch'
 	import { focusDialogControl } from '@/utils/focus'
 
 	const toast = useToast()
 	const session = useSessionStore()
 	const teams = ref([])
+	const teamSearch = ref('')
+	const teamOffset = ref(0)
+	const teamHasMore = ref(false)
+	const teamPageSize = 24
 	const loading = ref(false)
 	const saving = ref(false)
 	const loadError = ref('')
@@ -59,27 +67,51 @@
 		iconOptions.map((option) => [option.value, option.component]),
 	)
 	const canManage = computed(() => Boolean(session.boot?.can_manage))
+	const teamPageNumber = computed(() => Math.floor(teamOffset.value / teamPageSize) + 1)
 	let unsubscribe = () => {}
 	let refreshTimer = null
+	let searchTimer = null
 	let loadSequence = 0
 	function teamIcon(icon) {
 		return iconComponents[icon] || UsersRound
 	}
 
-	async function load({ silent = false } = {}) {
+	async function load({ silent = false, reset = false } = {}) {
+		if (reset) teamOffset.value = 0
 		const request = ++loadSequence
 		if (!silent) loading.value = true
 		loadError.value = ''
 		try {
-			const workspace = await call('frappe_whatsapp_core.workspace_api.list_teams')
+			const workspace = await call('frappe_whatsapp_core.workspace_api.team_page', {
+				search: teamSearch.value,
+				limit: teamPageSize,
+				offset: teamOffset.value,
+			})
 			if (request !== loadSequence) return
-			teams.value = workspace || []
+			teams.value = filterAndRankConversations(
+				(workspace?.rows || []).map((team) => ({
+					...team,
+					display_name: team.team_name,
+					search_aliases: [team.description],
+				})),
+				teamSearch.value,
+			)
+			teamHasMore.value = Boolean(workspace?.has_more)
 		} catch (error) {
 			if (request === loadSequence)
 				loadError.value = errorMessage(error, 'Unable to load teams.')
 		} finally {
 			if (!silent && request === loadSequence) loading.value = false
 		}
+	}
+	async function previousTeamPage() {
+		teamOffset.value = Math.max(0, teamOffset.value - teamPageSize)
+		await load()
+	}
+	async function nextTeamPage() {
+		if (!teamHasMore.value) return
+		teamOffset.value += teamPageSize
+		await load()
 	}
 	function refreshFromRealtime() {
 		window.clearTimeout(refreshTimer)
@@ -170,8 +202,13 @@
 		await load()
 		unsubscribe = subscribe(session.boot?.site, 'whatsapp_core_team', refreshFromRealtime)
 	})
+	watch(teamSearch, () => {
+		window.clearTimeout(searchTimer)
+		searchTimer = window.setTimeout(() => load({ reset: true }), 220)
+	})
 	onUnmounted(() => {
 		window.clearTimeout(refreshTimer)
+		window.clearTimeout(searchTimer)
 		revokeAvatarPreview()
 		unsubscribe()
 	})
@@ -180,12 +217,15 @@
 <template>
 	<div class="page-heading">
 		<div>
-			<div class="eyebrow">Ownership and routing</div>
 			<h1>Teams</h1>
 		</div>
 		<Button v-if="canManage" label="Create team" @click="open()">
 			<template #icon><Plus :size="16" /></template>
 		</Button>
+	</div>
+	<div class="team-toolbar">
+		<span><Search :size="15" /></span>
+		<InputText v-model="teamSearch" placeholder="Search teams" aria-label="Search teams" />
 	</div>
 	<AsyncState
 		:loading="loading"
@@ -217,7 +257,6 @@
 			<p>{{ team.description || 'No description' }}</p>
 			<div class="members">
 				<strong>{{ team.member_count || 0 }} members</strong>
-				<small>Membership is assigned manually by a WhatsApp Manager.</small>
 			</div>
 			<div class="contact-count">
 				<strong>{{ team.contact_count || 0 }}</strong>
@@ -234,6 +273,19 @@
 			</footer>
 		</article>
 	</section>
+	<nav
+		v-if="!loading && !loadError && (teamOffset || teamHasMore)"
+		class="team-pagination"
+		aria-label="Team pages"
+	>
+		<Button label="Previous" outlined :disabled="teamOffset === 0" @click="previousTeamPage">
+			<template #icon><ChevronLeft :size="15" /></template>
+		</Button>
+		<span>Page {{ teamPageNumber }}</span>
+		<Button label="Next" outlined :disabled="!teamHasMore" @click="nextTeamPage">
+			<template #icon><ChevronRight :size="15" /></template>
+		</Button>
+	</nav>
 	<AppDialog
 		ref="dialogRef"
 		v-model:visible="visible"
@@ -340,6 +392,36 @@
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
 		gap: 18px;
+	}
+	.team-toolbar {
+		width: min(360px, 100%);
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin: 0 0 16px;
+		padding: 0 10px;
+		border: 1px solid var(--wa-border);
+		border-radius: 10px;
+		background: var(--wa-surface);
+		color: var(--wa-muted);
+	}
+	.team-toolbar :deep(input) {
+		width: 100%;
+		padding-inline: 0;
+		border: 0;
+		box-shadow: none;
+	}
+	.team-pagination {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 12px;
+		margin-top: 18px;
+	}
+	.team-pagination > span {
+		color: var(--wa-muted);
+		font-size: 12px;
+		font-weight: 700;
 	}
 	:deep(.p-message) {
 		margin: 0 0 16px;

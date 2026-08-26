@@ -64,7 +64,6 @@
 <template>
 	<div class="page-heading">
 		<div>
-			<div class="eyebrow">Company configuration</div>
 			<h1>Core Settings</h1>
 			<p class="product-version">
 				WhatsApp Core {{ workspace.product?.version || '—' }} · Transport contract v{{
@@ -108,17 +107,6 @@
 			</article>
 		</section>
 
-		<div class="boundary-note">
-			<Building2 :size="18" />
-			<div>
-				<strong>Install Core, connect the Hub, start working</strong>
-				<span
-					>Core owns the operator experience. The separate Integration Hub owns Meta
-					onboarding, template administration and durable delivery.</span
-				>
-			</div>
-		</div>
-
 		<TransportSettingsCard
 			:workspace="workspace"
 			:can-manage="Boolean(session.boot?.can_manage)"
@@ -140,10 +128,7 @@
 		<div class="settings-grid">
 			<section class="surface-card settings-card">
 				<header>
-					<div>
-						<div class="eyebrow">Assigned by Integration</div>
-						<h2>Channels</h2>
-					</div>
+					<h2>Channels</h2>
 					<Tag
 						:value="`${workspace.channels.length} channels`"
 						severity="info"
@@ -169,10 +154,7 @@
 
 			<section class="surface-card settings-card">
 				<header>
-					<div>
-						<div class="eyebrow">Operational scope</div>
-						<h2>Workspaces</h2>
-					</div>
+					<h2>Workspaces</h2>
 					<Tag
 						:value="`${workspace.workspaces.length} workspaces`"
 						severity="success"
@@ -200,12 +182,7 @@
 		</div>
 
 		<section class="surface-card settings-card">
-			<header>
-				<div>
-					<div class="eyebrow">Installed company packs</div>
-					<h2>Solutions</h2>
-				</div>
-			</header>
+			<header><h2>Solutions</h2></header>
 			<DataTable :value="workspace.solutions" striped-rows>
 				<Column field="display_name" header="Solution" />
 				<Column field="solution_key" header="Key" />
@@ -256,31 +233,8 @@
 		font-size: 20px;
 	}
 
-	.boundary-note {
-		display: flex;
-		align-items: center;
-		gap: 11px;
-		padding: 13px 16px;
-		margin-bottom: 16px;
-		border: 1px solid color-mix(in srgb, var(--wa-success) 24%, var(--wa-border));
-		border-radius: 14px;
-		color: var(--wa-success);
-		background: var(--wa-success-soft);
-	}
-
 	.product-version {
 		margin: 4px 0 0;
-		color: var(--wa-muted);
-		font-size: 12px;
-	}
-
-	.boundary-note strong,
-	.boundary-note span {
-		display: block;
-	}
-
-	.boundary-note span {
-		margin-top: 3px;
 		color: var(--wa-muted);
 		font-size: 12px;
 	}

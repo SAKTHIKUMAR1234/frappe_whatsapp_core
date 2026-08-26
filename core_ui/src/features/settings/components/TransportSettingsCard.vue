@@ -155,9 +155,7 @@
 	<section class="surface-card transport-card">
 		<header>
 			<div>
-				<div class="eyebrow">Core → Go runtime · Frappe management plane</div>
-				<h2>Durable transport onboarding</h2>
-				<p>Map local channels and keep Frappe outside the high-volume transport path.</p>
+				<h2>Transport</h2>
 			</div>
 			<span
 				:class="[
@@ -178,17 +176,11 @@
 			<div class="transport-form">
 				<label class="switch-field">
 					<ToggleSwitch v-model="form.enabled" :disabled="!canManage" />
-					<span
-						><strong>Enable WhatsApp Core</strong
-						><small>Receive and operate WhatsApp in this workspace.</small></span
-					>
+					<strong>Enable WhatsApp Core</strong>
 				</label>
 				<label class="switch-field">
 					<ToggleSwitch v-model="form.outbound_enabled" :disabled="!canManage" />
-					<span
-						><strong>Enable outbound</strong
-						><small>Allow UI, Flow Builder and MCP to queue messages.</small></span
-					>
+					<strong>Enable outbound</strong>
 				</label>
 				<label>
 					<span>Integration Hub URL</span>
@@ -205,10 +197,6 @@
 						:disabled="!canManage"
 						placeholder="https://whatsapp-relay.example.com"
 					/>
-					<small
-						>Messages, reads, media, and live calling bypass Frappe through fixed Go
-						routes.</small
-					>
 				</label>
 				<label>
 					<span>Request timeout</span>
@@ -221,16 +209,12 @@
 					/>
 				</label>
 				<label>
-					<span>Default country calling code</span>
+					<span>Country code for local numbers</span>
 					<InputText
 						v-model="form.default_country_calling_code"
 						:disabled="!canManage"
 						placeholder="91"
 					/>
-					<small
-						>Only used for local numbers; + or 00 international numbers are
-						preserved.</small
-					>
 				</label>
 				<label>
 					<span>Hub API key</span>
@@ -257,10 +241,7 @@
 			</div>
 
 			<div class="account-heading">
-				<div>
-					<strong>Channel mappings</strong
-					><span>Local Core channel → central Hub account</span>
-				</div>
+				<strong>Channel mappings</strong>
 				<div v-if="canManage" class="account-actions">
 					<Button
 						label="Refresh Hub accounts"
@@ -344,11 +325,6 @@
 		margin: 3px 0 0;
 		font-size: 15px;
 	}
-	header p {
-		margin: 4px 0 0;
-		color: var(--wa-muted);
-		font-size: 12px;
-	}
 	.transport-state {
 		display: flex;
 		align-items: center;
@@ -390,14 +366,8 @@
 		border: 1px solid var(--wa-border);
 		border-radius: 11px;
 	}
-	.switch-field strong,
-	.switch-field small {
+	.switch-field strong {
 		display: block;
-	}
-	.switch-field small {
-		margin-top: 3px;
-		color: var(--wa-muted);
-		font-weight: 400;
 	}
 	.account-heading strong,
 	.account-heading span {

@@ -140,7 +140,6 @@
 						:disabled="uploadingKey !== ''"
 						@change="uploadTemplateMedia(descriptor, $event)"
 					/>
-					<small>Stored privately in Core and uploaded securely to WhatsApp.</small>
 				</div>
 				<InputText
 					v-else

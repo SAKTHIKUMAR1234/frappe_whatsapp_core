@@ -436,10 +436,7 @@
 
 <template>
 	<div class="page-heading">
-		<div>
-			<div class="eyebrow">Meta Groups API</div>
-			<h1>WhatsApp Groups</h1>
-		</div>
+		<h1>WhatsApp Groups</h1>
 		<Button
 			label="Create group"
 			icon="pi pi-plus"
@@ -473,9 +470,6 @@
 			<div>
 				<strong>{{ unavailableTitle }}</strong>
 				<p>{{ unavailableCopy }}</p>
-				<small>
-					This status is checked directly against Meta and does not depend on a webhook.
-				</small>
 			</div>
 			<Button label="Recheck availability" outlined :loading="loading" @click="load()">
 				<template #icon><RefreshCw :size="15" /></template>
@@ -517,7 +511,6 @@
 		<div v-else class="empty">
 			<MessageCircleMore :size="32" />
 			<strong>No WhatsApp groups yet</strong>
-			<span>Create the first group for this account or choose another account.</span>
 		</div>
 	</section>
 	<AppDialog

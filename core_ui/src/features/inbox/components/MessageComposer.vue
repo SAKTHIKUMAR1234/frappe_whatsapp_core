@@ -1,4 +1,5 @@
 <script setup>
+	import { ref } from 'vue'
 	import Button from 'primevue/button'
 	import Textarea from 'primevue/textarea'
 	import { Paperclip, Send, Smile, X } from 'lucide-vue-next'
@@ -9,6 +10,15 @@
 	})
 
 	defineEmits(['update:modelValue', 'send', 'emoji', 'media', 'cancel-reply', 'typing', 'blur'])
+
+	const input = ref(null)
+
+	function focus(options = { preventScroll: true }) {
+		const element = input.value?.$el?.querySelector?.('textarea') || input.value?.$el
+		element?.focus?.(options)
+	}
+
+	defineExpose({ focus })
 </script>
 
 <template>
@@ -26,10 +36,14 @@
 			<Paperclip :size="20" />
 		</Button>
 		<Textarea
+			ref="input"
 			:model-value="modelValue"
 			auto-resize
 			rows="1"
-			placeholder="Type a message"
+			name="whatsapp_message"
+			autocomplete="off"
+			aria-label="Message"
+			placeholder="Type a message…"
 			@update:model-value="
 				($event) => {
 					$emit('update:modelValue', $event)

@@ -30,28 +30,24 @@
 		{
 			label: 'Open conversations',
 			value: data.value.metrics.open_conversations || 0,
-			detail: 'Customers currently requiring attention',
 			icon: MessageCircleMore,
 			tone: 'green',
 		},
 		{
 			label: 'Unread conversations',
 			value: data.value.metrics.unread_conversations || 0,
-			detail: 'Unread for your own account',
 			icon: MessagesSquare,
 			tone: 'blue',
 		},
 		{
 			label: 'Unassigned queue',
 			value: data.value.metrics.unassigned_conversations || 0,
-			detail: 'Contacts waiting for ownership',
 			icon: Inbox,
 			tone: 'orange',
 		},
 		{
 			label: 'Active today',
 			value: data.value.metrics.active_today || 0,
-			detail: 'Customer conversations touched today',
 			icon: Clock3,
 			tone: 'purple',
 		},
@@ -88,9 +84,7 @@
 <template>
 	<div class="page-heading">
 		<div>
-			<div class="eyebrow">Customer operations</div>
 			<h1>Team overview</h1>
-			<p>Workload, ownership and customer activity within your access scope.</p>
 		</div>
 		<div class="heading-actions">
 			<Button label="Open shared inbox" @click="router.push({ name: 'inbox' })">
@@ -110,10 +104,7 @@
 
 		<section class="team-section">
 			<header class="section-heading">
-				<div>
-					<div class="eyebrow">Team workload</div>
-					<h2>Your customer queues</h2>
-				</div>
+				<h2>Your customer queues</h2>
 				<span v-if="refreshing" class="refreshing">Updating live…</span>
 			</header>
 			<div v-if="loading" class="team-grid">
@@ -161,18 +152,12 @@
 			<div v-else class="empty-teams surface-card">
 				<UsersRound :size="28" />
 				<strong>No team queues are visible</strong>
-				<span>Unassigned conversations remain available from the shared inbox.</span>
 			</div>
 		</section>
 	</template>
 </template>
 
 <style scoped>
-	.page-heading p {
-		margin: 7px 0 0;
-		color: var(--wa-muted);
-		font-size: 13px;
-	}
 	.heading-actions {
 		display: flex;
 		gap: 10px;

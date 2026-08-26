@@ -81,12 +81,7 @@
 			<div class="heading-copy">
 				<span class="heading-icon"><BrainCircuit :size="18" /></span>
 				<div>
-					<div class="eyebrow">Frappe Tools · I2A</div>
 					<h2>Message understanding</h2>
-					<p>
-						Voice transcription, media categorization and incremental contact
-						summaries.
-					</p>
 				</div>
 			</div>
 			<Tag
@@ -100,12 +95,7 @@
 			<div class="ai-settings-form">
 				<label class="switch-field">
 					<ToggleSwitch v-model="form.enabled" :disabled="!canManage" />
-					<span>
-						<strong>Enable 30-minute summary batches</strong>
-						<small
-							>Only new messages after the saved cursor are sent for analysis.</small
-						>
-					</span>
+					<strong>Enable 30-minute summary batches</strong>
 				</label>
 				<label class="action-field">
 					<span>I2A action</span>

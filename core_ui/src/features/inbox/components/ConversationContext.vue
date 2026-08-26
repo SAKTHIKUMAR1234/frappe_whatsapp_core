@@ -10,6 +10,7 @@
 		Star,
 		UsersRound,
 		UserRoundCheck,
+		X,
 	} from 'lucide-vue-next'
 	import Button from 'primevue/button'
 	import InternalCommentsPanel from '@/features/inbox/components/InternalCommentsPanel.vue'
@@ -20,6 +21,9 @@
 		data: { type: Object, required: true },
 		canManage: { type: Boolean, default: false },
 		folders: { type: Array, default: () => [] },
+		draftMessages: { type: Array, default: () => [] },
+		draftReference: { type: Object, default: null },
+		focusComment: { type: String, default: '' },
 	})
 
 	const emit = defineEmits([
@@ -31,6 +35,9 @@
 		'comment-updated',
 		'comment-deleted',
 		'comments-older',
+		'comment-draft-consumed',
+		'comment-open-message',
+		'close',
 	])
 	const toast = useToast()
 	const avatarUploading = ref(false)
@@ -76,8 +83,16 @@
 
 <template>
 	<aside class="context-panel">
+		<Button
+			text
+			rounded
+			class="context-close"
+			aria-label="Close conversation details"
+			@click="emit('close')"
+		>
+			<X :size="17" />
+		</Button>
 		<section>
-			<div class="eyebrow">Conversation</div>
 			<div class="identity">
 				<span>
 					<img
@@ -134,8 +149,7 @@
 		<section>
 			<header><UserRoundCheck :size="15" /> Read by</header>
 			<div v-if="data.expected_readers?.length" class="coverage-copy">
-				<strong>{{ readerCoverage }} / {{ data.expected_readers.length }}</strong>
-				<span>team members have opened this conversation</span>
+				<strong>{{ readerCoverage }} / {{ data.expected_readers.length }} opened</strong>
 			</div>
 			<div class="reader-list">
 				<Tag
@@ -178,10 +192,15 @@
 			:page="data.internal_comment_page || {}"
 			:current-user="data.current_user || ''"
 			:can-manage="canManage"
+			:draft-messages="draftMessages"
+			:draft-reference="draftReference"
+			:focus-comment="focusComment"
 			@created="$emit('comment-created', $event)"
 			@updated="$emit('comment-updated', $event)"
 			@deleted="$emit('comment-deleted', $event)"
 			@older="$emit('comments-older', $event)"
+			@draft-consumed="$emit('comment-draft-consumed')"
+			@open-message="$emit('comment-open-message', $event)"
 		/>
 
 		<section class="ai-note">
@@ -219,10 +238,17 @@
 
 <style scoped>
 	.context-panel {
+		position: relative;
 		min-height: 0;
 		overflow-y: auto;
 		border-left: 1px solid var(--wa-border);
 		background: var(--wa-surface);
+	}
+	.context-close {
+		position: absolute;
+		z-index: 2;
+		top: 9px;
+		right: 9px;
 	}
 	section {
 		padding: 17px;

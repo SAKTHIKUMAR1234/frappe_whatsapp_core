@@ -11,12 +11,14 @@
 		MessageSquarePlus,
 		ArrowDown,
 		FolderPlus,
+		ListTodo,
 		Search,
 		ShieldAlert,
 		X,
 	} from 'lucide-vue-next'
 
 	import ConversationHeader from '@/features/inbox/components/ConversationHeader.vue'
+	import AttachmentPreviewDialog from '@/features/inbox/components/AttachmentPreviewDialog.vue'
 	import CallTimelineEvent from '@/features/inbox/components/CallTimelineEvent.vue'
 	import ChannelSelect from '@/features/channels/components/ChannelSelect.vue'
 	import ConversationContext from '@/features/inbox/components/ConversationContext.vue'
@@ -25,6 +27,10 @@
 	import ConversationList from '@/features/inbox/components/ConversationList.vue'
 	import { filterAndRankConversations } from '@/features/inbox/utils/conversationSearch'
 	import { foldersMatch } from '@/features/inbox/utils/folderNavigation'
+	import {
+		conversationViewStorageKey,
+		defaultConversationView,
+	} from '@/features/inbox/utils/conversationView'
 	import InboxSidebarControls from '@/features/inbox/components/InboxSidebarControls.vue'
 	import InboxResizeHandle from '@/features/inbox/components/InboxResizeHandle.vue'
 	import MessageActionMenu from '@/features/inbox/components/MessageActionMenu.vue'
@@ -55,6 +61,9 @@
 	const listMode = ref('all')
 	const team = ref(String(route.query.team || ''))
 	const folder = ref(String(route.query.folder || ''))
+	const businessSource = ref(String(route.query.business_source || ''))
+	const businessFilters = ref(parseBusinessFilters(route.query.business_filters))
+	const businessFilterSchemas = ref([])
 	const folders = ref([])
 	const inboxNavigation = ref({
 		conversation_count: 0,
@@ -80,7 +89,7 @@
 		return [...new Map(values.filter(Boolean).map((item) => [item.name, item])).values()]
 	})
 	const contextOpen = ref(false)
-	const viewMode = ref(localStorage.getItem('whatsapp:conversation-view') || 'chat')
+	const viewMode = ref('chat')
 	const summaryRefreshing = ref(false)
 	const messagePage = ref({ has_more: false, has_more_newer: false })
 	const loadingNewer = ref(false)
@@ -91,10 +100,20 @@
 	const messageSearching = ref(false)
 	const draft = ref('')
 	const replyTo = ref(null)
+	const composerRef = ref(null)
 	const messageMenu = ref(null)
+	const internalTaskMessages = ref([])
+	const internalTaskReference = ref(null)
+	const focusedComment = computed(() => String(route.query.comment || ''))
+	const focusedMessage = computed(() => String(route.query.message || ''))
+	const internalTaskMessageNames = computed(
+		() => new Set(internalTaskMessages.value.map((message) => message.name)),
+	)
 	const messageMenuPosition = ref({ x: 0, y: 0 })
 	const messageInfo = ref(null)
 	const messageInfoOpen = ref(false)
+	const attachmentPreviewOpen = ref(false)
+	const attachmentPreview = ref(null)
 	const messageInfoReaders = computed(() => {
 		const rows = (messageInfo.value?.read_by || []).filter((reader) => reader?.user)
 		return [...new Map(rows.map((reader) => [reader.user, reader])).values()]
@@ -108,6 +127,36 @@
 		),
 	)
 	const quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🙏']
+
+	function parseBusinessFilters(value) {
+		if (!value) return {}
+		try {
+			const parsed = JSON.parse(String(value))
+			return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+		} catch {
+			return {}
+		}
+	}
+
+	function serializedBusinessFilters(value = businessFilters.value) {
+		const entries = Object.entries(value || {}).filter(([, filterValue]) => {
+			if (Array.isArray(filterValue)) return filterValue.length > 0
+			return filterValue !== null && filterValue !== undefined && filterValue !== ''
+		})
+		return entries.length ? JSON.stringify(Object.fromEntries(entries)) : ''
+	}
+
+	function openAttachmentPreview(attachment) {
+		if (!/^(https?:\/\/|\/)/i.test(String(attachment?.url || ''))) return
+		attachmentPreview.value = attachment
+		attachmentPreviewOpen.value = true
+	}
+
+	async function focusComposer({ explicit = false } = {}) {
+		if (!explicit && !window.matchMedia?.('(pointer: fine)').matches) return
+		await nextTick()
+		window.requestAnimationFrame(() => composerRef.value?.focus?.({ preventScroll: true }))
+	}
 	const richDialog = ref(false)
 	const richDialogRef = ref(null)
 	const uploadingMedia = ref(false)
@@ -310,22 +359,6 @@
 		}
 		return result
 	})
-	const topics = computed(() =>
-		(detail.value?.topics || []).map((topic) => ({
-			...topic,
-			messageRows: (topic.messages || [])
-				.map((messageName) => messageMap.value.get(messageName))
-				.filter(Boolean),
-		})),
-	)
-	const assignedMessages = computed(
-		() => new Set(topics.value.flatMap((topic) => topic.messages || [])),
-	)
-	const ungrouped = computed(() =>
-		(detail.value?.messages || []).filter(
-			(message) => !assignedMessages.value.has(message.name),
-		),
-	)
 	function timelineTimestamp(value) {
 		const raw =
 			value?.timeline_at ||
@@ -355,7 +388,7 @@
 	})
 	const timelineItems = computed(() =>
 		[
-			...ungrouped.value.map((message) => ({
+			...(detail.value?.messages || []).map((message) => ({
 				kind: 'message',
 				key: `message:${message.name}`,
 				value: message,
@@ -387,6 +420,8 @@
 				search: query || null,
 				unread_only: listMode.value === 'unread' ? 1 : 0,
 				include_unread: includeUnread ? 1 : 0,
+				business_source: businessSource.value || null,
+				business_filters: serializedBusinessFilters() || null,
 			})
 			if (request !== listRequest) return
 			const currentUnread = new Map(
@@ -423,6 +458,8 @@
 				search: search.value.trim() || null,
 				unread_only: listMode.value === 'unread' ? 1 : 0,
 				include_unread: includeUnread ? 1 : 0,
+				business_source: businessSource.value || null,
+				business_filters: serializedBusinessFilters() || null,
 			})
 			if (request !== listRequest) return
 			const known = new Set(rows.value.map((row) => row.name))
@@ -510,6 +547,10 @@
 			const loaded = await call('frappe_whatsapp_core.inbox.conversation', { name })
 			if (request !== detailRequest) return
 			detail.value = loaded
+			if (!silent) {
+				const savedMode = localStorage.getItem(conversationViewStorageKey(name))
+				viewMode.value = defaultConversationView(loaded, savedMode)
+			}
 			resumeMessage = loaded.resume_message || null
 			messagePage.value = detail.value.message_page || {
 				has_more: false,
@@ -521,13 +562,17 @@
 		} finally {
 			if (request === detailRequest) {
 				if (!silent) detailLoading.value = false
-				await restoreMessageScroll(name, {
-					forceBottom: !resumeMessage,
-					fallback: preservedPosition,
-					resumeMessage,
-					preferResume: hadUnread,
-				})
-				queueVisibleMessages()
+				if (viewMode.value === 'chat') {
+					await restoreMessageScroll(name, {
+						forceBottom: !resumeMessage,
+						fallback: preservedPosition,
+						resumeMessage,
+						preferResume: hadUnread,
+					})
+					queueVisibleMessages()
+					if (!silent && textReady.value) void focusComposer()
+				}
+				if (!silent) await focusRouteTarget(name)
 			}
 		}
 	}
@@ -944,12 +989,46 @@
 
 	function selectConversation(name) {
 		if (name === selectedName.value) return
-		clearConversationBadge(name)
 		rememberMessageScroll()
 		router.push({
 			name: 'inbox',
 			params: { conversation: name },
+			query: inboxFilterQuery(),
 			state: { fromInbox: true },
+		})
+	}
+
+	function inboxFilterQuery() {
+		const query = { ...route.query }
+		if (team.value) query.team = team.value
+		else delete query.team
+		if (folder.value) query.folder = folder.value
+		else delete query.folder
+		if (businessSource.value) query.business_source = businessSource.value
+		else delete query.business_source
+		const serializedFilters = serializedBusinessFilters()
+		if (businessSource.value && serializedFilters) query.business_filters = serializedFilters
+		else delete query.business_filters
+		return query
+	}
+
+	function syncInboxFilterRoute() {
+		const query = inboxFilterQuery()
+		const currentTeam = String(route.query.team || '')
+		const currentFolder = String(route.query.folder || '')
+		const currentBusinessSource = String(route.query.business_source || '')
+		const currentBusinessFilters = String(route.query.business_filters || '')
+		if (
+			currentTeam === team.value &&
+			currentFolder === folder.value &&
+			currentBusinessSource === businessSource.value &&
+			currentBusinessFilters === serializedBusinessFilters()
+		)
+			return
+		router.replace({
+			name: 'inbox',
+			params: selectedName.value ? { conversation: selectedName.value } : {},
+			query,
 		})
 	}
 
@@ -961,10 +1040,26 @@
 		scheduleInboxNavigation()
 	}
 
+	async function acknowledgeConversationOpen(name) {
+		if (!name) return
+		clearConversationBadge(name)
+		try {
+			const read = await call(
+				'frappe_whatsapp_core.conversation_reads.mark_conversation_read',
+				{ conversation: name },
+			)
+			if (name === selectedName.value && read?.last_read_message)
+				updateConversationReader(read)
+		} catch {
+			// Opening the chat must remain available when read-state persistence is
+			// temporarily unavailable. The next unread hydration will reconcile it.
+		}
+	}
+
 	function closeMobileConversation() {
 		rememberMessageScroll()
 		if (window.history.state?.fromInbox) router.back()
-		else router.replace({ name: 'inbox' })
+		else router.replace({ name: 'inbox', query: inboxFilterQuery() })
 	}
 
 	function rememberListScroll(value) {
@@ -1147,6 +1242,7 @@
 
 	function selectReply(message) {
 		replyTo.value = message
+		void focusComposer({ explicit: true })
 	}
 
 	async function openQuotedMessage(message) {
@@ -1164,10 +1260,70 @@
 		if (!target) return
 		target.closest('details')?.setAttribute('open', '')
 		target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+		target.setAttribute('tabindex', '-1')
+		target.focus({ preventScroll: true })
+		target.addEventListener('blur', () => target.removeAttribute('tabindex'), { once: true })
 		target.classList.remove('quote-highlight')
 		void target.offsetWidth
 		target.classList.add('quote-highlight')
 		window.setTimeout(() => target?.classList.remove('quote-highlight'), 1300)
+	}
+
+	async function openThreadSource(messageName) {
+		if (!messageName || !detail.value) return
+		const conversation = selectedName.value
+		const currentDetail = detail.value
+		setConversationView('chat')
+		await nextTick()
+		let source = currentDetail.messages.find((message) => message.name === messageName)
+		if (!source) {
+			try {
+				const page = await call('frappe_whatsapp_core.workspace_api.message_window', {
+					conversation,
+					anchor_message: messageName,
+					limit: 30,
+				})
+				if (conversation !== selectedName.value || detail.value !== currentDetail) return
+				currentDetail.messages = page.rows || []
+				messagePage.value = {
+					has_more: Boolean(page.has_more),
+					has_more_newer: Boolean(page.has_more_newer),
+					next_before: page.next_before || null,
+					next_before_creation: page.next_before_creation || null,
+					next_before_name: page.next_before_name || null,
+					next_after: page.next_after || null,
+					next_after_creation: page.next_after_creation || null,
+					next_after_name: page.next_after_name || null,
+				}
+				source = currentDetail.messages.find((message) => message.name === messageName)
+			} catch (error) {
+				toast.add({
+					severity: 'error',
+					summary: 'Thread source unavailable',
+					detail: errorMessage(error, 'Unable to open the source messages.'),
+					life: 4000,
+				})
+				return
+			}
+		}
+		if (source) await openQuotedMessage(source)
+	}
+
+	async function focusRouteTarget(conversation = selectedName.value) {
+		if (!conversation || !detail.value || detail.value.conversation?.name !== conversation)
+			return
+		const message = String(route.query.message || '')
+		if (message) {
+			await openThreadSource(message)
+			return
+		}
+		const comment = String(route.query.comment || '')
+		if (!comment) return
+		contextOpen.value = true
+		await nextTick()
+		document
+			.querySelector(`[data-comment-name="${CSS.escape(comment)}"]`)
+			?.scrollIntoView({ block: 'center', behavior: 'smooth' })
 	}
 
 	function openMessageMenu({ message, x, y }) {
@@ -1182,6 +1338,53 @@
 
 	function closeMessageMenu() {
 		messageMenu.value = null
+	}
+
+	function toggleMessageForInternalTask() {
+		const message = messageMenu.value
+		if (!message?.name) return
+		if (internalTaskMessageNames.value.has(message.name)) {
+			internalTaskMessages.value = internalTaskMessages.value.filter(
+				(item) => item.name !== message.name,
+			)
+		} else if (internalTaskMessages.value.length < 50) {
+			internalTaskMessages.value = [...internalTaskMessages.value, message]
+		}
+		closeMessageMenu()
+	}
+
+	async function openInternalTaskComposer() {
+		contextOpen.value = true
+		await nextTick()
+		const panel = document.querySelector('[data-internal-work]')
+		panel?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })
+		panel?.querySelector?.('textarea[name="internal_note"]')?.focus?.({ preventScroll: true })
+	}
+
+	async function openSummaryComment(reference = null) {
+		internalTaskReference.value =
+			reference ||
+			(detail.value?.contact_summary?.name
+				? {
+						doctype: 'WhatsApp Core Contact Summary',
+						name: detail.value.contact_summary.name,
+						label: 'Contact summary',
+					}
+				: null)
+		await openInternalTaskComposer()
+	}
+
+	function setConversationView(mode) {
+		if (!['chat', 'summary'].includes(mode)) return
+		viewMode.value = mode
+		if (selectedName.value)
+			localStorage.setItem(conversationViewStorageKey(selectedName.value), mode)
+		if (mode === 'chat') void nextTick(() => queueVisibleMessages())
+	}
+
+	function clearInternalTaskMessages() {
+		internalTaskMessages.value = []
+		internalTaskReference.value = null
 	}
 
 	function replyFromMenu() {
@@ -1251,7 +1454,9 @@
 	}
 
 	function handleGlobalKeydown(event) {
-		if (event.key === 'Escape') closeMessageMenu()
+		if (event.key !== 'Escape') return
+		if (contextOpen.value) contextOpen.value = false
+		closeMessageMenu()
 	}
 
 	async function publishTypingIndicator(conversation) {
@@ -2133,8 +2338,25 @@
 	}
 
 	async function refreshInbox() {
-		await loadRows()
+		await Promise.all([loadBusinessFilterSchema(), loadRows()])
 		scheduleInboxNavigation()
+	}
+
+	async function loadBusinessFilterSchema() {
+		try {
+			businessFilterSchemas.value = await call(
+				'frappe_whatsapp_core.inbox.business_filter_schema',
+			)
+			if (
+				businessSource.value &&
+				!businessFilterSchemas.value.some((schema) => schema.name === businessSource.value)
+			) {
+				businessSource.value = ''
+				businessFilters.value = {}
+			}
+		} catch {
+			businessFilterSchemas.value = []
+		}
 	}
 
 	async function createContactFolder() {
@@ -2321,7 +2543,7 @@
 		}
 	}
 
-	watch(selectedName, (name, previousName) => {
+	watch(selectedName, async (name, previousName) => {
 		if (previousName) leaveConversationPresence(previousName)
 		enterConversationPresence(name)
 		rememberMessageScroll(previousName)
@@ -2329,12 +2551,19 @@
 		locallyReadMessages.clear()
 		hasUnseenMessages.value = false
 		atMessageBottom.value = true
-		loadDetail(name)
+		await acknowledgeConversationOpen(name)
+		await loadDetail(name)
 		replyTo.value = null
+		clearInternalTaskMessages()
 		contextOpen.value = false
 		stopTypingSession()
 		closeMessageSearch()
 	})
+	watch(
+		() => [focusedMessage.value, focusedComment.value, route.query.focus],
+		() => void focusRouteTarget(),
+		{ immediate: true },
+	)
 	watch(messageSearch, () => {
 		clearTimeout(messageSearchTimer)
 		messageSearchTimer = setTimeout(runMessageSearch, 300)
@@ -2343,19 +2572,39 @@
 		window.clearTimeout(conversationSearchTimer)
 		conversationSearchTimer = window.setTimeout(() => loadRows({ silent: true }), 220)
 	})
-	watch([team, folder, listMode], async () => {
+	watch([team, folder, listMode, businessSource, businessFilters], async () => {
+		syncInboxFilterRoute()
 		await loadRows()
 	})
-	watch(viewMode, (mode) => localStorage.setItem('whatsapp:conversation-view', mode))
+	watch(
+		() => [
+			route.query.team,
+			route.query.folder,
+			route.query.business_source,
+			route.query.business_filters,
+		],
+		([routeTeam, routeFolder, routeBusinessSource, routeBusinessFilters]) => {
+			const nextTeam = String(routeTeam || '')
+			const nextFolder = String(routeFolder || '')
+			const nextBusinessSource = String(routeBusinessSource || '')
+			const nextBusinessFilters = parseBusinessFilters(routeBusinessFilters)
+			if (team.value !== nextTeam) team.value = nextTeam
+			if (folder.value !== nextFolder) folder.value = nextFolder
+			if (businessSource.value !== nextBusinessSource)
+				businessSource.value = nextBusinessSource
+			if (serializedBusinessFilters() !== serializedBusinessFilters(nextBusinessFilters))
+				businessFilters.value = nextBusinessFilters
+		},
+	)
 	onMounted(async () => {
 		window.addEventListener('keydown', handleGlobalKeydown)
 		window.addEventListener('focus', handleReadVisibilityChange)
 		window.addEventListener('blur', handleReadVisibilityChange)
 		document.addEventListener('visibilitychange', handleReadVisibilityChange)
 		document.addEventListener('visibilitychange', handlePresenceVisibilityChange)
-		await loadRows()
+		await Promise.all([loadBusinessFilterSchema(), loadRows()])
 		scheduleInboxNavigation()
-		clearConversationBadge(selectedName.value)
+		await acknowledgeConversationOpen(selectedName.value)
 		if (selectedName.value) await loadDetail(selectedName.value)
 		enterConversationPresence(selectedName.value)
 		const site = session.boot?.site
@@ -2426,6 +2675,9 @@
 					v-model:mode="listMode"
 					v-model:team="team"
 					v-model:folder="folder"
+					:business-source="businessSource"
+					:business-filters="businessFilters"
+					:business-filter-schemas="businessFilterSchemas"
 					:folders="folders"
 					:unread-conversations="inboxNavigation.unread_conversations"
 					:loading="loading"
@@ -2433,6 +2685,8 @@
 					@refresh="refreshInbox"
 					@new-chat="openNewChat"
 					@new-folder="folderDialog = true"
+					@update:business-source="businessSource = $event"
+					@update:business-filters="businessFilters = $event"
 				/>
 				<div v-if="loading" class="list-skeleton" aria-label="Loading conversations">
 					<div v-for="index in 7" :key="index" class="conversation-skeleton">
@@ -2485,11 +2739,7 @@
 				</div>
 				<div v-else-if="!detail" class="empty-chat">
 					<span class="empty-chat-icon"><MessageSquarePlus :size="28" /></span>
-					<strong>Select a conversation</strong>
-					<span
-						>Choose a customer from the shared inbox to review messages, calls and
-						context.</span
-					>
+					<strong>Choose a conversation</strong>
 				</div>
 				<template v-else>
 					<ConversationHeader
@@ -2507,7 +2757,7 @@
 						@search="toggleMessageSearch"
 						@folder="setContactFolder"
 						@toggle-context="contextOpen = !contextOpen"
-						@update:view-mode="viewMode = $event"
+						@update:view-mode="setConversationView"
 					/>
 					<ConversationSummaryPanel
 						v-if="viewMode === 'summary'"
@@ -2515,6 +2765,9 @@
 						:can-manage="canManage"
 						:loading="summaryRefreshing"
 						@refresh="refreshContactSummary"
+						@open-thread="openThreadSource"
+						@comment-summary="openSummaryComment"
+						@expand="setConversationView('chat')"
 					/>
 					<template v-else>
 						<div v-if="messageSearchOpen" class="message-search-bar">
@@ -2546,10 +2799,12 @@
 									:message-index="providerMessageMap"
 									:contact-name="detail.display_name"
 									:readers="readersByMessage.get(message.name) || []"
+									:selected-for-work="internalTaskMessageNames.has(message.name)"
 									@reply="selectReply"
 									@quote="openQuotedMessage"
 									@retry="retryMessage"
 									@menu="openMessageMenu"
+									@preview="openAttachmentPreview"
 								/>
 							</div>
 							<template v-else>
@@ -2564,43 +2819,7 @@
 								>
 									Load older messages
 								</Button>
-								<details
-									v-for="topic in topics"
-									:key="topic.name"
-									class="topic-group"
-								>
-									<summary>
-										<span>
-											<small>{{ topic.category || 'AI topic' }}</small>
-											<strong>{{ topic.title }}</strong>
-											<p>
-												{{
-													topic.summary ||
-													'Open to review grouped messages.'
-												}}
-											</p>
-										</span>
-										<em>{{ topic.message_count }} messages</em>
-									</summary>
-									<div class="topic-messages">
-										<MessageBubble
-											v-for="message in topic.messageRows"
-											:key="message.name"
-											:message="message"
-											:message-index="providerMessageMap"
-											:contact-name="detail.display_name"
-											:readers="readersByMessage.get(message.name) || []"
-											@reply="selectReply"
-											@quote="openQuotedMessage"
-											@retry="retryMessage"
-											@menu="openMessageMenu"
-										/>
-									</div>
-								</details>
 								<div v-if="timelineItems.length" class="ungrouped">
-									<div v-if="topics.length" class="section-label">
-										Recent conversation activity
-									</div>
 									<template v-for="item in timelineItems" :key="item.key">
 										<CallTimelineEvent
 											v-if="item.kind === 'call'"
@@ -2612,10 +2831,14 @@
 											:message-index="providerMessageMap"
 											:contact-name="detail.display_name"
 											:readers="readersByMessage.get(item.value.name) || []"
+											:selected-for-work="
+												internalTaskMessageNames.has(item.value.name)
+											"
 											@reply="selectReply"
 											@quote="openQuotedMessage"
 											@retry="retryMessage"
 											@menu="openMessageMenu"
+											@preview="openAttachmentPreview"
 										/>
 									</template>
 								</div>
@@ -2634,6 +2857,23 @@
 								</Button>
 							</template>
 						</MessageStreamViewport>
+						<div v-if="internalTaskMessages.length" class="internal-task-selection">
+							<span
+								><ListTodo :size="15" />
+								{{ internalTaskMessages.length }} selected</span
+							>
+							<Button
+								label="Clear"
+								text
+								size="small"
+								@click="clearInternalTaskMessages"
+							/>
+							<Button
+								label="Write internal task"
+								size="small"
+								@click="openInternalTaskComposer"
+							/>
+						</div>
 						<Button
 							v-if="
 								messagePage.has_more_newer || !atMessageBottom || hasUnseenMessages
@@ -2660,6 +2900,7 @@
 						</Button>
 						<MessageComposer
 							v-if="textReady"
+							ref="composerRef"
 							v-model="draft"
 							:reply-to="replyTo"
 							@send="sendText"
@@ -2693,6 +2934,9 @@
 				:data="detail"
 				:can-manage="canManage"
 				:folders="folders"
+				:draft-messages="internalTaskMessages"
+				:draft-reference="internalTaskReference"
+				:focus-comment="focusedComment"
 				@status="updateStatus"
 				@refresh-summary="refreshContactSummary"
 				@avatar-changed="refreshDirectoryPresentations"
@@ -2701,6 +2945,9 @@
 				@comment-updated="upsertInternalComment"
 				@comment-deleted="deleteInternalComment"
 				@comments-older="prependOlderComments"
+				@comment-draft-consumed="clearInternalTaskMessages"
+				@comment-open-message="openThreadSource"
+				@close="contextOpen = false"
 			/>
 		</section>
 
@@ -2719,7 +2966,6 @@
 					Folder colour
 					<input v-model="folderColor" type="color" aria-label="Folder colour" />
 				</label>
-				<small>Folders are private to your user and never change team access.</small>
 			</div>
 			<template #footer>
 				<Button label="Cancel" text @click="folderDialog = false" />
@@ -2787,10 +3033,6 @@
 						v-model="newChat.template"
 						:options="openingTemplates"
 				/></label>
-				<small v-else>
-					The chat opens directly. WhatsApp permits free-form messages while the 24-hour
-					customer service window is open.
-				</small>
 			</div>
 			<template #footer>
 				<Button label="Cancel" text @click="newDialog = false" />
@@ -2942,6 +3184,11 @@
 			</template>
 		</AppDialog>
 
+		<AttachmentPreviewDialog
+			v-model:visible="attachmentPreviewOpen"
+			:attachment="attachmentPreview"
+		/>
+
 		<MessageActionMenu
 			:visible="Boolean(messageMenu)"
 			:position="messageMenuPosition"
@@ -2955,11 +3202,15 @@
 			:can-download="
 				Boolean(messageMenu && isMediaMessage(messageMenu) && messageMenu.media_url)
 			"
+			:selected-for-internal-task="
+				Boolean(messageMenu && internalTaskMessageNames.has(messageMenu.name))
+			"
 			@close="closeMessageMenu"
 			@react="reactToMessage"
 			@reply="replyFromMenu"
 			@info="showMessageInfo"
 			@download="downloadMedia"
+			@internal-task="toggleMessageForInternalTask"
 		/>
 	</div>
 </template>
@@ -3001,7 +3252,7 @@
 	.list-panel {
 		min-height: 0;
 		display: grid;
-		grid-template-rows: auto auto auto auto minmax(0, 1fr);
+		grid-template-rows: auto minmax(0, 1fr) auto;
 		overflow: hidden;
 		border-right: 1px solid var(--wa-border);
 	}
@@ -3136,8 +3387,25 @@
 		opacity: 0.7;
 		cursor: wait;
 	}
+	.internal-task-selection {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 7px 11px;
+		border-top: 1px solid var(--wa-border);
+		background: var(--wa-primary-soft);
+	}
+	.internal-task-selection > span {
+		min-width: 0;
+		flex: 1;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		color: var(--wa-primary);
+		font-size: 12px;
+		font-weight: 700;
+	}
 	.ungrouped,
-	.topic-messages,
 	.search-results {
 		min-width: 0;
 		display: grid;
@@ -3149,13 +3417,6 @@
 		padding: 20px;
 		color: var(--wa-muted);
 		font-size: 11px;
-	}
-	.section-label {
-		margin: 8px 0;
-		color: var(--wa-muted);
-		font-size: 12px;
-		text-align: center;
-		text-transform: uppercase;
 	}
 	.older-loading {
 		display: block;
@@ -3171,43 +3432,6 @@
 	}
 	.older-button {
 		cursor: pointer;
-	}
-	.topic-group {
-		margin-bottom: 12px;
-		border: 1px solid var(--wa-border);
-		border-radius: 13px;
-		background: color-mix(in srgb, var(--wa-surface) 94%, transparent);
-	}
-	.topic-group summary {
-		padding: 11px 13px;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		cursor: pointer;
-	}
-	.topic-group summary span > * {
-		display: block;
-	}
-	.topic-group small,
-	.topic-group em {
-		color: var(--wa-success);
-		font-size: 12px;
-		font-style: normal;
-		text-transform: uppercase;
-	}
-	.topic-group strong {
-		margin-top: 2px;
-		font-size: 11px;
-	}
-	.topic-group p {
-		margin: 3px 0 0;
-		color: var(--wa-muted);
-		font-size: 12px;
-	}
-	.topic-messages {
-		padding: 12px;
-		border-top: 1px solid var(--wa-border-soft);
 	}
 	.template-gate {
 		padding: 10px 12px;
@@ -3361,11 +3585,21 @@
 		padding: 11px;
 	}
 	@media (max-width: 1120px) {
+		.inbox-workbench {
+			position: relative;
+		}
 		.inbox-workbench.context-open {
 			grid-template-columns: var(--conversation-pane-width, 320px) 5px minmax(0, 1fr);
 		}
 		.inbox-workbench.context-open > :deep(.context-panel) {
-			display: none;
+			display: block;
+			position: absolute;
+			z-index: 20;
+			top: 0;
+			right: 0;
+			bottom: 0;
+			width: min(310px, 100%);
+			box-shadow: -12px 0 32px rgb(15 23 42 / 16%);
 		}
 	}
 	@media (max-width: 760px) {

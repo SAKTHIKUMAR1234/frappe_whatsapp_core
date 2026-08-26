@@ -1,16 +1,17 @@
 <script setup>
 	import Button from 'primevue/button'
-	import { Download, Info, Reply } from 'lucide-vue-next'
+	import { Download, Info, ListTodo, Reply } from 'lucide-vue-next'
 
 	defineProps({
 		visible: { type: Boolean, default: false },
 		position: { type: Object, default: () => ({ x: 0, y: 0 }) },
 		canReply: { type: Boolean, default: false },
 		canDownload: { type: Boolean, default: false },
+		selectedForInternalTask: { type: Boolean, default: false },
 		reactions: { type: Array, default: () => [] },
 	})
 
-	defineEmits(['close', 'react', 'reply', 'info', 'download'])
+	defineEmits(['close', 'react', 'reply', 'info', 'download', 'internal-task'])
 </script>
 
 <template>
@@ -44,6 +45,14 @@
 				</Button>
 				<Button unstyled role="menuitem" @click="$emit('info')">
 					<Info :size="17" /><span>Message info</span>
+				</Button>
+				<Button unstyled role="menuitem" @click="$emit('internal-task')">
+					<ListTodo :size="17" />
+					<span>{{
+						selectedForInternalTask
+							? 'Remove from internal task'
+							: 'Add to internal task'
+					}}</span>
 				</Button>
 				<Button v-if="canDownload" unstyled role="menuitem" @click="$emit('download')">
 					<Download :size="17" /><span>Download</span>

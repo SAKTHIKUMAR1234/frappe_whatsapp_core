@@ -12,6 +12,7 @@
 
 	import AsyncState from '@/components/AsyncState.vue'
 	import LinkField from '@/components/form/LinkField.vue'
+	import MultiLinkField from '@/components/form/MultiLinkField.vue'
 	import { call, errorMessage } from '@/services/frappe'
 	import { focusDialogControl } from '@/utils/focus'
 
@@ -27,7 +28,7 @@
 	const visible = ref(false)
 	const dialogRef = ref(null)
 	const doctypes = ref([])
-	const fieldOptions = ref({ fields: [], phone_fields: [] })
+	const fieldOptions = ref({ fields: [], phone_fields: [], filter_fields: [] })
 	const form = reactive({
 		name: '',
 		source_key: '',
@@ -39,9 +40,20 @@
 		phone_field: '',
 		display_name_field: '',
 		entity_type_field: '',
+		filter_fields: [],
 		filters: '',
 	})
 	const title = computed(() => (form.name ? 'Edit contact source' : 'Add contact source'))
+
+	function parseFilterFields(value) {
+		if (Array.isArray(value)) return value
+		try {
+			const parsed = JSON.parse(value || '[]')
+			return Array.isArray(parsed) ? parsed : []
+		} catch {
+			return []
+		}
+	}
 
 	async function loadDoctypes() {
 		if (!props.canManage) return
@@ -59,7 +71,7 @@
 	}
 
 	async function loadFields() {
-		fieldOptions.value = { fields: [], phone_fields: [] }
+		fieldOptions.value = { fields: [], phone_fields: [], filter_fields: [] }
 		if (!form.source_doctype) return
 		loadingOptions.value = true
 		optionError.value = ''
@@ -87,6 +99,7 @@
 			phone_field: source?.phone_field || '',
 			display_name_field: source?.display_name_field || '',
 			entity_type_field: source?.entity_type_field || '',
+			filter_fields: parseFilterFields(source?.filter_fields),
 			filters: source?.filters || '',
 		})
 		visible.value = true
@@ -97,6 +110,7 @@
 		form.phone_field = ''
 		form.display_name_field = ''
 		form.entity_type_field = ''
+		form.filter_fields = []
 		if (!form.display_name) form.display_name = form.source_doctype
 		await loadFields()
 	}
@@ -132,9 +146,7 @@
 			<div class="source-title">
 				<span><ContactRound :size="18" /></span>
 				<div>
-					<div class="eyebrow">Business contact mapping</div>
 					<h2>Contact sources</h2>
-					<p>Link WhatsApp identities to existing business records.</p>
 				</div>
 			</div>
 			<Button v-if="canManage" label="Add source" size="small" @click="open()">
@@ -168,11 +180,7 @@
 		</div>
 		<div v-else class="empty-source">
 			<ContactRound :size="24" />
-			<strong>No business contact source configured</strong>
-			<span
-				>Messages still work by phone number. Add a DocType mapping to show business
-				context.</span
-			>
+			<strong>No contact sources</strong>
 		</div>
 
 		<AppDialog
@@ -238,22 +246,26 @@
 					/>
 				</label>
 				<label>
+					<span>Inbox filter fields</span>
+					<MultiLinkField
+						v-model="form.filter_fields"
+						:options="fieldOptions.filter_fields"
+						option-label="label"
+						option-value="value"
+						placeholder="Choose business fields operators can filter"
+					/>
+				</label>
+				<label>
 					<span>Resolution priority</span>
 					<InputNumber v-model="form.priority" :min="1" :max="9999" fluid />
 				</label>
 				<label class="switch-row">
 					<ToggleSwitch v-model="form.enabled" />
-					<span
-						><strong>Enabled</strong
-						><small>Use this mapping for contacts.</small></span
-					>
+					<strong>Enabled</strong>
 				</label>
 				<label class="switch-row">
 					<ToggleSwitch v-model="form.auto_resolve" />
-					<span
-						><strong>Resolve inbound contacts</strong
-						><small>Match new messages automatically.</small></span
-					>
+					<strong>Resolve inbound contacts</strong>
 				</label>
 				<details class="advanced">
 					<summary>Advanced filters</summary>
@@ -316,11 +328,6 @@
 		margin: 3px 0 0;
 		font-size: 15px;
 	}
-	header p {
-		margin: 4px 0 0;
-		color: var(--wa-muted);
-		font-size: 11px;
-	}
 	.source-list {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -380,11 +387,6 @@
 		color: var(--wa-text);
 		font-size: 13px;
 	}
-	.empty-source span {
-		max-width: 520px;
-		font-size: 11px;
-		line-height: 1.5;
-	}
 	.source-form {
 		width: min(680px, 82vw);
 		display: grid;
@@ -411,17 +413,11 @@
 		border: 1px solid var(--wa-border);
 		border-radius: 10px;
 	}
-	.switch-row strong,
-	.switch-row small {
+	.switch-row strong {
 		display: block;
 	}
 	.switch-row strong {
 		font-size: 11px;
-	}
-	.switch-row small {
-		margin-top: 2px;
-		color: var(--wa-muted);
-		font-size: 12px;
 	}
 	.advanced {
 		padding: 11px 12px;
@@ -440,9 +436,6 @@
 	@media (max-width: 760px) {
 		header {
 			align-items: flex-start;
-		}
-		header p {
-			display: none;
 		}
 		.source-list {
 			grid-template-columns: 1fr;

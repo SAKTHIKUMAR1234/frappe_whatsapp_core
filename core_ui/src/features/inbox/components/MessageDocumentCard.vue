@@ -14,6 +14,7 @@
 		mimeType: { type: String, default: '' },
 		size: { type: Number, default: 0 },
 	})
+	const emit = defineEmits(['open'])
 
 	const displayName = computed(() => {
 		if (props.filename) return props.filename
@@ -48,14 +49,14 @@
 </script>
 
 <template>
-	<a :href="href" class="document-card" target="_blank" rel="noreferrer">
+	<button type="button" class="document-card" @click="emit('open')">
 		<span class="document-icon"><component :is="icon" :size="20" /></span>
 		<span class="document-copy">
 			<strong>{{ displayName }}</strong>
 			<small>{{ [extension, sizeLabel].filter(Boolean).join(' · ') }}</small>
 		</span>
 		<span class="download-icon" aria-hidden="true"><Download :size="17" /></span>
-	</a>
+	</button>
 </template>
 
 <style scoped>
@@ -72,6 +73,8 @@
 		border-radius: 9px;
 		color: var(--wa-text);
 		background: color-mix(in srgb, var(--wa-surface) 82%, transparent);
+		font: inherit;
+		text-align: left;
 		text-decoration: none;
 		transition:
 			border-color 140ms ease,

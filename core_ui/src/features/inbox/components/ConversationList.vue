@@ -179,8 +179,7 @@
 		</div>
 		<div v-if="!rows.length" class="empty">
 			<MessageCircleMore :size="30" />
-			<strong>No conversations found</strong>
-			<span>Start a new chat or adjust the current inbox filters.</span>
+			<strong>No conversations match</strong>
 		</div>
 	</div>
 </template>

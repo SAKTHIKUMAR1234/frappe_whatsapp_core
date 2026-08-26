@@ -5,6 +5,7 @@
 	import InputText from 'primevue/inputtext'
 	import { MessageSquarePlus, RefreshCw, Search, UsersRound } from 'lucide-vue-next'
 	import InboxFolderTabs from '@/features/inbox/components/InboxFolderTabs.vue'
+	import BusinessContactFilters from '@/features/inbox/components/BusinessContactFilters.vue'
 	import TeamSelect from '@/features/teams/components/TeamSelect.vue'
 
 	defineProps({
@@ -16,6 +17,9 @@
 		folder: { type: String, default: '' },
 		folders: { type: Array, default: () => [] },
 		unreadConversations: { type: Number, default: 0 },
+		businessFilterSchemas: { type: Array, default: () => [] },
+		businessSource: { type: String, default: '' },
+		businessFilters: { type: Object, default: () => ({}) },
 	})
 
 	const emit = defineEmits([
@@ -26,6 +30,8 @@
 		'update:mode',
 		'update:team',
 		'update:folder',
+		'update:businessSource',
+		'update:businessFilters',
 	])
 
 	function showAllConversations() {
@@ -99,12 +105,20 @@
 				@update:model-value="$emit('update:team', $event || '')"
 			/>
 		</div>
+		<BusinessContactFilters
+			:schemas="businessFilterSchemas"
+			:source="businessSource"
+			:filters="businessFilters"
+			@update:source="$emit('update:businessSource', $event)"
+			@update:filters="$emit('update:businessFilters', $event)"
+		/>
 	</div>
 </template>
 
 <style scoped>
 	.sidebar-controls {
-		display: contents;
+		min-width: 0;
+		display: block;
 	}
 	.inbox-heading {
 		height: 64px;
@@ -148,6 +162,10 @@
 		gap: 8px;
 		border-bottom: 1px solid var(--wa-border);
 		color: var(--wa-muted);
+	}
+	.business-filter-trigger {
+		padding: 2px 8px 7px;
+		border-bottom: 1px solid var(--wa-border);
 	}
 	.team-filter {
 		min-width: 0;

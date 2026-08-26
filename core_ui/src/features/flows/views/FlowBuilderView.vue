@@ -252,9 +252,8 @@
 					><ArrowLeft :size="19"
 				/></Button>
 				<div>
-					<div class="eyebrow">Native Meta Flow · {{ accountName }}</div>
 					<h1>{{ flow.name || 'WhatsApp Flow' }}</h1>
-					<small>Meta Flow ID {{ flowId }}</small>
+					<small>{{ accountName }} · Meta Flow ID {{ flowId }}</small>
 				</div>
 			</div>
 			<div class="header-actions">
@@ -314,9 +313,7 @@
 			<section class="surface-card metadata-card">
 				<div class="section-title">
 					<ShieldCheck :size="18" />
-					<div>
-						<strong>Meta configuration</strong><span>Stored and enforced by Meta</span>
-					</div>
+					<strong>Meta configuration</strong>
 				</div>
 				<label>Name</label
 				><InputText v-model="form.name" fluid :disabled="!mutable || !canManage" />
@@ -360,10 +357,7 @@
 
 			<section class="surface-card json-card">
 				<header>
-					<div>
-						<strong>Customer experience</strong
-						><span>Review the screens customers will complete in WhatsApp.</span>
-					</div>
+					<strong>Customer experience</strong>
 					<Button
 						severity="secondary"
 						outlined
@@ -490,17 +484,6 @@
 	.metadata-card,
 	.json-card {
 		padding: 18px;
-	}
-	.section-title div,
-	.json-card header > div {
-		display: flex;
-		flex-direction: column;
-	}
-	.section-title span,
-	.json-card header span {
-		margin-top: 2px;
-		color: var(--wa-muted);
-		font-size: 12px;
 	}
 	label {
 		display: block;

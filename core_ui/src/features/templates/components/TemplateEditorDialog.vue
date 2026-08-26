@@ -103,7 +103,6 @@
 			<div v-if="editing" class="status-panel">
 				<div>
 					<strong>{{ template.approval_status }}</strong>
-					<span>Current Hub / Meta status</span>
 				</div>
 				<p v-if="template.status_reason">{{ template.status_reason }}</p>
 				<p v-if="template.correct_category">
@@ -113,9 +112,7 @@
 
 			<section class="editor-section">
 				<div class="section-heading">
-					<div>
-						<strong>Template details</strong><small>Identity and delivery rules</small>
-					</div>
+					<strong>Template details</strong>
 				</div>
 				<div class="field-grid">
 					<label>
@@ -184,7 +181,7 @@
 
 			<section class="editor-section">
 				<div class="section-heading">
-					<div><strong>Header</strong><small>Optional heading or media</small></div>
+					<strong>Header</strong>
 				</div>
 				<div class="field-grid">
 					<label>
@@ -220,9 +217,7 @@
 
 			<section class="editor-section">
 				<div class="section-heading">
-					<div>
-						<strong>Message</strong><small>The body customers will receive</small>
-					</div>
+					<strong>Message</strong>
 				</div>
 				<label>
 					<span>Body text</span>
@@ -255,10 +250,7 @@
 
 			<section class="editor-section">
 				<div class="section-heading">
-					<div>
-						<strong>Sample values</strong>
-						<small>Examples Meta uses to review every template variable</small>
-					</div>
+					<strong>Sample values</strong>
 				</div>
 				<div v-if="sampleFields.length" class="field-grid">
 					<label v-for="field in sampleFields" :key="field.key">
@@ -279,7 +271,7 @@
 
 			<section class="editor-section">
 				<div class="section-heading">
-					<div><strong>Buttons</strong><small>Optional customer actions</small></div>
+					<strong>Buttons</strong>
 					<button type="button" class="secondary compact" @click="addButton">
 						Add button
 					</button>

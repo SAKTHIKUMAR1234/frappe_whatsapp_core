@@ -5,22 +5,23 @@
 		AlertTriangle,
 		Bot,
 		CheckCircle2,
-		Clock3,
 		ListChecks,
 		MessagesSquare,
+		MessageSquareText,
 		Sparkles,
 		Target,
 		UsersRound,
 	} from 'lucide-vue-next'
 	import { computed } from 'vue'
 	import { formatDateTime } from '@/utils/datetime'
+	import ConversationThreadsPanel from '@/features/inbox/components/ConversationThreadsPanel.vue'
 
 	const props = defineProps({
 		data: { type: Object, required: true },
 		canManage: { type: Boolean, default: false },
 		loading: { type: Boolean, default: false },
 	})
-	defineEmits(['refresh'])
+	defineEmits(['refresh', 'open-thread', 'comment-summary', 'expand'])
 
 	const summary = computed(() => props.data.contact_summary || {})
 	const teams = computed(() => {
@@ -35,6 +36,14 @@
 			missing: expected.filter((row) => !readers.has(row.user)),
 		}
 	})
+	const missingReaderNames = computed(() =>
+		readerCoverage.value.missing.map((row) => row.display_name),
+	)
+	const missingReaderPreview = computed(() => {
+		const visible = missingReaderNames.value.slice(0, 3)
+		const remaining = missingReaderNames.value.length - visible.length
+		return remaining > 0 ? `${visible.join(', ')} +${remaining} more` : visible.join(', ')
+	})
 </script>
 
 <template>
@@ -42,22 +51,27 @@
 		<section class="summary-hero">
 			<div class="summary-icon"><Sparkles :size="21" /></div>
 			<div>
-				<span class="eyebrow">Customer context</span>
 				<h2>{{ data.display_name }}</h2>
 				<p v-if="summary.summary">{{ summary.summary }}</p>
-				<p v-else>
-					A summary has not been generated yet. The normal chat remains the source of
-					truth until one is ready.
-				</p>
+				<p v-else>No summary yet.</p>
 			</div>
-			<Button
-				v-if="canManage"
-				label="Refresh summary"
-				outlined
-				:loading="loading"
-				@click="$emit('refresh')"
-				><template #icon><Bot :size="15" /></template
-			></Button>
+			<div class="summary-actions">
+				<Button label="Internal note" outlined @click="$emit('comment-summary')">
+					<template #icon><MessageSquareText :size="15" /></template>
+				</Button>
+				<Button label="Expand conversation" @click="$emit('expand')">
+					<template #icon><MessagesSquare :size="15" /></template>
+				</Button>
+				<Button
+					v-if="canManage"
+					aria-label="Refresh summary"
+					text
+					rounded
+					:loading="loading"
+					@click="$emit('refresh')"
+					><Bot :size="15"
+				/></Button>
+			</div>
 		</section>
 
 		<div class="summary-grid">
@@ -96,9 +110,8 @@
 					{{ readerCoverage.read.length }} of {{ data.expected_readers?.length || 0 }}
 					teammates opened this chat
 				</strong>
-				<small v-if="readerCoverage.missing.length">
-					Waiting for
-					{{ readerCoverage.missing.map((row) => row.display_name).join(', ') }}
+				<small v-if="readerCoverage.missing.length" :title="missingReaderNames.join(', ')">
+					Waiting for {{ missingReaderPreview }}
 				</small>
 				<small v-else-if="data.expected_readers?.length">Visible to the whole team</small>
 				<small v-else>No team readers are assigned</small>
@@ -122,18 +135,17 @@
 			</section>
 		</div>
 
-		<footer class="summary-footer">
-			<Clock3 :size="14" />
-			<span
-				>Summary is a working overview. Chat and call history remain the audit
-				record.</span
-			>
-		</footer>
+		<ConversationThreadsPanel
+			:topics="data.topics || []"
+			@open="$emit('open-thread', $event)"
+			@comment="$emit('comment-summary', $event)"
+		/>
 	</div>
 </template>
 
 <style scoped>
 	.summary-workspace {
+		container: summary-workspace / inline-size;
 		min-height: 0;
 		flex: 1;
 		overflow-y: auto;
@@ -168,6 +180,13 @@
 		border-radius: 13px;
 		color: var(--wa-primary);
 		background: var(--wa-primary-soft);
+	}
+	.summary-actions {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 8px;
+		flex-wrap: wrap;
 	}
 	h2 {
 		margin: 4px 0 8px;
@@ -248,17 +267,27 @@
 		color: var(--wa-muted);
 		font-size: 12px;
 	}
-	.summary-footer {
-		display: flex;
-		align-items: center;
-		gap: 7px;
-		margin-top: 14px;
-		color: var(--wa-muted);
-		font-size: 11px;
-	}
 	@media (max-width: 1100px) {
 		.summary-grid {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+	@container summary-workspace (max-width: 900px) {
+		.summary-grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+		.summary-hero {
+			grid-template-columns: auto minmax(0, 1fr);
+		}
+		.summary-actions {
+			grid-column: 1 / -1;
+			justify-content: flex-start;
+		}
+	}
+	@container summary-workspace (max-width: 560px) {
+		.summary-grid,
+		.summary-detail-grid {
+			grid-template-columns: 1fr;
 		}
 	}
 	@media (max-width: 700px) {

@@ -1,6 +1,11 @@
 <script setup>
 	import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 	import AutoComplete from 'primevue/autocomplete'
+	import {
+		findLinkOption,
+		linkOptionLabel,
+		linkOptionValue,
+	} from '@/components/form/linkFieldPresentation'
 
 	defineOptions({ inheritAttrs: false })
 
@@ -22,22 +27,63 @@
 	const suggestions = ref([])
 	const selected = ref(null)
 	const searching = ref(false)
+	const resolving = ref(false)
 	const searchError = ref('')
 	const focused = ref(false)
 	let timer = null
 	let sequence = 0
+	let resolutionSequence = 0
 	let blurTimer = null
 
 	function optionValue(option) {
-		return option?.[props.optionValue]
+		return linkOptionValue(option, props.optionValue)
 	}
 
 	function displayLabel(option) {
-		return option?.[props.optionLabel] || optionValue(option) || ''
+		return linkOptionLabel(option, props.optionLabel, props.optionValue)
 	}
 
 	function selectedOption(rows = props.options) {
-		return (rows || []).find((option) => optionValue(option) === props.modelValue)
+		return findLinkOption(rows, props.modelValue, props.optionValue)
+	}
+
+	async function syncCommittedValue() {
+		const committedValue = props.modelValue
+		const request = ++resolutionSequence
+		if (!committedValue) {
+			selected.value = null
+			query.value = ''
+			resolving.value = false
+			return
+		}
+
+		const localOption = selectedOption(suggestions.value) || selectedOption()
+		if (localOption) {
+			selected.value = localOption
+			query.value = localOption
+			resolving.value = false
+			return
+		}
+
+		selected.value = null
+		query.value = committedValue
+		if (!props.search) return
+
+		resolving.value = true
+		try {
+			const rows = await props.search(committedValue)
+			if (request !== resolutionSequence || props.modelValue !== committedValue) return
+			const resolved = findLinkOption(rows, committedValue, props.optionValue)
+			if (!resolved) return
+			selected.value = resolved
+			const visibleValue =
+				typeof query.value === 'object' ? optionValue(query.value) : query.value
+			if (!focused.value || visibleValue === committedValue) query.value = resolved
+		} catch {
+			// A label lookup is presentational only; keep the committed Link value intact.
+		} finally {
+			if (request === resolutionSequence) resolving.value = false
+		}
 	}
 
 	function restoreCommittedValue() {
@@ -147,22 +193,13 @@
 		}, 150)
 	}
 
-	watch(
-		() => [props.modelValue, props.options],
-		() => {
-			if (!props.modelValue) {
-				selected.value = null
-				query.value = ''
-				return
-			}
-			const option = selectedOption(suggestions.value) || selectedOption()
-			selected.value = option || null
-			query.value = option || props.modelValue
-		},
-		{ immediate: true, deep: true },
-	)
+	watch(() => [props.modelValue, props.options], syncCommittedValue, {
+		immediate: true,
+		deep: true,
+	})
 
 	onBeforeUnmount(() => {
+		resolutionSequence += 1
 		window.clearTimeout(timer)
 		window.clearTimeout(blurTimer)
 	})
@@ -180,7 +217,7 @@
 		:placeholder="placeholder"
 		:disabled="disabled"
 		:show-clear="showClear"
-		:loading="searching"
+		:loading="searching || resolving"
 		:min-length="0"
 		:complete-on-focus="false"
 		:auto-option-focus="true"

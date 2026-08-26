@@ -97,10 +97,7 @@
 <template>
 	<FlowTypeSwitch />
 	<div class="page-heading">
-		<div>
-			<div class="eyebrow">Visual automation</div>
-			<h1>Flow Builder</h1>
-		</div>
+		<h1>Flow Builder</h1>
 		<Button label="Create flow" @click="dialog = true">
 			<template #icon><Plus :size="16" /></template>
 		</Button>
@@ -169,7 +166,6 @@
 				<div class="empty">
 					<WandSparkles :size="30" />
 					<strong>No visual flows yet</strong>
-					<span>Create one and arrange its steps on the canvas.</span>
 				</div>
 			</template>
 		</DataTable>
@@ -183,13 +179,6 @@
 		:style="{ width: '460px', maxWidth: '94vw' }"
 		@show="focusDialogControl(dialogRef, '#automation-flow-title')"
 	>
-		<div class="dialog-copy">
-			<WandSparkles :size="20" />
-			<p>
-				A connected Yes/No journey is created as a starting point. Every step can be
-				replaced.
-			</p>
-		</div>
 		<label for="automation-flow-title">Flow title</label>
 		<InputText
 			id="automation-flow-title"
@@ -296,20 +285,6 @@
 	}
 	.empty strong {
 		color: var(--wa-text);
-	}
-	.dialog-copy {
-		display: flex;
-		gap: 10px;
-		padding: 12px;
-		margin-bottom: 17px;
-		border-radius: 10px;
-		color: var(--wa-success);
-		background: var(--wa-success-soft);
-	}
-	.dialog-copy p {
-		margin: 0;
-		font-size: 12px;
-		line-height: 1.5;
 	}
 	label {
 		display: block;

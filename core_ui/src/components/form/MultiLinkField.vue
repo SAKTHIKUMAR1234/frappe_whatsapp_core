@@ -64,6 +64,20 @@
 			}
 		}, props.searchDebounceMs)
 	}
+	async function loadInitialOptions() {
+		if (!props.search || available.value.length) return
+		const request = ++sequence
+		searching.value = true
+		searchError.value = ''
+		try {
+			const rows = await props.search('')
+			if (request === sequence) setOptions(rows)
+		} catch {
+			if (request === sequence) searchError.value = 'Options are temporarily unavailable.'
+		} finally {
+			if (request === sequence) searching.value = false
+		}
+	}
 	watch(
 		() => props.options,
 		(rows) => setOptions(rows),
@@ -87,6 +101,7 @@
 		:max-selected-labels="maxSelectedLabels"
 		fluid
 		@filter="filterOptions"
+		@show="loadInitialOptions"
 		@update:model-value="$emit('update:modelValue', $event)"
 		@change="$emit('change', $event)"
 	>

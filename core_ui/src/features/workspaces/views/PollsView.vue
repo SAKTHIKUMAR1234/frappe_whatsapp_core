@@ -103,7 +103,7 @@
 					><div class="empty">
 						<MessageCircleQuestion :size="30" /><strong
 							>No form-oriented Meta Flows</strong
-						><span>Create a SURVEY, LEAD_GENERATION or CONTACT_US Flow.</span>
+						>
 					</div></template
 				></DataTable
 			>

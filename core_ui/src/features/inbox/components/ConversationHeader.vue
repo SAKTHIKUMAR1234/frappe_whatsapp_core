@@ -99,16 +99,16 @@
 				<Button
 					unstyled
 					:class="{ active: viewMode === 'chat' }"
-					aria-label="Chat view"
+					aria-label="Expanded conversation"
 					@click="$emit('update:view-mode', 'chat')"
-					><MessagesSquare :size="14" /><span>Chat</span></Button
+					><MessagesSquare :size="14" /><span>Conversation</span></Button
 				>
 				<Button
 					unstyled
 					:class="{ active: viewMode === 'summary' }"
-					aria-label="Summary view"
+					aria-label="Compact summary"
 					@click="$emit('update:view-mode', 'summary')"
-					><Sparkles :size="14" /><span>Summary</span></Button
+					><Sparkles :size="14" /><span>Compact</span></Button
 				>
 			</div>
 			<span class="conversation-status">{{ status }}</span>
@@ -141,10 +141,7 @@
 		</div>
 		<Popover ref="folderPopover" class="conversation-folder-popover">
 			<div class="folder-picker" aria-label="Add chat to folders">
-				<header>
-					<strong>My folders</strong>
-					<small>Select where this chat should appear.</small>
-				</header>
+				<header><strong>My folders</strong></header>
 				<Button
 					v-for="folder in folders"
 					:key="folder.name"

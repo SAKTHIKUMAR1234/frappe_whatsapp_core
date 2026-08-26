@@ -364,10 +364,7 @@
 
 <template>
 	<div class="page-heading">
-		<div>
-			<div class="eyebrow">Engage safely</div>
-			<h1>Bulk Messaging</h1>
-		</div>
+		<h1>Bulk Messaging</h1>
 		<Button label="New campaign" @click="createDialog = true">
 			<template #icon><Plus :size="16" /></template>
 		</Button>
@@ -398,38 +395,18 @@
 		</section>
 
 		<section class="surface-card safety-pipeline">
-			<div>
-				<Users :size="18" /><span
-					><strong>1. Audience</strong><small>Exact Core identities</small></span
-				>
-			</div>
+			<div><Users :size="18" /><strong>Audience</strong></div>
 			<i></i>
-			<div>
-				<BadgeCheck :size="18" /><span
-					><strong>2. Meta approval</strong><small>Owned by Integration</small></span
-				>
-			</div>
+			<div><BadgeCheck :size="18" /><strong>Meta approval</strong></div>
 			<i></i>
-			<div>
-				<ShieldCheck :size="18" /><span
-					><strong>3. SEND gate</strong><small>Named human approval</small></span
-				>
-			</div>
+			<div><ShieldCheck :size="18" /><strong>Send approval</strong></div>
 			<i></i>
-			<div>
-				<Send :size="18" /><span
-					><strong>4. Durable queue</strong
-					><small>Parallel relay workers with rate limits</small></span
-				>
-			</div>
+			<div><Send :size="18" /><strong>Queue</strong></div>
 		</section>
 
 		<section class="surface-card campaign-list">
 			<div class="list-heading">
-				<div>
-					<div class="eyebrow">Campaign records</div>
-					<h2>Campaigns</h2>
-				</div>
+				<h2>Campaigns</h2>
 				<span>{{ workspace.campaigns.length }} total</span>
 			</div>
 
@@ -555,9 +532,6 @@
 					<div class="empty">
 						<Megaphone :size="30" />
 						<strong>No campaigns yet</strong>
-						<span
-							>Create a draft; the business layer supplies its exact audience.</span
-						>
 					</div>
 				</template>
 			</DataTable>
@@ -857,20 +831,12 @@
 		color: var(--wa-success);
 	}
 
-	.safety-pipeline > div span,
-	.safety-pipeline strong,
-	.safety-pipeline small {
+	.safety-pipeline strong {
 		display: block;
 	}
 
 	.safety-pipeline strong {
 		color: var(--wa-text);
-		font-size: 12px;
-	}
-
-	.safety-pipeline small {
-		margin-top: 2px;
-		color: var(--wa-muted);
 		font-size: 12px;
 	}
 
@@ -893,7 +859,7 @@
 	}
 
 	.list-heading h2 {
-		margin: 4px 0 0;
+		margin: 0;
 		font-size: 16px;
 	}
 

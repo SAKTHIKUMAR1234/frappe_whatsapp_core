@@ -53,10 +53,7 @@
 
 <template>
 	<div class="page-heading">
-		<div>
-			<div class="eyebrow">Core evidence</div>
-			<h1>Audit & Health</h1>
-		</div>
+		<h1>Audit & Health</h1>
 		<Button label="Refresh" outlined :loading="loading" :disabled="loading" @click="load">
 			<template #icon><RefreshCw :size="16" /></template>
 		</Button>
@@ -112,10 +109,7 @@
 
 		<section class="surface-card failure-card">
 			<header>
-				<div>
-					<div class="eyebrow">Latest first</div>
-					<h2>Recent failures</h2>
-				</div>
+				<h2>Recent failures</h2>
 			</header>
 			<div v-if="loading" class="loading">
 				<Skeleton v-for="index in 5" :key="index" height="58px" />
@@ -142,7 +136,6 @@
 					<div class="empty">
 						<CircleCheck :size="30" />
 						<strong>No recorded failures</strong>
-						<span>Core processing is clear.</span>
 					</div>
 				</template>
 			</DataTable>
