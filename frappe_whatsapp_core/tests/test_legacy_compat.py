@@ -75,6 +75,24 @@ class TestLegacyCompatibility(FrappeTestCase):
 
 		self.assertEqual(conversation.remote_identity, identity.name)
 
+	def test_outbound_phone_ignores_conflicting_legacy_global_alias(self):
+		legacy = get_or_create_identity(self.phone, resolve=False)
+		bsuid = f"IN.{frappe.generate_hash(length=18)}"
+		scoped = get_or_create_identity(
+			bsuid,
+			resolve=False,
+			scope=self.channel.name,
+			aliases={"user_id": bsuid, "phone": self.phone},
+		)
+		self.assertNotEqual(legacy.name, scoped.name)
+
+		conversation = conversation_for_phone(
+			self.phone,
+			phone_number_id=self.phone_number_id,
+		)
+
+		self.assertEqual(conversation.remote_identity, scoped.name)
+
 	def test_template_converts_legacy_variables(self):
 		template_name = f"compat_{frappe.generate_hash(length=6).lower()}"
 		frappe.get_doc({

@@ -151,7 +151,10 @@ def get_or_create_identity(value, resolve=True, *, scope=None, aliases=None):
 		("Phone", phone),
 	):
 		if alias_value:
-			_ensure_alias(identity.name, alias_type, alias_value, scope if has_scoped_id else None)
+			# Keep outbound phone lookup and alias creation in the same channel
+			# scope. A legacy global phone alias may legitimately belong to an
+			# older identity and must not block sending through this channel.
+			_ensure_alias(identity.name, alias_type, alias_value, scope or None)
 
 	if resolve and phone:
 		resolve_identity(identity)
