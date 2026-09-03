@@ -63,8 +63,14 @@ class TestConversationReads(TestCase):
 		_get_roles,
 	):
 		get_all.return_value = [
-			SimpleNamespace(name="MSG-1", provider_timestamp="2026-08-10 01:00:00", creation="1"),
-			SimpleNamespace(name="MSG-2", provider_timestamp="2026-08-10 02:00:00", creation="2"),
+			SimpleNamespace(
+				name="MSG-1", conversation="CONV-1", message_type="text",
+				provider_timestamp="2026-08-10 01:00:00", creation="1",
+			),
+			SimpleNamespace(
+				name="MSG-2", conversation="CONV-1", message_type="text",
+				provider_timestamp="2026-08-10 02:00:00", creation="2",
+			),
 		]
 		record_reads.return_value = ["MSG-1", "MSG-2"]
 		advance_cursor.return_value = {
@@ -83,6 +89,58 @@ class TestConversationReads(TestCase):
 		advance_cursor.assert_called_once()
 		self.assertEqual(advance_cursor.call_args.args[1].name, "MSG-2")
 		self.assertEqual(get_all.call_args.kwargs["limit_page_length"], 2)
+
+	@patch("frappe_whatsapp_core.conversation_reads.frappe.get_roles", return_value=["System Manager"])
+	@patch("frappe_whatsapp_core.conversation_reads.assert_conversation_access")
+	@patch("frappe_whatsapp_core.conversation_reads.frappe.has_permission")
+	@patch("frappe_whatsapp_core.conversation_reads._advance_conversation_cursor")
+	@patch("frappe_whatsapp_core.conversation_reads._record_message_reads")
+	@patch("frappe_whatsapp_core.conversation_reads.frappe.get_all")
+	def test_read_batch_ignores_stale_missing_rows(
+		self,
+		get_all,
+		record_reads,
+		advance_cursor,
+		_has_permission,
+		_assert_access,
+		_get_roles,
+	):
+		message = SimpleNamespace(
+			name="MSG-1", conversation="CONV-1", message_type="text",
+			provider_timestamp="2026-08-10 01:00:00", creation="1",
+		)
+		get_all.return_value = [message]
+		record_reads.return_value = ["MSG-1"]
+		advance_cursor.return_value = {"conversation": "CONV-1"}
+
+		result = conversation_reads.mark_messages_read(
+			"CONV-1", ["MSG-1", "MSG-DELETED"]
+		)
+
+		self.assertEqual(result["processed"], 1)
+		self.assertEqual(result["ignored"], 1)
+		record_reads.assert_called_once_with(
+			"CONV-1", [message], conversation_reads.frappe.session.user
+		)
+
+	@patch("frappe_whatsapp_core.conversation_reads.frappe.get_roles", return_value=["System Manager"])
+	@patch("frappe_whatsapp_core.conversation_reads.assert_conversation_access")
+	@patch("frappe_whatsapp_core.conversation_reads.frappe.has_permission")
+	@patch("frappe_whatsapp_core.conversation_reads.frappe.get_all")
+	def test_read_batch_still_rejects_existing_rows_from_another_conversation(
+		self, get_all, _has_permission, _assert_access, _get_roles
+	):
+		get_all.return_value = [
+			SimpleNamespace(
+				name="MSG-OTHER", conversation="CONV-2", message_type="text",
+				provider_timestamp="2026-08-10 01:00:00", creation="1",
+			)
+		]
+
+		with self.assertRaises(Exception) as context:
+			conversation_reads.mark_messages_read("CONV-1", ["MSG-OTHER"])
+
+		self.assertIn("do not belong", str(context.exception))
 
 	@patch("frappe_whatsapp_core.conversation_reads.now_datetime", return_value="2026-08-10 03:00:00")
 	@patch("frappe_whatsapp_core.conversation_reads.frappe.enqueue")
