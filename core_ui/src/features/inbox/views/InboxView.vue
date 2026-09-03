@@ -259,6 +259,10 @@
 	const locallyReadMessages = new Set()
 	const optimisticReadCursors = new Map()
 	const clearedConversationBadges = new Set()
+	// Keep rows opened from the Unread view mounted for this visit. Removing a
+	// virtualized row on selection changes the scroll height and corrupts the
+	// pagination trigger near the bottom of the conversation list.
+	const retainedUnreadConversations = new Set()
 	let realtimeConnectedOnce = false
 	let restoringMessageScroll = false
 
@@ -330,7 +334,10 @@
 
 	const filteredRows = computed(() => {
 		return filterAndRankConversations(rows.value, search.value).filter(
-			(row) => listMode.value !== 'unread' || Number(row.unread_count || 0) > 0,
+			(row) =>
+				listMode.value !== 'unread' ||
+				Number(row.unread_count || 0) > 0 ||
+				retainedUnreadConversations.has(row.name),
 		)
 	})
 	const messageMap = computed(
@@ -428,12 +435,26 @@
 				rows.value.map((row) => [row.name, Number(row.unread_count || 0)]),
 			)
 			hydratedUnreadRows.clear()
-			rows.value = (loaded.rows || []).map((row) => {
+			const previousRows = rows.value
+			const nextRows = (loaded.rows || []).map((row) => {
 				if (includeUnread) hydratedUnreadRows.add(row.name)
 				return clearedConversationBadges.has(row.name)
 					? { ...row, unread_count: currentUnread.get(row.name) || 0 }
 					: row
 			})
+			// Reconnect/search refreshes must not make already-opened unread rows
+			// disappear underneath the virtual list. The server cursor still comes
+			// exclusively from the unread query, so infinite scrolling stays valid.
+			if (silent && includeUnread) {
+				const loadedNames = new Set(nextRows.map((row) => row.name))
+				for (const row of previousRows) {
+					if (retainedUnreadConversations.has(row.name) && !loadedNames.has(row.name)) {
+						nextRows.push({ ...row, unread_count: currentUnread.get(row.name) || 0 })
+					}
+				}
+			}
+			rows.value = nextRows
+			if (silent && includeUnread) sortConversationRows()
 			conversationPage.value = loaded
 		} catch (error) {
 			if (request === listRequest)
@@ -841,7 +862,13 @@
 		window.cancelAnimationFrame(readScanFrame)
 		readScanFrame = window.requestAnimationFrame(() => {
 			const conversation = selectedName.value
-			if (!conversation || !stream.value || !detail.value) return
+			if (
+				!conversation ||
+				!stream.value ||
+				!detail.value ||
+				detail.value.conversation?.name !== conversation
+			)
+				return
 			if (document.visibilityState !== 'visible' || !document.hasFocus()) return
 			const viewport = stream.value.getBoundingClientRect()
 			const messagesByName = new Map(
@@ -895,6 +922,15 @@
 		const entry = [...pendingReadMessages.entries()].find(([, names]) => names.size)
 		if (!entry) return
 		const [conversation, pending] = entry
+		// Route updates happen before Vue replaces the old message DOM. Never send
+		// a batch unless the selected route and loaded detail identify the same chat.
+		if (
+			conversation !== selectedName.value ||
+			detail.value?.conversation?.name !== conversation
+		) {
+			pendingReadMessages.delete(conversation)
+			return
+		}
 		const names = [...pending].slice(0, 100)
 		for (const name of names) locallyReadMessages.add(name)
 		for (const name of names) pending.delete(name)
@@ -937,6 +973,13 @@
 			if (latest && optimistic?.last_read_message === latest.name)
 				optimisticReadCursors.delete(conversation)
 		} catch (error) {
+			// Navigation can finish while the request is in flight. The new chat must
+			// not inherit a retry batch or an error toast from the previous chat.
+			if (
+				conversation !== selectedName.value ||
+				detail.value?.conversation?.name !== conversation
+			)
+				return
 			for (const name of names) locallyReadMessages.delete(name)
 			const retryPending = pendingReadMessages.get(conversation) || new Set()
 			for (const name of names) retryPending.add(name)
@@ -1035,6 +1078,8 @@
 	function clearConversationBadge(name) {
 		if (!name) return
 		const row = rows.value.find((item) => item.name === name)
+		if (listMode.value === 'unread' && Number(row?.unread_count || 0) > 0)
+			retainedUnreadConversations.add(name)
 		if (row) row.unread_count = 0
 		clearedConversationBadges.add(name)
 		scheduleInboxNavigation()
@@ -1830,7 +1875,10 @@
 		const matchesTeam =
 			!team.value ||
 			(row?.contact_teams || []).some((contactTeam) => contactTeam.name === team.value)
-		const matchesUnread = listMode.value !== 'unread' || Number(row?.unread_count || 0) > 0
+		const matchesUnread =
+			listMode.value !== 'unread' ||
+			Number(row?.unread_count || 0) > 0 ||
+			retainedUnreadConversations.has(row?.name)
 		if (!matchesTeam || !matchesUnread || !folder.value) return matchesTeam && matchesUnread
 		const selectedFolder = folders.value.find((item) => item.name === folder.value)
 		return (
@@ -2571,6 +2619,9 @@
 	watch(search, () => {
 		window.clearTimeout(conversationSearchTimer)
 		conversationSearchTimer = window.setTimeout(() => loadRows({ silent: true }), 220)
+	})
+	watch(listMode, (mode) => {
+		if (mode !== 'unread') retainedUnreadConversations.clear()
 	})
 	watch([team, folder, listMode, businessSource, businessFilters], async () => {
 		syncInboxFilterRoute()

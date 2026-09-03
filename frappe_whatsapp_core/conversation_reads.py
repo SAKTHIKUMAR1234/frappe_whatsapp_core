@@ -271,19 +271,32 @@ def mark_messages_read(conversation: str, messages: list[str] | str) -> dict:
 		)
 	rows = frappe.get_all(
 		"WhatsApp Core Message",
-		filters={
-			"name": ["in", names],
-			"conversation": conversation,
-			"message_type": ["!=", "reaction"],
-		},
-		fields=["name", "conversation", "provider_timestamp", "creation"],
+		filters={"name": ["in", names]},
+		fields=["name", "conversation", "message_type", "provider_timestamp", "creation"],
 		limit_page_length=len(names),
 	)
-	if len(rows) != len(names):
+	# A message can disappear between the browser visibility scan and this request
+	# (for example when an optimistic/failed send is reconciled). Missing rows are
+	# stale client state and are safe to ignore. Existing rows owned by a different
+	# conversation remain a hard failure so a caller cannot write a cross-chat read.
+	foreign_rows = [row for row in rows if _get(row, "conversation") != conversation]
+	if foreign_rows:
 		frappe.throw(
 			"One or more read messages do not belong to this conversation",
 			frappe.ValidationError,
 		)
+	found_names = {_get(row, "name") for row in rows}
+	missing_names = [name for name in names if name not in found_names]
+	reaction_rows = [row for row in rows if _get(row, "message_type") == "reaction"]
+	rows = [row for row in rows if _get(row, "message_type") != "reaction"]
+	ignored = len(optimistic_names) + len(missing_names) + len(reaction_rows)
+	if not rows:
+		return {
+			"conversation": conversation,
+			"processed": 0,
+			"recorded": 0,
+			"ignored": ignored,
+		}
 	target = max(
 		rows,
 		key=lambda row: (
@@ -296,7 +309,7 @@ def mark_messages_read(conversation: str, messages: list[str] | str) -> dict:
 	read_state = _advance_conversation_cursor(conversation, target, recorded)
 	read_state["processed"] = len(rows)
 	read_state["recorded"] = len(recorded)
-	read_state["ignored"] = len(optimistic_names)
+	read_state["ignored"] = ignored
 	return read_state
 
 
