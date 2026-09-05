@@ -512,6 +512,10 @@ def _validate_answer(node: dict[str, Any], answer: Any) -> tuple[bool, Any, str 
 			return False, value, config.get("validation_message") or "Please enter a whole number."
 		return True, int(number) if number == number.to_integral_value() else float(number), None
 	if input_type == "text":
+		if isinstance(answer, dict):
+			message_type = str(answer.get("type") or answer.get("message_type") or "").strip().lower()
+			if (message_type and message_type != "text") or answer.get("media"):
+				return False, value, config.get("validation_message") or "Please send a text message."
 		value = str(value or "").strip()
 		if config.get("required", True) and not value:
 			return False, value, config.get("validation_message") or "A reply is required."
@@ -537,7 +541,7 @@ def _validate_multi_select_answer(
 	config: dict[str, Any], options: list[Any], value: Any
 ) -> tuple[bool, Any, str | None]:
 	"""Normalize one or more choices without depending on a channel-specific UI."""
-	if isinstance(value, (list, tuple, set)):
+	if isinstance(value, list | tuple | set):
 		parts = [str(item).strip() for item in value]
 	else:
 		parts = [part.strip() for part in re.split(r"[,;\n]+", str(value or ""))]
@@ -806,7 +810,7 @@ def _render_text(value: str, context: dict[str, Any]) -> str:
 		resolved = _resolve_action_input({"var": match.group(1)}, context)
 		if resolved is None:
 			return ""
-		if isinstance(resolved, (dict, list)):
+		if isinstance(resolved, dict | list):
 			return json.dumps(resolved, ensure_ascii=False, default=str)
 		return str(resolved)
 
