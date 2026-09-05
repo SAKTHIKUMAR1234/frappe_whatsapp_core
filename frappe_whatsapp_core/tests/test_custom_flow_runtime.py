@@ -116,6 +116,35 @@ def appointment_graph(command="/appointment"):
 
 
 class TestCustomFlowRuntime(FrappeTestCase):
+	def test_content_preserves_shared_locations_contacts_and_rejects_missing_media(self):
+		node = {"type": "ask_input", "config": {"input_type": "content"}}
+		for kind, payload in (
+			("location", {"latitude": 12.97, "longitude": 77.59}),
+			("contacts", [{"name": {"formatted_name": "Technician"}, "phones": [{"phone": "12345"}]}]),
+		):
+			answer = {"type": kind, "message": "MSG-SHARED", "content": {kind: payload}}
+			self.assertEqual(_validate_answer(node, answer), (True, {"message": "MSG-SHARED", "message_type": kind}, None))
+			self.assertFalse(_validate_answer(node, {"type": kind, "body": "Missing original"})[0])
+		for kind in ("audio", "image", "video", "document", "sticker"):
+			self.assertFalse(_validate_answer(node, {"type": kind, "body": "[Attachment]"})[0])
+		self.assertFalse(_validate_answer(node, {"type": "unsupported", "body": "[Unsupported]"})[0])
+
+	def test_text_input_rejects_media_and_accepts_text(self):
+		node = {
+			"type": "ask_input",
+			"config": {"input_type": "text", "validation_message": "Send text only."},
+		}
+		for key in ("type", "message_type"):
+			for message_type in ("audio", "image", "video", "document", "sticker"):
+				with self.subTest(key=key, message_type=message_type):
+					answer = {key: message_type, "body": "Attachment caption", "media": {"id": "MEDIA"}}
+					self.assertEqual(
+						_validate_answer(node, answer), (False, "Attachment caption", "Send text only.")
+					)
+		self.assertFalse(_validate_answer(node, {"body": "[Audio]", "media": {"id": "MEDIA"}})[0])
+		for answer in ("Motor issue", {"type": "text", "body": "Motor issue"}, {"body": "Motor issue"}):
+			self.assertEqual(_validate_answer(node, answer), (True, "Motor issue", None))
+
 	def test_content_input_accepts_text_buttons_and_cached_media(self):
 		node = {
 			"type": "ask_input",

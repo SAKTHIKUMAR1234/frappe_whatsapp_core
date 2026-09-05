@@ -7,7 +7,6 @@ import frappe
 from frappe.model.rename_doc import (
 	get_link_fields,
 	rename_dynamic_links,
-	rename_eps_records,
 	rename_parent_and_child,
 	rename_versions,
 	update_attachments,
@@ -16,6 +15,12 @@ from frappe.model.rename_doc import (
 from frappe.utils.password import rename_password
 
 from frappe_whatsapp_core.naming import KEY_FIELDS
+
+try:
+	from frappe.model.rename_doc import rename_eps_records
+except ImportError:
+	# Frappe v16 no longer provides Energy Points or its rename helper.
+	rename_eps_records = None
 
 
 LEGACY_NAME_MINIMUM = 21
@@ -83,7 +88,8 @@ def _rename_generated_record(doctype: str, old_name: str, new_name: str) -> None
 		update_user_settings(old_name, new_name, link_fields)
 	update_attachments(doctype, old_name, new_name)
 	rename_versions(doctype, old_name, new_name)
-	rename_eps_records(doctype, old_name, new_name)
+	if rename_eps_records is not None:
+		rename_eps_records(doctype, old_name, new_name)
 	rename_password(doctype, old_name, new_name)
 
 
